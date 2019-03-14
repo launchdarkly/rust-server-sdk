@@ -1,7 +1,10 @@
 [package]
-name = "launchdarkly-rust-sdk"
+name = "ldclient"
 version = "0.1.0"
 authors = ["Sam Stokes <sstokes@launchdarkly.com>"]
 edition = "2018"
 
 [dependencies]
+futures = "0.1.25"
+reqwest = "0.9.11"
+tokio = "0.1.16"
