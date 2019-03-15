@@ -112,6 +112,9 @@ fn decode_chunk(chunk: ra::Chunk) -> Result<Option<Event>, Error> {
 
     let mut event: Option<Event> = None;
 
+    // TODO technically this doesn't handle newlines quite right.
+    // The spec says lines are newline-terminated, rather than newline-separated
+    // as this assumes, so we end up processing bogus empty strings.
     let lines = chunk.split(|b| &b'\n' == b);
 
     for line in lines {
