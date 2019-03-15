@@ -22,6 +22,6 @@ fn main() {
                 println!("got a event: {:?}", event);
                 Ok(())
             })
-            .map_err(|_| println!("error!")),
+            .map_err(|e| println!("error! {:?}", e)),
     );
 }
