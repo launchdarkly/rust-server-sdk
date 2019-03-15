@@ -1,12 +1,9 @@
 use std::env;
 use std::time::Duration;
 
-use futures::future::{lazy, Future};
+use futures::future::lazy;
 use futures::stream::Stream;
-use serde_json::Value;
 use tokio::timer::Interval;
-
-use ldclient::eventsource::Client as EV;
 
 fn main() {
     println!("Connecting...");
