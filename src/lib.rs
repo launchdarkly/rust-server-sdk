@@ -1,5 +1,7 @@
 pub mod client;
-pub mod eventsource;
+mod eventsource;
+mod store;
+mod update_processor;
 
 #[cfg(test)]
 mod tests {
