@@ -9,10 +9,13 @@ fn main() {
     println!("Connecting...");
 
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
+    let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
 
-    let mut client = ldclient::client::Client::configure()
-        .base_url("https://stream-stg.launchdarkly.com")
-        .build(&sdk_key);
+    let mut client_builder = ldclient::client::Client::configure();
+    let _ = stream_url_opt.map(|url| {
+        client_builder.base_url(&url);
+    });
+    let mut client = client_builder.build(&sdk_key);
 
     tokio::run(lazy(move || {
         client.start();
