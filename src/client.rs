@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use super::store::FeatureStore;
 use super::update_processor::StreamingUpdateProcessor;
 
-const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com/all";
+const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
 
 pub type Error = String; // TODO enum
 
