@@ -20,8 +20,8 @@ fn main() {
         Interval::new_interval(Duration::from_secs(5))
             .map_err(|_| ())
             .for_each(move |_| {
-                let all_the_data = client.get_all_the_data_all_of_it();
-                println!("some data? {:#?}", all_the_data);
+                let awesomeness = client.bool_variation("awesomeness");
+                println!("awesomeness flag: {}", awesomeness);
                 Ok(())
             })
     }));

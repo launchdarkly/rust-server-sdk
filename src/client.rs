@@ -8,14 +8,14 @@ const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com/all";
 pub type Error = String; // TODO enum
 
 pub struct Client {
-    sdk_key: String,
-    config: Config,
+    //sdk_key: String,
+    //config: Config,
     //eventProcessor: EventProcessor,
     update_processor: StreamingUpdateProcessor,
     store: Arc<Mutex<FeatureStore>>,
 }
 
-pub struct Config {}
+//pub struct Config {}
 
 pub struct ConfigBuilder {
     base_url: String,
@@ -35,11 +35,8 @@ impl ConfigBuilder {
     }
 
     pub fn build(&self, sdk_key: &str) -> Client {
-        let config = Config {};
         let store = Arc::new(Mutex::new(FeatureStore::new()));
         Client {
-            sdk_key: sdk_key.to_owned(),
-            config,
             update_processor: StreamingUpdateProcessor::new(&self.base_url, sdk_key, &store),
             store: store,
         }
@@ -61,8 +58,23 @@ impl Client {
         self.update_processor.subscribe()
     }
 
-    pub fn get_all_the_data_all_of_it(&self) -> Option<serde_json::Value> {
+    pub fn bool_variation(&self, /*TODO user, */ flag_name: &str) -> bool {
+        self.evaluate(flag_name)
+            .and_then(|val| val.as_bool().ok_or("flag is not boolean".to_string()))
+            .unwrap_or_else(|e| {
+                println!("couldn't evaluate flag {:?}: {}", flag_name, e);
+                false
+            })
+    }
+
+    pub fn evaluate(
+        &self,
+        /*TODO user, */ flag_name: &str,
+    ) -> Result<serde_json::Value, Error> {
         let store = self.store.lock().unwrap();
-        store.data.clone()
+        let flag = store.flag(flag_name).ok_or("no such flag")?;
+        flag.get("on")
+            .ok_or("flag missing 'on' property".to_string())
+            .map(|v| v.clone())
     }
 }
