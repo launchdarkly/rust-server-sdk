@@ -23,8 +23,8 @@ fn main() {
         Interval::new_interval(Duration::from_secs(5))
             .map_err(|_| ())
             .for_each(move |_| {
-                let awesomeness = client.bool_variation("awesomeness");
-                println!("awesomeness flag: {}", awesomeness);
+                let large_indirect_flag = client.bool_variation("large-indirect-flag");
+                println!("large_indirect_flag flag: {}", large_indirect_flag);
                 Ok(())
             })
     }));

@@ -52,7 +52,7 @@ impl StreamingUpdateProcessor {
                 .for_each(move |event| {
                     let mut store = store.lock().unwrap();
 
-                    println!("update processor got an event: {:?}", event);
+                    println!("update processor got an event: {}", event.event_type);
 
                     match event.event_type.as_str() {
                         "put" => process_put(&mut *store, event),
