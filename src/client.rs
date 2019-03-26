@@ -5,7 +5,12 @@ use super::update_processor::StreamingUpdateProcessor;
 
 const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
 
-pub type Error = String; // TODO enum
+#[derive(Debug)]
+pub enum Error {
+    FlagWrongType(String, String),
+    MalformedFlag(String, String),
+    NoSuchFlag(String),
+}
 
 pub struct Client {
     //sdk_key: String,
@@ -60,9 +65,14 @@ impl Client {
 
     pub fn bool_variation(&self, /*TODO user, */ flag_name: &str) -> bool {
         self.evaluate(flag_name)
-            .and_then(|val| val.as_bool().ok_or("flag is not boolean".to_string()))
+            .and_then(|val| {
+                val.as_bool().ok_or(Error::FlagWrongType(
+                    flag_name.to_string(),
+                    "not bool".to_string(),
+                ))
+            })
             .unwrap_or_else(|e| {
-                println!("couldn't evaluate flag {:?}: {}", flag_name, e);
+                println!("couldn't evaluate flag {:?}: {:?}", flag_name, e);
                 false
             })
     }
@@ -72,9 +82,14 @@ impl Client {
         /*TODO user, */ flag_name: &str,
     ) -> Result<serde_json::Value, Error> {
         let store = self.store.lock().unwrap();
-        let flag = store.flag(flag_name).ok_or("no such flag")?;
+        let flag = store
+            .flag(flag_name)
+            .ok_or(Error::NoSuchFlag(flag_name.to_string()))?;
         flag.get("on")
-            .ok_or("flag missing 'on' property".to_string())
+            .ok_or(Error::MalformedFlag(
+                flag_name.to_string(),
+                "missing 'on' property".to_string(),
+            ))
             .map(|v| v.clone())
     }
 }

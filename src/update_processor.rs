@@ -7,7 +7,14 @@ use serde::Deserialize;
 use super::eventsource;
 use super::store::{AllData, FeatureFlag, FeatureStore};
 
-type Error = String; // TODO enum
+#[derive(Debug)]
+pub enum Error {
+    EventSource(eventsource::Error),
+    InvalidEventData(String, Box<std::error::Error + Send>),
+    InvalidEventPath(String, String),
+    InvalidEventType(String),
+    MissingEventField(String, String),
+}
 
 #[derive(Deserialize)]
 struct PutData {
@@ -49,6 +56,7 @@ impl StreamingUpdateProcessor {
 
         tokio::spawn(lazy(move || {
             event_stream
+                .map_err(|e| Error::EventSource(e))
                 .for_each(move |event| {
                     let mut store = store.lock().unwrap();
 
@@ -57,7 +65,7 @@ impl StreamingUpdateProcessor {
                     match event.event_type.as_str() {
                         "put" => process_put(&mut *store, event),
                         "patch" => process_patch(&mut *store, event),
-                        typ => Err(format!("oh dear, can't handle event {:?}", typ)),
+                        _ => Err(Error::InvalidEventType(event.event_type)),
                     }
                 })
                 .map_err(|e| println!("update processor got an error: {:?}", e))
@@ -65,18 +73,32 @@ impl StreamingUpdateProcessor {
     }
 }
 
+fn event_field<'a>(event: &'a eventsource::Event, field: &'a str) -> Result<&'a [u8], Error> {
+    event.field(field).ok_or(Error::MissingEventField(
+        event.event_type.clone(),
+        field.to_string(),
+    ))
+}
+
+fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a eventsource::Event) -> Result<T, Error> {
+    let data = event_field(&event, "data")?;
+    serde_json::from_slice(data)
+        .map_err(|e| Error::InvalidEventData(event.event_type.clone(), Box::new(e)))
+}
+
 fn process_put(store: &mut FeatureStore, event: eventsource::Event) -> Result<(), Error> {
-    let put: PutData = serde_json::from_slice(&event["data"])
-        .map_err(|e| format!("couldn't parse put event data: {}", e).to_string())?;
+    let put: PutData = parse_event_data(&event)?;
     if put.path == "/" {
         Ok(store.init(put.data))
     } else {
-        Err(format!("unexpected put to path {}", put.path))
+        Err(Error::InvalidEventPath(
+            event.event_type,
+            put.path.to_string(),
+        ))
     }
 }
 
 fn process_patch(store: &mut FeatureStore, event: eventsource::Event) -> Result<(), Error> {
-    let patch: PatchData = serde_json::from_slice(&event["data"])
-        .map_err(|e| format!("couldn't parse patch event data: {}", e).to_string())?;
+    let patch: PatchData = parse_event_data(&event)?;
     Ok(store.patch(&patch.path, patch.data))
 }
