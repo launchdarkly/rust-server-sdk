@@ -1,16 +1,19 @@
 use std::sync::{Arc, Mutex};
 
 use super::store::FeatureStore;
-use super::update_processor::StreamingUpdateProcessor;
+use super::update_processor::{self as up, StreamingUpdateProcessor};
 
 const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
 
 #[derive(Debug)]
 pub enum Error {
     FlagWrongType(String, String),
+    InvalidConfig(up::Error),
     MalformedFlag(String, String),
     NoSuchFlag(String),
 }
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct Client {
     //sdk_key: String,
@@ -39,18 +42,20 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn build(&self, sdk_key: &str) -> Client {
+    pub fn build(&self, sdk_key: &str) -> Result<Client> {
         let store = Arc::new(Mutex::new(FeatureStore::new()));
-        Client {
-            update_processor: StreamingUpdateProcessor::new(&self.base_url, sdk_key, &store),
+        let update_processor = StreamingUpdateProcessor::new(&self.base_url, sdk_key, &store)
+            .map_err(|e| Error::InvalidConfig(e))?;
+        Ok(Client {
+            update_processor: update_processor,
             store: store,
-        }
+        })
     }
 }
 
 impl Client {
     pub fn new(sdk_key: &str) -> Client {
-        Client::configure().build(sdk_key)
+        Client::configure().build(sdk_key).unwrap()
     }
 
     pub fn configure() -> ConfigBuilder {
@@ -77,10 +82,7 @@ impl Client {
             })
     }
 
-    pub fn evaluate(
-        &self,
-        /*TODO user, */ flag_name: &str,
-    ) -> Result<serde_json::Value, Error> {
+    pub fn evaluate(&self, /*TODO user, */ flag_name: &str) -> Result<serde_json::Value> {
         let store = self.store.lock().unwrap();
         let flag = store
             .flag(flag_name)

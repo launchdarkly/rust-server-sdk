@@ -15,7 +15,7 @@ fn main() {
     let _ = stream_url_opt.map(|url| {
         client_builder.base_url(&url);
     });
-    let mut client = client_builder.build(&sdk_key);
+    let mut client = client_builder.build(&sdk_key).unwrap();
 
     tokio::run(lazy(move || {
         client.start();

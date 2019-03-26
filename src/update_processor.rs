@@ -16,6 +16,8 @@ pub enum Error {
     MissingEventField(String, String),
 }
 
+pub type Result<T> = std::result::Result<T, Error>;
+
 #[derive(Deserialize)]
 struct PutData {
     path: String,
@@ -39,15 +41,18 @@ impl StreamingUpdateProcessor {
         base_url: &str,
         sdk_key: &str,
         store: &Arc<Mutex<FeatureStore>>,
-    ) -> StreamingUpdateProcessor {
+    ) -> Result<StreamingUpdateProcessor> {
         let stream_url = format!("{}/all", base_url);
-        let es_client = eventsource::Client::for_url(&stream_url)
+        let client_builder =
+            eventsource::Client::for_url(&stream_url).map_err(|e| Error::EventSource(e))?;
+        let es_client = client_builder
             .header("Authorization", sdk_key)
+            .unwrap()
             .build();
-        StreamingUpdateProcessor {
+        Ok(StreamingUpdateProcessor {
             es_client,
             store: store.clone(),
-        }
+        })
     }
 
     pub fn subscribe(&mut self) {
@@ -73,20 +78,20 @@ impl StreamingUpdateProcessor {
     }
 }
 
-fn event_field<'a>(event: &'a eventsource::Event, field: &'a str) -> Result<&'a [u8], Error> {
+fn event_field<'a>(event: &'a eventsource::Event, field: &'a str) -> Result<&'a [u8]> {
     event.field(field).ok_or(Error::MissingEventField(
         event.event_type.clone(),
         field.to_string(),
     ))
 }
 
-fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a eventsource::Event) -> Result<T, Error> {
+fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a eventsource::Event) -> Result<T> {
     let data = event_field(&event, "data")?;
     serde_json::from_slice(data)
         .map_err(|e| Error::InvalidEventData(event.event_type.clone(), Box::new(e)))
 }
 
-fn process_put(store: &mut FeatureStore, event: eventsource::Event) -> Result<(), Error> {
+fn process_put(store: &mut FeatureStore, event: eventsource::Event) -> Result<()> {
     let put: PutData = parse_event_data(&event)?;
     if put.path == "/" {
         Ok(store.init(put.data))
@@ -98,7 +103,7 @@ fn process_put(store: &mut FeatureStore, event: eventsource::Event) -> Result<()
     }
 }
 
-fn process_patch(store: &mut FeatureStore, event: eventsource::Event) -> Result<(), Error> {
+fn process_patch(store: &mut FeatureStore, event: eventsource::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
     Ok(store.patch(&patch.path, patch.data))
 }
