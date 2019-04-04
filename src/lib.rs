@@ -1,6 +1,10 @@
 #[macro_use]
 extern crate futures;
 
+#[cfg(test)]
+#[macro_use]
+extern crate maplit;
+
 pub mod client;
 mod eventsource;
 mod store;
