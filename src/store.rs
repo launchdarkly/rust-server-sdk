@@ -37,7 +37,7 @@ impl FeatureStore {
 
     pub fn patch(&mut self, path: &str, data: FeatureFlag) {
         if !path.starts_with(FLAGS_PREFIX) {
-            println!("Oops, can only patch flags atm");
+            error!("Oops, can only patch flags atm");
             return;
         }
 

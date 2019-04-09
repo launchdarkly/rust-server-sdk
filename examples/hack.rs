@@ -1,12 +1,19 @@
+#[macro_use]
+extern crate log;
+extern crate simplelog;
+
 use std::env;
 use std::time::Duration;
 
 use futures::future::lazy;
 use futures::stream::Stream;
+use simplelog::{Config, LevelFilter, TermLogger};
 use tokio::timer::Interval;
 
 fn main() {
-    println!("Connecting...");
+    TermLogger::init(LevelFilter::Debug, Config::default()).unwrap();
+
+    info!("Connecting...");
 
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
@@ -24,7 +31,7 @@ fn main() {
             .map_err(|_| ())
             .for_each(move |_| {
                 let large_indirect_flag = client.bool_variation("large-indirect-flag");
-                println!("large_indirect_flag flag: {}", large_indirect_flag);
+                info!("large_indirect_flag flag: {}", large_indirect_flag);
                 Ok(())
             })
     }));

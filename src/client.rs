@@ -33,9 +33,9 @@ impl ConfigBuilder {
     pub fn base_url<'a>(&'a mut self, url: &str) -> &'a mut ConfigBuilder {
         let mut url = url;
         while url.ends_with("/") {
-            print!("trimming base url: {}", url);
+            let untrimmed_url = url;
             url = &url[..url.len() - 1];
-            println!(" -> {}", url);
+            debug!("trimming base url: {} -> {}", untrimmed_url, url);
         }
 
         self.base_url = url.to_owned();
@@ -77,7 +77,7 @@ impl Client {
                 ))
             })
             .unwrap_or_else(|e| {
-                println!("couldn't evaluate flag {:?}: {:?}", flag_name, e);
+                warn!("couldn't evaluate flag {:?}: {:?}", flag_name, e);
                 false
             })
     }

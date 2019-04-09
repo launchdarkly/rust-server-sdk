@@ -65,7 +65,7 @@ impl StreamingUpdateProcessor {
                 .for_each(move |event| {
                     let mut store = store.lock().unwrap();
 
-                    println!("update processor got an event: {}", event.event_type);
+                    debug!("update processor got an event: {}", event.event_type);
 
                     match event.event_type.as_str() {
                         "put" => process_put(&mut *store, event),
@@ -73,7 +73,7 @@ impl StreamingUpdateProcessor {
                         _ => Err(Error::InvalidEventType(event.event_type)),
                     }
                 })
-                .map_err(|e| println!("update processor got an error: {:?}", e))
+                .map_err(|e| error!("update processor got an error: {:?}", e))
         }));
     }
 }
