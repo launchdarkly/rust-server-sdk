@@ -29,13 +29,7 @@ impl FeatureFlag {
         }
 
         // just return the fallthrough for now
-        let fallthrough_variation =
-            self.fallthrough()
-                .get("variation")
-                .expect("fallthrough only supported as variation for now")
-                .as_u64()
-                .expect("fallthrough variation should be an integer") as VariationIndex;
-        self.variation(fallthrough_variation)
+        self.value_for_variation_or_rollout(self.fallthrough())
     }
 
     pub fn on(&self) -> bool {
@@ -69,6 +63,18 @@ impl FeatureFlag {
         self.get_loudly("variations")
             .as_array()
             .expect("'variations' field should be an array")
+    }
+
+    pub fn value_for_variation_or_rollout(
+        &self,
+        vr: &serde_json::Value, /*, TODO user*/
+    ) -> Result<&serde_json::Value> {
+        let variation_index =
+            vr.get("variation")
+                .expect("only variation supported for now")
+                .as_u64()
+                .expect("variation should be an integer") as VariationIndex;
+        self.variation(variation_index)
     }
 
     fn get_loudly(&self, key: &str) -> &serde_json::Value {
