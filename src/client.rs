@@ -68,7 +68,7 @@ impl Client {
         self.update_processor.subscribe()
     }
 
-    pub fn bool_variation(&self, /*TODO user, */ flag_name: &str) -> bool {
+    pub fn bool_variation(&self, /*TODO user, */ flag_name: &str, default: bool) -> bool {
         self.evaluate(flag_name)
             .and_then(|val| {
                 val.as_bool().ok_or(Error::FlagWrongType(
@@ -78,7 +78,7 @@ impl Client {
             })
             .unwrap_or_else(|e| {
                 warn!("couldn't evaluate flag {:?}: {:?}", flag_name, e);
-                false
+                default
             })
     }
 

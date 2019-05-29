@@ -38,7 +38,7 @@ fn main() {
             .map_err(|_| ())
             .for_each(move |_| {
                 for flag_key in &flags {
-                    let flag_val = client.bool_variation(&flag_key);
+                    let flag_val = client.bool_variation(&flag_key, false);
                     info!("flag {}: {}", flag_key, flag_val);
                 }
                 Ok(())
