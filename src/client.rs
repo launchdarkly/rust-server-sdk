@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use super::store::FeatureStore;
+use super::store::{self, FeatureStore};
 use super::update_processor::{self as up, StreamingUpdateProcessor};
 
 const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
@@ -9,7 +9,7 @@ const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
 pub enum Error {
     FlagWrongType(String, String),
     InvalidConfig(up::Error),
-    MalformedFlag(String, String),
+    EvaluationError(store::Error),
     NoSuchFlag(String),
 }
 
@@ -82,16 +82,16 @@ impl Client {
             })
     }
 
+    /*
+     * TODO don't expose JSON types
+     */
     pub fn evaluate(&self, /*TODO user, */ flag_name: &str) -> Result<serde_json::Value> {
         let store = self.store.lock().unwrap();
         let flag = store
             .flag(flag_name)
             .ok_or(Error::NoSuchFlag(flag_name.to_string()))?;
-        flag.get("on")
-            .ok_or(Error::MalformedFlag(
-                flag_name.to_string(),
-                "missing 'on' property".to_string(),
-            ))
+        flag.evaluate()
+            .map_err(|e| Error::EvaluationError(e))
             .map(|v| v.clone())
     }
 }
