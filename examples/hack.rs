@@ -3,6 +3,7 @@ extern crate log;
 extern crate simplelog;
 
 use std::env;
+use std::process::exit;
 use std::time::Duration;
 
 use futures::future::lazy;
@@ -14,6 +15,12 @@ fn main() {
     TermLogger::init(LevelFilter::Debug, Config::default()).unwrap();
 
     info!("Connecting...");
+
+    let flags: Vec<String> = env::args().skip(1).collect();
+    if flags.is_empty() {
+        error!("Please list some flags to watch.");
+        exit(1);
+    }
 
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
@@ -30,8 +37,10 @@ fn main() {
         Interval::new_interval(Duration::from_secs(5))
             .map_err(|_| ())
             .for_each(move |_| {
-                let large_indirect_flag = client.bool_variation("large-indirect-flag");
-                info!("large_indirect_flag flag: {}", large_indirect_flag);
+                for flag_key in &flags {
+                    let flag_val = client.bool_variation(&flag_key);
+                    info!("flag {}: {}", flag_key, flag_val);
+                }
                 Ok(())
             })
     }));
