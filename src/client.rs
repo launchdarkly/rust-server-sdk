@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use super::store::{self, FeatureStore};
+use super::eval::{self, Detail};
+use super::store::FeatureStore;
 use super::update_processor::{self as up, StreamingUpdateProcessor};
 
 const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
@@ -9,7 +10,7 @@ const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
 pub enum Error {
     FlagWrongType(String, String),
     InvalidConfig(up::Error),
-    EvaluationError(store::Error),
+    EvaluationError(eval::Error),
     NoSuchFlag(String),
 }
 
@@ -68,30 +69,29 @@ impl Client {
         self.update_processor.subscribe()
     }
 
-    pub fn bool_variation(&self, /*TODO user, */ flag_name: &str, default: bool) -> bool {
-        self.evaluate(flag_name)
-            .and_then(|val| {
-                val.as_bool().ok_or(Error::FlagWrongType(
-                    flag_name.to_string(),
-                    "not bool".to_string(),
-                ))
-            })
-            .unwrap_or_else(|e| {
-                warn!("couldn't evaluate flag {:?}: {:?}", flag_name, e);
-                default
-            })
+    pub fn bool_variation_detail(
+        &self,
+        /*TODO user, */ flag_name: &str,
+        default: bool,
+    ) -> Detail<bool> {
+        self.evaluate_detail(flag_name)
+            .try_map(|val| val.as_bool(), eval::Error::Exception)
+            .or(default)
     }
 
     /*
      * TODO don't expose JSON types
      */
-    pub fn evaluate(&self, /*TODO user, */ flag_name: &str) -> Result<serde_json::Value> {
+    pub fn evaluate_detail(
+        &self,
+        /*TODO user, */ flag_name: &str,
+    ) -> Detail<serde_json::Value> {
         let store = self.store.lock().unwrap();
-        let flag = store
-            .flag(flag_name)
-            .ok_or(Error::NoSuchFlag(flag_name.to_string()))?;
-        flag.evaluate()
-            .map_err(|e| Error::EvaluationError(e))
-            .map(|v| v.clone())
+        let flag = store.flag(flag_name);
+        if flag.is_none() {
+            return Detail::err(eval::Error::FlagNotFound);
+        }
+        // TODO any way to avoid the clone here?
+        flag.unwrap().evaluate().map(|v| v.clone())
     }
 }

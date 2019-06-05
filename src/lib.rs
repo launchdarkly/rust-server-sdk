@@ -9,6 +9,7 @@ extern crate log;
 extern crate maplit;
 
 pub mod client;
+pub mod eval;
 mod eventsource;
 mod store;
 mod update_processor;

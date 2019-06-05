@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 
+use super::eval::{self, Detail, Reason};
+
 use serde::Deserialize;
 
 const FLAGS_PREFIX: &'static str = "/flags/";
-
-pub type Error = String;
-pub type Result<T> = std::result::Result<T, Error>;
 
 type VariationIndex = usize;
 
@@ -23,13 +22,15 @@ impl Debug for FeatureFlag {
 }
 
 impl FeatureFlag {
-    pub fn evaluate(&self) -> Result<&serde_json::Value> {
+    pub fn evaluate(&self) -> Detail<&serde_json::Value> {
         if !self.on() {
-            return Ok(self.off_value());
+            return Detail::new(self.off_value(), Reason::Off);
         }
 
         // just return the fallthrough for now
         self.value_for_variation_or_rollout(self.fallthrough())
+            .map(|val| Detail::new(val, Reason::Fallthrough))
+            .unwrap_or(Detail::err(eval::Error::MalformedFlag))
     }
 
     pub fn on(&self) -> bool {
@@ -38,10 +39,8 @@ impl FeatureFlag {
             .expect("'on' field should be boolean")
     }
 
-    pub fn variation(&self, index: VariationIndex) -> Result<&serde_json::Value> {
-        self.variations()
-            .get(index)
-            .ok_or("malformed flag".to_string())
+    pub fn variation(&self, index: VariationIndex) -> Option<&serde_json::Value> {
+        self.variations().get(index)
     }
 
     pub fn off_value(&self) -> &serde_json::Value {
@@ -68,7 +67,7 @@ impl FeatureFlag {
     pub fn value_for_variation_or_rollout(
         &self,
         vr: &serde_json::Value, /*, TODO user*/
-    ) -> Result<&serde_json::Value> {
+    ) -> Option<&serde_json::Value> {
         let variation_index =
             vr.get("variation")
                 .expect("only variation supported for now")
