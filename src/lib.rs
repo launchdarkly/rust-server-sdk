@@ -13,6 +13,7 @@ pub mod eval;
 mod eventsource;
 mod store;
 mod update_processor;
+pub mod users;
 
 #[cfg(test)]
 mod tests {

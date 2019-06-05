@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use super::eval::{self, Detail};
 use super::store::FeatureStore;
 use super::update_processor::{self as up, StreamingUpdateProcessor};
+use super::users::User;
 
 const DEFAULT_BASE_URL: &'static str = "https://stream.launchdarkly.com";
 
@@ -71,10 +72,11 @@ impl Client {
 
     pub fn bool_variation_detail(
         &self,
-        /*TODO user, */ flag_name: &str,
+        user: &User,
+        flag_name: &str,
         default: bool,
     ) -> Detail<bool> {
-        self.evaluate_detail(flag_name)
+        self.evaluate_detail(user, flag_name)
             .try_map(|val| val.as_bool(), eval::Error::Exception)
             .or(default)
     }
@@ -82,16 +84,13 @@ impl Client {
     /*
      * TODO don't expose JSON types
      */
-    pub fn evaluate_detail(
-        &self,
-        /*TODO user, */ flag_name: &str,
-    ) -> Detail<serde_json::Value> {
+    pub fn evaluate_detail(&self, user: &User, flag_name: &str) -> Detail<serde_json::Value> {
         let store = self.store.lock().unwrap();
         let flag = store.flag(flag_name);
         if flag.is_none() {
             return Detail::err(eval::Error::FlagNotFound);
         }
         // TODO any way to avoid the clone here?
-        flag.unwrap().evaluate().map(|v| v.clone())
+        flag.unwrap().evaluate(user).map(|v| v.clone())
     }
 }

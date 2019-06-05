@@ -6,6 +6,9 @@ use std::env;
 use std::process::exit;
 use std::time::Duration;
 
+use ldclient::client::Client;
+use ldclient::users::User;
+
 use futures::future::lazy;
 use futures::stream::Stream;
 use simplelog::{Config, LevelFilter, TermLogger};
@@ -25,7 +28,12 @@ fn main() {
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
 
-    let mut client_builder = ldclient::client::Client::configure();
+    let alice = User {
+        key: "alice".into(),
+    };
+    let bob = User { key: "bob".into() };
+
+    let mut client_builder = Client::configure();
     let _ = stream_url_opt.map(|url| {
         client_builder.base_url(&url);
     });
@@ -37,9 +45,11 @@ fn main() {
         Interval::new_interval(Duration::from_secs(5))
             .map_err(|_| ())
             .for_each(move |_| {
-                for flag_key in &flags {
-                    let flag_detail = client.bool_variation_detail(&flag_key, false);
-                    info!("flag {}: {:?}", flag_key, flag_detail);
+                for user in vec![&alice, &bob] {
+                    for flag_key in &flags {
+                        let flag_detail = client.bool_variation_detail(user, &flag_key, false);
+                        info!("user {}, flag {}: {:?}", user.key, flag_key, flag_detail);
+                    }
                 }
                 Ok(())
             })

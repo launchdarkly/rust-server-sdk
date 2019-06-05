@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 
 use super::eval::{self, Detail, Reason};
+use super::users::User;
 
 use serde::Deserialize;
 
@@ -22,9 +23,25 @@ impl Debug for FeatureFlag {
 }
 
 impl FeatureFlag {
-    pub fn evaluate(&self) -> Detail<&serde_json::Value> {
+    pub fn evaluate(&self, user: &User) -> Detail<&serde_json::Value> {
         if !self.on() {
             return Detail::new(self.off_value(), Reason::Off);
+        }
+
+        for target in self.targets() {
+            let values = target.get("values").expect("wtf").as_array().expect("wtf");
+            for value in values {
+                let value_str = value.as_str().expect("wtf");
+                if value_str == &user.key {
+                    let variation_index =
+                        target.get("variation").expect("wtf").as_u64().expect("wtf")
+                            as VariationIndex;
+                    return match self.variation(variation_index) {
+                        Some(result) => Detail::new(result, Reason::TargetMatch),
+                        None => Detail::err(eval::Error::MalformedFlag),
+                    };
+                }
+            }
         }
 
         // just return the fallthrough for now
@@ -62,6 +79,12 @@ impl FeatureFlag {
         self.get_loudly("variations")
             .as_array()
             .expect("'variations' field should be an array")
+    }
+
+    pub fn targets(&self) -> &Vec<serde_json::Value> {
+        self.get_loudly("targets")
+            .as_array()
+            .expect("'targets' field should be an array")
     }
 
     pub fn value_for_variation_or_rollout(
