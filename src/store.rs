@@ -34,9 +34,20 @@ impl FlagValue {
 }
 
 // TODO strongly type these
-type Target = serde_json::Value;
-type VariationOrRollout = serde_json::Value;
 type Variation = serde_json::Value;
+
+#[derive(Clone, Debug, Deserialize)]
+struct Target {
+    values: Vec<String>,
+    variation: VariationIndex,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum VariationOrRollout {
+    Variation(VariationIndex),
+    // TODO Rollout
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,14 +68,9 @@ impl FeatureFlag {
         }
 
         for target in &self.targets {
-            let values = target.get("values").expect("wtf").as_array().expect("wtf");
-            for value in values {
-                let value_str = value.as_str().expect("wtf");
-                if value_str == &user.key {
-                    let variation_index =
-                        target.get("variation").expect("wtf").as_u64().expect("wtf")
-                            as VariationIndex;
-                    return match self.variation(variation_index) {
+            for value in &target.values {
+                if value == &user.key {
+                    return match self.variation(target.variation) {
                         Some(result) => Detail::new(result, Reason::TargetMatch),
                         None => Detail::err(eval::Error::MalformedFlag),
                     };
@@ -89,16 +95,13 @@ impl FeatureFlag {
             .expect("my error handling is messed up")
     }
 
-    pub fn value_for_variation_or_rollout(
+    fn value_for_variation_or_rollout(
         &self,
-        vr: &serde_json::Value, /*, TODO user*/
+        vr: &VariationOrRollout, /*, TODO user*/
     ) -> Option<FlagValue> {
-        let variation_index =
-            vr.get("variation")
-                .expect("only variation supported for now")
-                .as_u64()
-                .expect("variation should be an integer") as VariationIndex;
-        self.variation(variation_index)
+        match vr {
+            VariationOrRollout::Variation(index) => self.variation(*index),
+        }
     }
 }
 
