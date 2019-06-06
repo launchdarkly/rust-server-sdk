@@ -28,10 +28,8 @@ fn main() {
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
 
-    let alice = User {
-        key: "alice".into(),
-    };
-    let bob = User { key: "bob".into() };
+    let alice = User::new("alice");
+    let bob = User::new("bob");
 
     let mut client_builder = Client::configure();
     let _ = stream_url_opt.map(|url| {
