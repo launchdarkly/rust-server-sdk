@@ -10,6 +10,30 @@ const FLAGS_PREFIX: &'static str = "/flags/";
 
 type VariationIndex = usize;
 
+pub enum FlagValue {
+    Bool(bool),
+}
+
+impl FlagValue {
+    // TODO this error handling is a mess (returns Option but panics)
+    fn from_json(json: &serde_json::Value) -> Option<Self> {
+        match json {
+            serde_json::Value::Bool(b) => Some(FlagValue::Bool(*b)),
+            serde_json::Value::String(_) => panic!("TODO string not implemented"),
+            serde_json::Value::Number(_) => panic!("TODO number not implemented"),
+            serde_json::Value::Object(_) => panic!("TODO object not implemented"),
+            serde_json::Value::Array(_) => panic!("TODO array not implemented"),
+            serde_json::Value::Null => panic!("TODO handle null"),
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            FlagValue::Bool(b) => Some(*b),
+        }
+    }
+}
+
 // TODO more-typed flag type, to pull errors earlier
 #[derive(Clone, Deserialize)]
 pub struct FeatureFlag(serde_json::Value);
@@ -23,7 +47,7 @@ impl Debug for FeatureFlag {
 }
 
 impl FeatureFlag {
-    pub fn evaluate(&self, user: &User) -> Detail<&serde_json::Value> {
+    pub fn evaluate(&self, user: &User) -> Detail<FlagValue> {
         if !self.on() {
             return Detail::new(self.off_value(), Reason::Off);
         }
@@ -56,11 +80,13 @@ impl FeatureFlag {
             .expect("'on' field should be boolean")
     }
 
-    pub fn variation(&self, index: VariationIndex) -> Option<&serde_json::Value> {
-        self.variations().get(index)
+    pub fn variation(&self, index: VariationIndex) -> Option<FlagValue> {
+        self.variations()
+            .get(index)
+            .and_then(|json| FlagValue::from_json(json))
     }
 
-    pub fn off_value(&self) -> &serde_json::Value {
+    pub fn off_value(&self) -> FlagValue {
         self.variation(self.off_variation())
             .expect("my error handling is messed up")
     }
@@ -90,7 +116,7 @@ impl FeatureFlag {
     pub fn value_for_variation_or_rollout(
         &self,
         vr: &serde_json::Value, /*, TODO user*/
-    ) -> Option<&serde_json::Value> {
+    ) -> Option<FlagValue> {
         let variation_index =
             vr.get("variation")
                 .expect("only variation supported for now")
