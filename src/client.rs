@@ -87,6 +87,7 @@ impl Client {
         if flag.is_none() {
             return Detail::err(eval::Error::FlagNotFound);
         }
-        flag.unwrap().evaluate(user)
+        // TODO can we avoid the clone here?
+        flag.unwrap().evaluate(user).map(|v| v.clone())
     }
 }

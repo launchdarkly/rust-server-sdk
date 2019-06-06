@@ -9,32 +9,24 @@ const FLAGS_PREFIX: &'static str = "/flags/";
 
 type VariationIndex = usize;
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
 pub enum FlagValue {
     Bool(bool),
+    NotYetImplemented(serde_json::Value),
 }
 
 impl FlagValue {
-    // TODO this error handling is a mess (returns Option but panics)
-    fn from_json(json: &serde_json::Value) -> Option<Self> {
-        match json {
-            serde_json::Value::Bool(b) => Some(FlagValue::Bool(*b)),
-            serde_json::Value::String(_) => panic!("TODO string not implemented"),
-            serde_json::Value::Number(_) => panic!("TODO number not implemented"),
-            serde_json::Value::Object(_) => panic!("TODO object not implemented"),
-            serde_json::Value::Array(_) => panic!("TODO array not implemented"),
-            serde_json::Value::Null => panic!("TODO handle null"),
-        }
-    }
-
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             FlagValue::Bool(b) => Some(*b),
+            _ => {
+                warn!("variation type is not bool but {:?}", self);
+                None
+            }
         }
     }
 }
-
-// TODO strongly type these
-type Variation = serde_json::Value;
 
 #[derive(Clone, Debug, Deserialize)]
 struct Target {
@@ -58,11 +50,11 @@ pub struct FeatureFlag {
     targets: Vec<Target>,
     fallthrough: VariationOrRollout,
     off_variation: VariationIndex,
-    variations: Vec<Variation>,
+    variations: Vec<FlagValue>,
 }
 
 impl FeatureFlag {
-    pub fn evaluate(&self, user: &User) -> Detail<FlagValue> {
+    pub fn evaluate(&self, user: &User) -> Detail<&FlagValue> {
         if !self.on {
             return Detail::new(self.off_value(), Reason::Off);
         }
@@ -84,13 +76,11 @@ impl FeatureFlag {
             .unwrap_or(Detail::err(eval::Error::MalformedFlag))
     }
 
-    pub fn variation(&self, index: VariationIndex) -> Option<FlagValue> {
-        self.variations
-            .get(index)
-            .and_then(|json| FlagValue::from_json(json))
+    pub fn variation(&self, index: VariationIndex) -> Option<&FlagValue> {
+        self.variations.get(index)
     }
 
-    pub fn off_value(&self) -> FlagValue {
+    pub fn off_value(&self) -> &FlagValue {
         self.variation(self.off_variation)
             .expect("my error handling is messed up")
     }
@@ -98,7 +88,7 @@ impl FeatureFlag {
     fn value_for_variation_or_rollout(
         &self,
         vr: &VariationOrRollout, /*, TODO user*/
-    ) -> Option<FlagValue> {
+    ) -> Option<&FlagValue> {
         match vr {
             VariationOrRollout::Variation(index) => self.variation(*index),
         }
