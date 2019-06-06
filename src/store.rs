@@ -9,7 +9,7 @@ const FLAGS_PREFIX: &'static str = "/flags/";
 
 type VariationIndex = usize;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum FlagValue {
     Bool(bool),
@@ -133,5 +133,74 @@ impl FeatureStore {
 
         let flag_name = &path[FLAGS_PREFIX.len()..];
         self.data.flags.insert(flag_name.to_string(), data);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use spectral::prelude::*;
+
+    use super::FlagValue::*;
+    use super::*;
+
+    use crate::eval::Reason::*;
+    use crate::users::User;
+
+    const TEST_FLAG_JSON: &str = "{
+        \"key\": \"test-flag\",
+        \"on\": false,
+        \"targets\": [
+            {\"values\": [\"bob\"], \"variation\": 1}
+        ],
+        \"fallthrough\": {\"variation\": 0},
+        \"offVariation\": 1,
+        \"variations\": [true, false]
+    }";
+
+    #[test]
+    fn test_parse_flag() {
+        let f: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).expect("should parse JSON");
+        assert_eq!(f.key, "test-flag");
+        assert!(!f.on);
+        assert_eq!(f.off_variation, 1);
+    }
+
+    #[test]
+    fn test_eval_flag_basic() {
+        let alice = User::new("alice"); // not targeted
+        let bob = User::new("bob"); // targeted
+        let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
+
+        assert!(!flag.on);
+        let detail = flag.evaluate(&alice);
+        assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.reason).is_equal_to(&Off);
+
+        assert_that!(flag.evaluate(&bob)).is_equal_to(&detail);
+
+        // flip off variation
+        flag.off_variation = 0;
+        let detail = flag.evaluate(&alice);
+        assert_that!(detail.value).contains_value(&Bool(true));
+
+        // flip targeting on
+        flag.on = true;
+        let detail = flag.evaluate(&alice);
+        assert_that!(detail.value).contains_value(&Bool(true));
+        assert_that!(detail.reason).is_equal_to(&Fallthrough);
+
+        let detail = flag.evaluate(&bob);
+        assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.reason).is_equal_to(&TargetMatch);
+
+        // flip default variation
+        flag.fallthrough = VariationOrRollout::Variation(1);
+        let detail = flag.evaluate(&alice);
+        assert_that!(detail.value).contains_value(&Bool(false));
+
+        // bob's reason should still be TargetMatch even though his value is now the default
+        let detail = flag.evaluate(&bob);
+        assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.reason).is_equal_to(&TargetMatch);
     }
 }

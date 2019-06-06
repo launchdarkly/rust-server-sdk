@@ -8,6 +8,9 @@ extern crate log;
 #[macro_use]
 extern crate maplit;
 
+#[cfg(test)]
+extern crate spectral;
+
 pub mod client;
 pub mod eval;
 mod eventsource;

@@ -1,6 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Detail<T> {
     pub value: Option<T>,
     pub reason: Reason,
@@ -62,7 +62,7 @@ impl<T> Detail<T> {
 }
 
 // Reason describes the reason that a flag evaluation producted a particular value.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Reason {
     // Off indicates that the flag was off and therefore returned its configured off value.
     Off,
@@ -101,7 +101,7 @@ impl Reason {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
     // ClientNotReady indicates that the caller tried to evaluate a flag before the client
     // had successfully initialized.
