@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt::{self, Debug, Formatter};
 
 use super::eval::{self, Detail, Reason};
 use super::users::User;
@@ -34,25 +33,30 @@ impl FlagValue {
     }
 }
 
-// TODO more-typed flag type, to pull errors earlier
-#[derive(Clone, Deserialize)]
-pub struct FeatureFlag(serde_json::Value);
+// TODO strongly type these
+type Target = serde_json::Value;
+type VariationOrRollout = serde_json::Value;
+type Variation = serde_json::Value;
 
-impl Debug for FeatureFlag {
-    // implemented manually rather than derived in order to output JSON rather
-    // than serde_json's type constructors
-    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
-        write!(fmt, "{}", self.0)
-    }
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureFlag {
+    pub key: String,
+
+    on: bool,
+    targets: Vec<Target>,
+    fallthrough: VariationOrRollout,
+    off_variation: VariationIndex,
+    variations: Vec<Variation>,
 }
 
 impl FeatureFlag {
     pub fn evaluate(&self, user: &User) -> Detail<FlagValue> {
-        if !self.on() {
+        if !self.on {
             return Detail::new(self.off_value(), Reason::Off);
         }
 
-        for target in self.targets() {
+        for target in &self.targets {
             let values = target.get("values").expect("wtf").as_array().expect("wtf");
             for value in values {
                 let value_str = value.as_str().expect("wtf");
@@ -69,48 +73,20 @@ impl FeatureFlag {
         }
 
         // just return the fallthrough for now
-        self.value_for_variation_or_rollout(self.fallthrough())
+        self.value_for_variation_or_rollout(&self.fallthrough)
             .map(|val| Detail::new(val, Reason::Fallthrough))
             .unwrap_or(Detail::err(eval::Error::MalformedFlag))
     }
 
-    pub fn on(&self) -> bool {
-        self.get_loudly("on")
-            .as_bool()
-            .expect("'on' field should be boolean")
-    }
-
     pub fn variation(&self, index: VariationIndex) -> Option<FlagValue> {
-        self.variations()
+        self.variations
             .get(index)
             .and_then(|json| FlagValue::from_json(json))
     }
 
     pub fn off_value(&self) -> FlagValue {
-        self.variation(self.off_variation())
+        self.variation(self.off_variation)
             .expect("my error handling is messed up")
-    }
-
-    pub fn off_variation(&self) -> VariationIndex {
-        self.get_loudly("offVariation")
-            .as_u64()
-            .expect("'offVariation' field should be an integer") as VariationIndex
-    }
-
-    pub fn fallthrough(&self) -> &serde_json::Value {
-        self.get_loudly("fallthrough")
-    }
-
-    pub fn variations(&self) -> &Vec<serde_json::Value> {
-        self.get_loudly("variations")
-            .as_array()
-            .expect("'variations' field should be an array")
-    }
-
-    pub fn targets(&self) -> &Vec<serde_json::Value> {
-        self.get_loudly("targets")
-            .as_array()
-            .expect("'targets' field should be an array")
     }
 
     pub fn value_for_variation_or_rollout(
@@ -123,15 +99,6 @@ impl FeatureFlag {
                 .as_u64()
                 .expect("variation should be an integer") as VariationIndex;
         self.variation(variation_index)
-    }
-
-    fn get_loudly(&self, key: &str) -> &serde_json::Value {
-        self.get(key)
-            .expect(&format!("should have an {:?} field", key))
-    }
-
-    fn get(&self, key: &str) -> Option<&serde_json::Value> {
-        self.0.get(key)
     }
 }
 
