@@ -13,6 +13,7 @@ type VariationIndex = usize;
 #[serde(untagged)]
 pub enum FlagValue {
     Bool(bool),
+    // TODO implement other variation types
     NotYetImplemented(serde_json::Value),
 }
 
@@ -38,6 +39,7 @@ struct Target {
 #[serde(rename_all = "camelCase")]
 enum Op {
     In,
+    // TODO implement other matching operations
 }
 
 impl Op {
@@ -115,6 +117,7 @@ pub struct FeatureFlag {
     fallthrough: VariationOrRollout,
     off_variation: VariationIndex,
     variations: Vec<FlagValue>,
+    // TODO implement more flag fields
 }
 
 impl FeatureFlag {

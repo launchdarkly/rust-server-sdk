@@ -9,6 +9,7 @@ use serde::Deserialize;
 pub enum AttributeValue {
     String(String),
     Array(Vec<AttributeValue>),
+    // TODO implement other attribute types
     NotYetImplemented(serde_json::Value),
 }
 
