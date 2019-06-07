@@ -71,8 +71,11 @@ impl Clause {
             any_match_for_v.is_some()
         });
 
-        // TODO negation
-        any_match.is_some()
+        if self.negate {
+            any_match.is_none()
+        } else {
+            any_match.is_some()
+        }
     }
 }
 
@@ -365,6 +368,18 @@ mod tests {
             op: Op::In,
             values: vec!["foo".into(), "bar".into()],
         };
+        let negated_clause = Clause {
+            attribute: "a".into(),
+            negate: true,
+            op: Op::In,
+            values: vec!["foo".into()],
+        };
+        let negated_many_val_clause = Clause {
+            attribute: "a".into(),
+            negate: true,
+            op: Op::In,
+            values: vec!["foo".into(), "bar".into()],
+        };
 
         let matching_user = User::new_with_custom("mu", hashmap! {"a".into() => "foo".into()});
         let non_matching_user = User::new_with_custom("nmu", hashmap! {"a".into() => "lol".into()});
@@ -374,12 +389,31 @@ mod tests {
         assert!(!one_val_clause.matches(&non_matching_user));
         assert!(!one_val_clause.matches(&user_without_attr));
 
+        assert!(!negated_clause.matches(&matching_user));
+        assert!(negated_clause.matches(&non_matching_user));
+
+        assert!(
+            !negated_clause.matches(&user_without_attr),
+            "targeting missing attribute does not match even when negated"
+        );
+
         assert!(
             many_val_clause.matches(&matching_user),
             "requires only one of the values"
         );
         assert!(!many_val_clause.matches(&non_matching_user));
         assert!(!many_val_clause.matches(&user_without_attr));
+
+        assert!(
+            !negated_many_val_clause.matches(&matching_user),
+            "requires all values are missing"
+        );
+        assert!(negated_many_val_clause.matches(&non_matching_user));
+
+        assert!(
+            !negated_many_val_clause.matches(&user_without_attr),
+            "targeting missing attribute does not match even when negated"
+        );
 
         let user_with_many = User::new_with_custom(
             "uwm",
@@ -388,5 +422,8 @@ mod tests {
 
         assert!(one_val_clause.matches(&user_with_many));
         assert!(many_val_clause.matches(&user_with_many));
+
+        assert!(!negated_clause.matches(&user_with_many));
+        assert!(!negated_many_val_clause.matches(&user_with_many));
     }
 }
