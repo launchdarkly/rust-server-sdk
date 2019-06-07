@@ -1,5 +1,7 @@
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate maplit;
 extern crate simplelog;
 
 use std::env;
@@ -28,7 +30,7 @@ fn main() {
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
 
-    let alice = User::new("alice");
+    let alice = User::new_with_custom("alice", hashmap! { "team".into() => "Avengers".into() });
     let bob = User::new("bob");
 
     let mut client_builder = Client::configure();

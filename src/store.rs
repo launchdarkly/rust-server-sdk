@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::eval::{self, Detail, Reason};
-use super::users::User;
+use super::users::{AttributeValue, User};
 
 use serde::Deserialize;
 
@@ -34,6 +34,66 @@ struct Target {
     variation: VariationIndex,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+enum Op {
+    In,
+}
+
+impl Op {
+    fn matches(&self, lhs: &AttributeValue, rhs: &AttributeValue) -> bool {
+        match self {
+            Op::In => lhs == rhs,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct Clause {
+    attribute: String,
+    negate: bool,
+    op: Op,
+    values: Vec<AttributeValue>,
+}
+
+impl Clause {
+    fn matches(&self, user: &User) -> bool {
+        let user_val = match user.value_of(&self.attribute) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        let any_match = user_val.find(|user_val_v| {
+            let any_match_for_v = self
+                .values
+                .iter()
+                .find(|clause_val| self.op.matches(user_val_v, clause_val));
+            any_match_for_v.is_some()
+        });
+
+        // TODO negation
+        any_match.is_some()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct Rule {
+    clauses: Vec<Clause>,
+    variation: VariationIndex,
+}
+
+impl Rule {
+    fn matches(&self, user: &User) -> bool {
+        // rules match if _all_ of their clauses do
+        for clause in &self.clauses {
+            if !clause.matches(user) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum VariationOrRollout {
@@ -48,6 +108,7 @@ pub struct FeatureFlag {
 
     on: bool,
     targets: Vec<Target>,
+    rules: Vec<Rule>,
     fallthrough: VariationOrRollout,
     off_variation: VariationIndex,
     variations: Vec<FlagValue>,
@@ -62,11 +123,14 @@ impl FeatureFlag {
         for target in &self.targets {
             for value in &target.values {
                 if value == &user.key {
-                    return match self.variation(target.variation) {
-                        Some(result) => Detail::new(result, Reason::TargetMatch),
-                        None => Detail::err(eval::Error::MalformedFlag),
-                    };
+                    return self.should_variation(target.variation, Reason::TargetMatch);
                 }
+            }
+        }
+
+        for rule in &self.rules {
+            if rule.matches(&user) {
+                return self.should_variation(rule.variation, Reason::RuleMatch);
             }
         }
 
@@ -74,6 +138,13 @@ impl FeatureFlag {
         self.value_for_variation_or_rollout(&self.fallthrough)
             .map(|val| Detail::new(val, Reason::Fallthrough))
             .unwrap_or(Detail::err(eval::Error::MalformedFlag))
+    }
+
+    fn should_variation(&self, index: VariationIndex, reason: Reason) -> Detail<&FlagValue> {
+        match self.variation(index) {
+            Some(result) => Detail::new(result, reason),
+            None => Detail::err(eval::Error::MalformedFlag),
+        }
     }
 
     pub fn variation(&self, index: VariationIndex) -> Option<&FlagValue> {
@@ -152,6 +223,30 @@ mod tests {
         \"targets\": [
             {\"values\": [\"bob\"], \"variation\": 1}
         ],
+        \"rules\": [],
+        \"fallthrough\": {\"variation\": 0},
+        \"offVariation\": 1,
+        \"variations\": [true, false]
+    }";
+
+    const FLAG_WITH_RULES_JSON: &str = "{
+        \"key\": \"with-rules\",
+        \"on\": false,
+        \"targets\": [],
+        \"rules\": [
+            {
+                \"clauses\": [
+                    {
+                        \"attribute\": \"team\",
+                        \"negate\": false,
+                        \"op\": \"in\",
+                        \"values\": [\"Avengers\"]
+                    }
+                ],
+                \"id\": \"667e5007-01e4-4b51-9e33-5abe7f892790\",
+                \"variation\": 1
+            }
+        ],
         \"fallthrough\": {\"variation\": 0},
         \"offVariation\": 1,
         \"variations\": [true, false]
@@ -159,10 +254,17 @@ mod tests {
 
     #[test]
     fn test_parse_flag() {
-        let f: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).expect("should parse JSON");
-        assert_eq!(f.key, "test-flag");
-        assert!(!f.on);
-        assert_eq!(f.off_variation, 1);
+        let flags = btreemap! {
+            "test-flag" => TEST_FLAG_JSON,
+            "with-rules" => FLAG_WITH_RULES_JSON,
+        };
+        for (key, json) in flags {
+            let f: FeatureFlag = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("should parse flag {}: {}", key, e));
+            assert_eq!(f.key, key);
+            assert!(!f.on);
+            assert_eq!(f.off_variation, 1);
+        }
     }
 
     #[test]
@@ -202,5 +304,89 @@ mod tests {
         let detail = flag.evaluate(&bob);
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
+    }
+
+    #[test]
+    fn test_eval_flag_rules() {
+        let alice = User::new("alice");
+        let bob = User::new_with_custom(
+            "bob",
+            hashmap! {
+                "team".into() => "Avengers".into(),
+            },
+        );
+
+        let mut flag: FeatureFlag = serde_json::from_str(FLAG_WITH_RULES_JSON).unwrap();
+
+        assert!(!flag.on);
+        for user in vec![&alice, &bob] {
+            let detail = flag.evaluate(user);
+            assert_that!(detail.value).contains_value(&Bool(false));
+            assert_that!(detail.reason).is_equal_to(&Off);
+        }
+
+        // flip targeting on
+        flag.on = true;
+        let detail = flag.evaluate(&alice);
+        assert_that!(detail.value).contains_value(&Bool(true));
+        assert_that!(detail.reason).is_equal_to(&Fallthrough);
+
+        let detail = flag.evaluate(&bob);
+        assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.reason).is_equal_to(&RuleMatch);
+    }
+
+    #[test]
+    fn test_ops() {
+        use AttributeValue::String as AString;
+
+        assert!(Op::In.matches(&AString("foo".into()), &AString("foo".into())));
+
+        assert!(!Op::In.matches(&AString("foo".into()), &AString("bar".into())));
+        assert!(
+            !Op::In.matches(&AString("Foo".into()), &AString("foo".into())),
+            "case sensitive"
+        );
+
+        // TODO test anything other than strings
+    }
+
+    #[test]
+    fn test_clause_matches() {
+        let one_val_clause = Clause {
+            attribute: "a".into(),
+            negate: false,
+            op: Op::In,
+            values: vec!["foo".into()],
+        };
+        let many_val_clause = Clause {
+            attribute: "a".into(),
+            negate: false,
+            op: Op::In,
+            values: vec!["foo".into(), "bar".into()],
+        };
+
+        let matching_user = User::new_with_custom("mu", hashmap! {"a".into() => "foo".into()});
+        let non_matching_user = User::new_with_custom("nmu", hashmap! {"a".into() => "lol".into()});
+        let user_without_attr = User::new("uwa");
+
+        assert!(one_val_clause.matches(&matching_user));
+        assert!(!one_val_clause.matches(&non_matching_user));
+        assert!(!one_val_clause.matches(&user_without_attr));
+
+        assert!(
+            many_val_clause.matches(&matching_user),
+            "requires only one of the values"
+        );
+        assert!(!many_val_clause.matches(&non_matching_user));
+        assert!(!many_val_clause.matches(&user_without_attr));
+
+        let user_with_many = User::new_with_custom(
+            "uwm",
+            hashmap! {"a".into() => vec!["foo", "bar", "lol"].into()},
+        );
+
+        assert!(one_val_clause.matches(&user_with_many));
+        assert!(many_val_clause.matches(&user_with_many));
     }
 }

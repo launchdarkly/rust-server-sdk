@@ -1,9 +1,80 @@
+use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::hash::Hash;
+
+use serde::Deserialize;
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum AttributeValue {
+    String(String),
+    Array(Vec<AttributeValue>),
+    NotYetImplemented(serde_json::Value),
+}
+
+impl From<&str> for AttributeValue {
+    fn from(s: &str) -> AttributeValue {
+        AttributeValue::String(s.to_owned())
+    }
+}
+
+impl<T> From<Vec<T>> for AttributeValue
+where
+    AttributeValue: From<T>,
+{
+    fn from(v: Vec<T>) -> AttributeValue {
+        AttributeValue::Array(v.into_iter().map(|i| i.into()).collect())
+    }
+}
+
+impl AttributeValue {
+    pub fn find<P>(&self, p: P) -> Option<&AttributeValue>
+    where
+        P: Fn(&AttributeValue) -> bool,
+    {
+        match self {
+            AttributeValue::String(_) => {
+                if p(self) {
+                    Some(&self)
+                } else {
+                    None
+                }
+            }
+            AttributeValue::Array(values) => values.iter().find(|v| p(v)),
+            AttributeValue::NotYetImplemented(_) => {
+                warn!("attribute type not implemented: {:?}", self);
+                None
+            }
+        }
+    }
+}
+
 pub struct User {
     pub key: String,
+
+    custom: HashMap<String, AttributeValue>,
 }
 
 impl User {
-    pub fn new<S: Into<String>>(s: S) -> User {
-        User { key: s.into() }
+    pub fn new<S: Into<String>>(key: S) -> User {
+        Self::new_with_custom(key, HashMap::with_capacity(0))
+    }
+
+    pub fn new_with_custom<S: Into<String>>(
+        key: S,
+        custom: HashMap<String, AttributeValue>,
+    ) -> User {
+        User {
+            key: key.into(),
+            custom: custom,
+        }
+    }
+
+    pub fn value_of<Q>(&self, attr: &Q) -> Option<&AttributeValue>
+    where
+        String: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.custom.get(attr)
     }
 }
