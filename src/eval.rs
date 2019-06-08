@@ -69,9 +69,11 @@ pub enum Reason {
     // TargetMatch indicates that the user key was specifically targeted for this flag.
     TargetMatch,
     // RuleMatch indicates that the user matched one of the flag's rules.
+    // TODO include ruleIndex and ruleId
     RuleMatch,
     // PrerequisiteFailed indicates that the flag was considered off because it had at
     // least one prerequisite flag that either was off or did not return the desired variation.
+    // TODO include prerequisiteKey
     PrerequisiteFailed,
     // Fallthrough indicates that the flag was on but the user did not match any targets
     // or rules.
