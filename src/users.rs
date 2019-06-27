@@ -2,9 +2,9 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum AttributeValue {
     String(String),
@@ -50,6 +50,7 @@ impl AttributeValue {
     }
 }
 
+#[derive(Clone, Debug, Serialize)]
 pub struct User {
     pub key: String,
 

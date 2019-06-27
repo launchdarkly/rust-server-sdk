@@ -29,13 +29,17 @@ fn main() {
 
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
+    let events_url_opt = env::var("LAUNCHDARKLY_EVENTS_URL");
 
     let alice = User::new_with_custom("alice", hashmap! { "team".into() => "Avengers".into() });
     let bob = User::new("bob");
 
     let mut client_builder = Client::configure();
     let _ = stream_url_opt.map(|url| {
-        client_builder.base_url(&url);
+        client_builder.stream_base_url(&url);
+    });
+    let _ = events_url_opt.map(|url| {
+        client_builder.events_base_url(&url);
     });
     let mut client = client_builder.build(&sdk_key).unwrap();
 

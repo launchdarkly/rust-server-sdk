@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use super::eval::{self, Detail, Reason};
 use super::users::{AttributeValue, User};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const FLAGS_PREFIX: &'static str = "/flags/";
 
 type VariationIndex = usize;
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FlagValue {
     Bool(bool),
@@ -110,6 +110,7 @@ enum VariationOrRollout {
 #[serde(rename_all = "camelCase")]
 pub struct FeatureFlag {
     pub key: String,
+    pub version: u64,
 
     on: bool,
     targets: Vec<Target>,
@@ -225,6 +226,7 @@ mod tests {
 
     const TEST_FLAG_JSON: &str = "{
         \"key\": \"test-flag\",
+        \"version\": 1,
         \"on\": false,
         \"targets\": [
             {\"values\": [\"bob\"], \"variation\": 1}
@@ -237,6 +239,7 @@ mod tests {
 
     const FLAG_WITH_RULES_JSON: &str = "{
         \"key\": \"with-rules\",
+        \"version\": 1,
         \"on\": false,
         \"targets\": [],
         \"rules\": [

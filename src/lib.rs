@@ -10,7 +10,9 @@ extern crate spectral;
 
 pub mod client;
 pub mod eval;
-mod store;
+mod event_processor;
+pub mod events;
+pub mod store; // TODO no, move flagvalue into types or something instead
 mod update_processor;
 pub mod users;
 
