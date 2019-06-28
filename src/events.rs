@@ -15,13 +15,13 @@ pub struct BaseEvent {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind")]
-pub enum Event {
+pub enum Event<'a> {
     #[serde(rename = "feature", rename_all = "camelCase")]
     FeatureRequest {
         #[serde(flatten)]
         base: BaseEvent,
         key: String,
-        user_key: String,
+        user_key: &'a str,
         value: FlagValue,
         default: FlagValue,
         version: u64,
@@ -32,11 +32,11 @@ pub enum Event {
     Index {
         #[serde(flatten)]
         base: BaseEvent,
-        user: User,
+        user: &'a User,
     },
 }
 
-impl Display for Event {
+impl<'a> Display for Event<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let json = serde_json::to_string_pretty(self)
             .unwrap_or_else(|e| format!("JSON serialization failed ({}): {:?}", e, self));
@@ -44,12 +44,13 @@ impl Display for Event {
     }
 }
 
-impl Event {
+impl<'a> Event<'a> {
     pub fn make_index_event(&self) -> Option<Event> {
         match self {
             Event::FeatureRequest { base, .. } => Some(Event::Index {
-                base: base.clone(),      // TODO avoid clone
-                user: base.user.clone(), // TODO avoid clone
+                // difficult to avoid clone here because we can't express internal references
+                base: base.clone(),
+                user: &base.user,
             }),
             Event::Index { .. } => None,
         }

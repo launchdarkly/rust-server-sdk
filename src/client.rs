@@ -108,9 +108,9 @@ impl Client {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64,
-                user: user.clone(), // TODO no clone?
+                user: user.clone(), // TODO pass user as owned to avoid clone?
             },
-            user_key: user.key.clone(),
+            user_key: &user.key,
             key: flag.key.clone(),
             value: result.value.as_ref().unwrap().clone(), // TODO need to know default value provided
             default: result.value.as_ref().unwrap().clone(), // TODO populate iff default value was used
