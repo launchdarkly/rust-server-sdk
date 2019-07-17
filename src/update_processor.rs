@@ -1,15 +1,15 @@
 use std::sync::{Arc, Mutex};
 
+use eventsource_client as es;
 use futures::future::{lazy, Future};
 use futures::stream::Stream;
 use serde::Deserialize;
 
-use super::eventsource;
 use super::store::{AllData, FeatureFlag, FeatureStore};
 
 #[derive(Debug)]
 pub enum Error {
-    EventSource(eventsource::Error),
+    EventSource(es::Error),
     InvalidEventData(String, Box<std::error::Error + Send>),
     InvalidEventPath(String, String),
     InvalidEventType(String),
@@ -32,7 +32,7 @@ struct PatchData {
 }
 
 pub struct StreamingUpdateProcessor {
-    es_client: eventsource::Client,
+    es_client: es::Client,
     store: Arc<Mutex<FeatureStore>>,
 }
 
@@ -43,8 +43,7 @@ impl StreamingUpdateProcessor {
         store: &Arc<Mutex<FeatureStore>>,
     ) -> Result<StreamingUpdateProcessor> {
         let stream_url = format!("{}/all", base_url);
-        let client_builder =
-            eventsource::Client::for_url(&stream_url).map_err(|e| Error::EventSource(e))?;
+        let client_builder = es::Client::for_url(&stream_url).map_err(|e| Error::EventSource(e))?;
         let es_client = client_builder
             .header("Authorization", sdk_key)
             .unwrap()
@@ -78,20 +77,20 @@ impl StreamingUpdateProcessor {
     }
 }
 
-fn event_field<'a>(event: &'a eventsource::Event, field: &'a str) -> Result<&'a [u8]> {
+fn event_field<'a>(event: &'a es::Event, field: &'a str) -> Result<&'a [u8]> {
     event.field(field).ok_or(Error::MissingEventField(
         event.event_type.clone(),
         field.to_string(),
     ))
 }
 
-fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a eventsource::Event) -> Result<T> {
+fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
     let data = event_field(&event, "data")?;
     serde_json::from_slice(data)
         .map_err(|e| Error::InvalidEventData(event.event_type.clone(), Box::new(e)))
 }
 
-fn process_put(store: &mut FeatureStore, event: eventsource::Event) -> Result<()> {
+fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let put: PutData = parse_event_data(&event)?;
     if put.path == "/" {
         Ok(store.init(put.data))
@@ -103,7 +102,7 @@ fn process_put(store: &mut FeatureStore, event: eventsource::Event) -> Result<()
     }
 }
 
-fn process_patch(store: &mut FeatureStore, event: eventsource::Event) -> Result<()> {
+fn process_patch(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
     Ok(store.patch(&patch.path, patch.data))
 }

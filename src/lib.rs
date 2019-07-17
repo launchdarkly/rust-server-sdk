@@ -1,7 +1,4 @@
 #[macro_use]
-extern crate futures;
-
-#[macro_use]
 extern crate log;
 
 #[cfg(test)]
@@ -13,7 +10,6 @@ extern crate spectral;
 
 pub mod client;
 pub mod eval;
-mod eventsource;
 mod store;
 mod update_processor;
 pub mod users;
