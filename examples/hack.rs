@@ -17,7 +17,7 @@ use simplelog::{Config, LevelFilter, TermLogger};
 use tokio::timer::Interval;
 
 fn main() {
-    TermLogger::init(LevelFilter::Debug, Config::default()).unwrap();
+    TermLogger::init(LevelFilter::Info, Config::default()).unwrap();
 
     info!("Connecting...");
 
