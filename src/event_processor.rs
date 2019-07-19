@@ -3,6 +3,7 @@ use super::events::Event;
 use futures::Future;
 use reqwest as r;
 use reqwest::r#async as ra;
+use tokio::executor::{DefaultExecutor, Executor};
 
 type Error = String; // TODO
 
@@ -41,15 +42,21 @@ impl EventProcessor {
             .header("Content-Type", "application/json")
             .header("Authorization", self.sdk_key.clone())
             .body(json);
-        tokio::spawn(
-            request
-                .send()
-                .map_err(|e| error!("error sending event: {}", e))
-                .map(|resp| {
-                    debug!("sent event: {:?}", resp);
-                    ()
-                }),
-        );
+        match DefaultExecutor::current().status() {
+            // TODO queue events instead of dropping them
+            Err(e) => info!("skipping event send because executor is not ready: {}", e),
+            Ok(_) => {
+                tokio::spawn(
+                    request
+                        .send()
+                        .map_err(|e| error!("error sending event: {}", e))
+                        .map(|resp| {
+                            debug!("sent event: {:?}", resp);
+                            ()
+                        }),
+                );
+            }
+        }
 
         match event.make_index_event() {
             Some(index) => self._send(index),
