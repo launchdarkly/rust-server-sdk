@@ -181,6 +181,7 @@ pub struct AllData {
     segments: HashMap<String, Segment>,
 }
 
+// TODO implement Error::ClientNotReady
 pub struct FeatureStore {
     pub data: AllData,
 }
