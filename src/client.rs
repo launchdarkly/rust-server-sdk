@@ -93,6 +93,17 @@ impl Client {
             .or(default)
     }
 
+    pub fn str_variation_detail(
+        &self,
+        user: &User,
+        flag_name: &str,
+        default: &str,
+    ) -> Detail<String> {
+        self.evaluate_detail(user, flag_name)
+            .try_map(|val| val.as_string(), eval::Error::Exception)
+            .or_else(|| default.to_string())
+    }
+
     pub fn evaluate_detail(&self, user: &User, flag_name: &str) -> Detail<FlagValue> {
         let store = self.store.lock().unwrap();
         let flag = match store.flag(flag_name) {

@@ -59,6 +59,19 @@ impl<T> Detail<T> {
             },
         }
     }
+
+    pub fn or_else<F>(self, default: F) -> Detail<T>
+    where
+        F: Fn() -> T,
+    {
+        match self.value {
+            Some(_) => self,
+            None => Detail {
+                value: Some(default()),
+                reason: self.reason,
+            },
+        }
+    }
 }
 
 // Reason describes the reason that a flag evaluation producted a particular value.

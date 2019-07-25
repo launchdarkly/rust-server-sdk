@@ -22,7 +22,25 @@ fn main() {
     info!("Connecting...");
 
     let flags: Vec<String> = env::args().skip(1).collect();
-    if flags.is_empty() {
+    let mut bool_flags = Vec::<String>::new();
+    let mut str_flags = Vec::<String>::new();
+    for flag in flags {
+        let bits: Vec<&str> = flag.splitn(2, ':').collect();
+        let bits = bits.as_slice();
+        if let ["bool", name] = bits {
+            bool_flags.push(name.to_string());
+        } else if let ["str", name] = bits {
+            str_flags.push(name.to_string());
+        } else if let [flag_type, _] = bits {
+            error!("Unsupported flag type {} in {}", flag_type, flag);
+            exit(2);
+        } else if let [name] = bits {
+            bool_flags.push(name.to_string());
+        } else {
+            assert!(false, "impossible");
+        }
+    }
+    if bool_flags.is_empty() && str_flags.is_empty() {
         error!("Please list some flags to watch.");
         exit(1);
     }
@@ -50,8 +68,12 @@ fn main() {
             .map_err(|_| ())
             .for_each(move |_| {
                 for user in vec![&alice, &bob] {
-                    for flag_key in &flags {
-                        let flag_detail = client.bool_variation_detail(user, &flag_key, false);
+                    for flag_key in &bool_flags {
+                        let flag_detail = client.bool_variation_detail(user, flag_key, false);
+                        info!("user {}, flag {}: {:?}", user.key, flag_key, flag_detail);
+                    }
+                    for flag_key in &str_flags {
+                        let flag_detail = client.str_variation_detail(user, flag_key, "default");
                         info!("user {}, flag {}: {:?}", user.key, flag_key, flag_detail);
                     }
                 }

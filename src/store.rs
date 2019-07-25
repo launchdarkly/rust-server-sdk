@@ -13,6 +13,7 @@ type VariationIndex = usize;
 #[serde(untagged)]
 pub enum FlagValue {
     Bool(bool),
+    Str(String),
     // TODO implement other variation types
     NotYetImplemented(serde_json::Value),
 }
@@ -23,6 +24,16 @@ impl FlagValue {
             FlagValue::Bool(b) => Some(*b),
             _ => {
                 warn!("variation type is not bool but {:?}", self);
+                None
+            }
+        }
+    }
+
+    pub fn as_string(&self) -> Option<String> {
+        match self {
+            FlagValue::Str(s) => Some(s.clone()),
+            _ => {
+                warn!("variation type is not str but {:?}", self);
                 None
             }
         }
