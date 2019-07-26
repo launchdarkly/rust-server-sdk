@@ -127,7 +127,7 @@ pub struct FeatureFlag {
     targets: Vec<Target>,
     rules: Vec<Rule>,
     fallthrough: VariationOrRollout,
-    off_variation: VariationIndex,
+    off_variation: Option<VariationIndex>,
     variations: Vec<FlagValue>,
     // TODO implement more flag fields
 }
@@ -135,7 +135,7 @@ pub struct FeatureFlag {
 impl FeatureFlag {
     pub fn evaluate(&self, user: &User) -> Detail<&FlagValue> {
         if !self.on {
-            return Detail::new(self.off_value(), Reason::Off);
+            return Detail::maybe(self.off_value(), Reason::Off);
         }
 
         for target in &self.targets {
@@ -169,9 +169,8 @@ impl FeatureFlag {
         self.variations.get(index)
     }
 
-    pub fn off_value(&self) -> &FlagValue {
-        self.variation(self.off_variation)
-            .expect("my error handling is messed up")
+    pub fn off_value(&self) -> Option<&FlagValue> {
+        self.off_variation.and_then(|index| self.variation(index))
     }
 
     fn value_for_variation_or_rollout(
@@ -284,7 +283,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("should parse flag {}: {}", key, e));
             assert_eq!(f.key, key);
             assert!(!f.on);
-            assert_eq!(f.off_variation, 1);
+            assert_eq!(f.off_variation, Some(1));
         }
     }
 
@@ -302,9 +301,15 @@ mod tests {
         assert_that!(flag.evaluate(&bob)).is_equal_to(&detail);
 
         // flip off variation
-        flag.off_variation = 0;
+        flag.off_variation = Some(0);
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).contains_value(&Bool(true));
+
+        // off variation unspecified
+        flag.off_variation = None;
+        let detail = flag.evaluate(&alice);
+        assert_that!(detail.value).is_none();
+        assert_that!(detail.reason).is_equal_to(&Off);
 
         // flip targeting on
         flag.on = true;

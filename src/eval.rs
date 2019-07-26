@@ -14,6 +14,10 @@ impl<T> Detail<T> {
         }
     }
 
+    pub fn maybe(value: Option<T>, reason: Reason) -> Detail<T> {
+        Detail { value, reason }
+    }
+
     pub fn err(e: Error) -> Detail<T> {
         Detail {
             value: None,
