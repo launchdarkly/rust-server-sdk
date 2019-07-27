@@ -113,22 +113,24 @@ impl Client {
         // TODO can we avoid the clone here?
         let result = flag.evaluate(user).map(|v| v.clone());
 
-        let event = Event::FeatureRequest {
-            base: BaseEvent {
-                creation_date: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64,
-                user: user.clone(), // TODO pass user as owned to avoid clone?
-            },
-            user_key: &user.key,
-            key: flag.key.clone(),
-            value: result.value.as_ref().unwrap().clone(), // TODO need to know default value provided
-            default: result.value.as_ref().unwrap().clone(), // TODO populate iff default value was used
-            version: flag.version,
-            prereq_of: None,
-        };
-        self.event_processor.send(event);
+        result.value.clone().map(|value| {
+            let event = Event::FeatureRequest {
+                base: BaseEvent {
+                    creation_date: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                    user: user.clone(), // TODO pass user as owned to avoid clone?
+                },
+                user_key: &user.key,
+                key: flag.key.clone(),
+                default: value.clone(), // TODO populate iff default value was used
+                value,                  // TODO need to know default value provided
+                version: flag.version,
+                prereq_of: None,
+            };
+            self.event_processor.send(event);
+        });
 
         result
     }
