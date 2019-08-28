@@ -50,6 +50,21 @@ struct Target {
 #[serde(rename_all = "camelCase")]
 enum Op {
     In,
+    // TODO actually implement these
+    StartsWith,
+    EndsWith,
+    Contains,
+    Matches,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    Before,
+    After,
+    SegmentMatch,
+    SemVerEqual,
+    SemVerGreaterThan,
+    SemVerLessThan,
     // TODO implement other matching operations
 }
 
@@ -57,6 +72,24 @@ impl Op {
     fn matches(&self, lhs: &AttributeValue, rhs: &AttributeValue) -> bool {
         match self {
             Op::In => lhs == rhs,
+            Op::StartsWith
+                | Op::EndsWith
+                | Op::Contains
+                | Op::Matches
+                | Op::LessThan
+                | Op::LessThanOrEqual
+                | Op::GreaterThan
+                | Op::GreaterThanOrEqual
+                | Op::Before
+                | Op::After
+                | Op::SegmentMatch
+                | Op::SemVerEqual
+                | Op::SemVerGreaterThan
+                | Op::SemVerLessThan
+                => {
+                error!("Encountered unimplemented flag rule operation {:?}", self);
+                false
+            }
         }
     }
 }

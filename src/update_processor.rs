@@ -69,6 +69,7 @@ impl StreamingUpdateProcessor {
                     match event.event_type.as_str() {
                         "put" => process_put(&mut *store, event),
                         "patch" => process_patch(&mut *store, event),
+                        // TODO support delete
                         _ => Err(Error::InvalidEventType(event.event_type)),
                     }
                 })
