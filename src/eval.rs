@@ -14,6 +14,12 @@ impl<T> Detail<T> {
         }
     }
 
+    pub fn should(value: Option<T>, reason: Reason) -> Detail<T> {
+        value
+            .map(|value| Detail::new(value, reason))
+            .unwrap_or(Detail::err(Error::MalformedFlag))
+    }
+
     pub fn maybe(value: Option<T>, reason: Reason) -> Detail<T> {
         Detail { value, reason }
     }

@@ -95,7 +95,8 @@ impl Clause {
 #[derive(Clone, Debug, Deserialize)]
 struct Rule {
     clauses: Vec<Clause>,
-    variation: VariationIndex,
+    #[serde(flatten)]
+    variation_or_rollout: VariationOrRollout,
 }
 
 impl Rule {
@@ -114,7 +115,7 @@ impl Rule {
 #[serde(rename_all = "camelCase")]
 enum VariationOrRollout {
     Variation(VariationIndex),
-    // TODO Rollout
+    Rollout(serde_json::Value),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -141,14 +142,17 @@ impl FeatureFlag {
         for target in &self.targets {
             for value in &target.values {
                 if value == &user.key {
-                    return self.should_variation(target.variation, Reason::TargetMatch);
+                    return Detail::should(self.variation(target.variation), Reason::TargetMatch);
                 }
             }
         }
 
         for rule in &self.rules {
             if rule.matches(&user) {
-                return self.should_variation(rule.variation, Reason::RuleMatch);
+                return Detail::should(
+                    self.value_for_variation_or_rollout(&rule.variation_or_rollout),
+                    Reason::RuleMatch,
+                );
             }
         }
 
@@ -156,13 +160,6 @@ impl FeatureFlag {
         self.value_for_variation_or_rollout(&self.fallthrough)
             .map(|val| Detail::new(val, Reason::Fallthrough))
             .unwrap_or(Detail::err(eval::Error::MalformedFlag))
-    }
-
-    fn should_variation(&self, index: VariationIndex, reason: Reason) -> Detail<&FlagValue> {
-        match self.variation(index) {
-            Some(result) => Detail::new(result, reason),
-            None => Detail::err(eval::Error::MalformedFlag),
-        }
     }
 
     pub fn variation(&self, index: VariationIndex) -> Option<&FlagValue> {
@@ -179,6 +176,10 @@ impl FeatureFlag {
     ) -> Option<&FlagValue> {
         match vr {
             VariationOrRollout::Variation(index) => self.variation(*index),
+            VariationOrRollout::Rollout(json) => {
+                error!("Rollout not yet implemented: {:?}", json);
+                None
+            }
         }
     }
 }
