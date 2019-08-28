@@ -144,7 +144,31 @@ impl Rule {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+enum VariationOrRolloutOrMalformed {
+    VariationOrRollout(VariationOrRollout),
+    Malformed(serde_json::Value),
+}
+
+impl VariationOrRolloutOrMalformed {
+    fn get(&self) -> Result<&VariationOrRollout, String> {
+        match self {
+            VariationOrRolloutOrMalformed::VariationOrRollout(v) => Ok(v),
+            VariationOrRolloutOrMalformed::Malformed(v) => {
+                Err(format!("malformed variation_or_rollout: {}", v))
+            }
+        }
+    }
+}
+
+impl From<VariationOrRollout> for VariationOrRolloutOrMalformed {
+    fn from(vor: VariationOrRollout) -> VariationOrRolloutOrMalformed {
+        VariationOrRolloutOrMalformed::VariationOrRollout(vor)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 enum VariationOrRollout {
     Variation(VariationIndex),
@@ -160,7 +184,7 @@ pub struct FeatureFlag {
     on: bool,
     targets: Vec<Target>,
     rules: Vec<Rule>,
-    fallthrough: VariationOrRollout,
+    fallthrough: VariationOrRolloutOrMalformed,
     off_variation: Option<VariationIndex>,
     variations: Vec<FlagValue>,
     // TODO implement more flag fields
@@ -190,8 +214,15 @@ impl FeatureFlag {
         }
 
         // just return the fallthrough for now
-        self.value_for_variation_or_rollout(&self.fallthrough)
-            .map(|val| Detail::new(val, Reason::Fallthrough))
+        self.fallthrough
+            // TODO ugh, clean this up
+            .get()
+            .as_ref()
+            .ok()
+            .and_then(|vor| {
+                self.value_for_variation_or_rollout(vor)
+                    .map(|val| Detail::new(val, Reason::Fallthrough))
+            })
             .unwrap_or(Detail::err(eval::Error::MalformedFlag))
     }
 
@@ -268,6 +299,25 @@ mod tests {
 
     use crate::eval::Reason::*;
     use crate::users::User;
+
+    #[test]
+    fn test_parse_variation_or_rollout() {
+        let variation: VariationOrRolloutOrMalformed =
+            serde_json::from_str("{\"variation\":4}").expect("should parse");
+        assert_that!(variation.get()).is_ok_containing(&VariationOrRollout::Variation(4));
+
+        let rollout: VariationOrRolloutOrMalformed = serde_json::from_str(
+            "{\"rollout\":{\"variations\":[{\"variation\":1,\"weight\":100000}]}}",
+        )
+        .expect("should parse");
+        assert_that!(rollout.get()).is_ok_containing(&VariationOrRollout::Rollout(
+            json! { {"variations": [{"variation": 1, "weight": 100000}]} },
+        ));
+
+        let malformed: VariationOrRolloutOrMalformed =
+            serde_json::from_str("{}").expect("should parse");
+        assert_that!(malformed.get()).is_err();
+    }
 
     const TEST_FLAG_JSON: &str = "{
         \"key\": \"test-flag\",
@@ -356,7 +406,7 @@ mod tests {
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
 
         // flip default variation
-        flag.fallthrough = VariationOrRollout::Variation(1);
+        flag.fallthrough = VariationOrRollout::Variation(1).into();
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).contains_value(&Bool(false));
 

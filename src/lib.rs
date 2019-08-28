@@ -6,6 +6,10 @@ extern crate log;
 extern crate maplit;
 
 #[cfg(test)]
+#[macro_use]
+extern crate serde_json;
+
+#[cfg(test)]
 extern crate spectral;
 
 pub mod client;
