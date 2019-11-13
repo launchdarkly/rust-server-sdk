@@ -14,11 +14,14 @@ type VariationIndex = usize;
 pub enum FlagValue {
     Bool(bool),
     Str(String),
+    Float(f64),
     // TODO implement other variation types
     NotYetImplemented(serde_json::Value),
 }
 
 impl FlagValue {
+    // TODO implement type coercion here?
+
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             FlagValue::Bool(b) => Some(*b),
@@ -37,6 +40,21 @@ impl FlagValue {
                 None
             }
         }
+    }
+
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            FlagValue::Float(f) => Some(*f),
+            _ => {
+                warn!("variation type is not float but {:?}", self);
+                None
+            }
+        }
+    }
+
+    pub fn as_int(&self) -> Option<i64> {
+        // TODO this has undefined behaviour for huge floats: https://stackoverflow.com/a/41139453
+        self.as_float().map(|f| f.round() as i64)
     }
 }
 

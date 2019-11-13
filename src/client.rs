@@ -105,6 +105,23 @@ impl Client {
             .or_else(|| default.to_string())
     }
 
+    pub fn float_variation_detail(
+        &self,
+        user: &User,
+        flag_name: &str,
+        default: f64,
+    ) -> Detail<f64> {
+        self.evaluate_detail(user, flag_name)
+            .try_map(|val| val.as_float(), eval::Error::Exception)
+            .or(default)
+    }
+
+    pub fn int_variation_detail(&self, user: &User, flag_name: &str, default: i64) -> Detail<i64> {
+        self.evaluate_detail(user, flag_name)
+            .try_map(|val| val.as_int(), eval::Error::Exception)
+            .or(default)
+    }
+
     pub fn all_flags_detail(&self, user: &User) -> HashMap<String, Detail<FlagValue>> {
         let store = self.store.lock().unwrap();
         let flags = store.all_flags();
