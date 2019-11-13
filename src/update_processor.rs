@@ -5,7 +5,7 @@ use futures::future::{lazy, Future};
 use futures::stream::Stream;
 use serde::Deserialize;
 
-use super::store::{AllData, FeatureFlag, FeatureStore};
+use super::store::{AllData, FeatureStore, PatchTarget};
 
 #[derive(Debug)]
 pub enum Error {
@@ -27,8 +27,7 @@ struct PutData {
 #[derive(Deserialize)]
 struct PatchData {
     path: String,
-    // TODO support segments too
-    data: FeatureFlag,
+    data: PatchTarget,
 }
 
 pub struct StreamingUpdateProcessor {

@@ -168,6 +168,14 @@ impl From<VariationOrRollout> for VariationOrRolloutOrMalformed {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum PatchTarget {
+    Flag(FeatureFlag),
+    // TODO support segments too
+    Other(serde_json::Value),
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 enum VariationOrRollout {
@@ -279,14 +287,21 @@ impl FeatureStore {
         self.data.flags.get(flag_name)
     }
 
-    pub fn patch(&mut self, path: &str, data: FeatureFlag) {
+    pub fn patch(&mut self, path: &str, data: PatchTarget) {
         if !path.starts_with(FLAGS_PREFIX) {
             error!("Oops, can only patch flags atm");
             return;
         }
+        let flag = match data {
+            PatchTarget::Flag(f) => f,
+            PatchTarget::Other(json) => {
+                error!("Couldn't parse JSON as a flag to patch {}: {}", path, json);
+                return;
+            }
+        };
 
         let flag_name = &path[FLAGS_PREFIX.len()..];
-        self.data.flags.insert(flag_name.to_string(), data);
+        self.data.flags.insert(flag_name.to_string(), flag);
     }
 }
 
