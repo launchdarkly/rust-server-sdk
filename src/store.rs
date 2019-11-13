@@ -287,6 +287,10 @@ impl FeatureStore {
         self.data.flags.get(flag_name)
     }
 
+    pub fn all_flags(&self) -> &HashMap<String, FeatureFlag> {
+        &self.data.flags
+    }
+
     pub fn patch(&mut self, path: &str, data: PatchTarget) {
         if !path.starts_with(FLAGS_PREFIX) {
             error!("Oops, can only patch flags atm");

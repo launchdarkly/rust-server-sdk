@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::eval::{self, Detail};
@@ -102,6 +103,17 @@ impl Client {
         self.evaluate_detail(user, flag_name)
             .try_map(|val| val.as_string(), eval::Error::Exception)
             .or_else(|| default.to_string())
+    }
+
+    pub fn all_flags_detail(&self, user: &User) -> HashMap<String, Detail<FlagValue>> {
+        let store = self.store.lock().unwrap();
+        let flags = store.all_flags();
+        let evals = flags.iter().map(|(key, flag)| {
+            // TODO don't send events
+            let val = flag.evaluate(user).map(|v| v.clone());
+            (key.clone(), val)
+        });
+        evals.collect()
     }
 
     pub fn evaluate_detail(&self, user: &User, flag_name: &str) -> Detail<FlagValue> {
