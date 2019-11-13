@@ -311,7 +311,7 @@ impl FeatureStore {
 
     pub fn patch(&mut self, path: &str, data: PatchTarget) {
         if !path.starts_with(FLAGS_PREFIX) {
-            error!("Oops, can only patch flags atm");
+            error!("Ignoring patch for {}, can only patch flags atm", path);
             return;
         }
         let flag = match data {
@@ -328,7 +328,7 @@ impl FeatureStore {
 
     pub fn delete(&mut self, path: &str) {
         if !path.starts_with(FLAGS_PREFIX) {
-            error!("Oops, can only patch flags atm");
+            error!("Ignoring delete for {}, can only delete flags atm", path);
             return;
         }
 
