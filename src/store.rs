@@ -303,6 +303,16 @@ impl FeatureStore {
         let flag_name = &path[FLAGS_PREFIX.len()..];
         self.data.flags.insert(flag_name.to_string(), flag);
     }
+
+    pub fn delete(&mut self, path: &str) {
+        if !path.starts_with(FLAGS_PREFIX) {
+            error!("Oops, can only patch flags atm");
+            return;
+        }
+
+        let flag_name = &path[FLAGS_PREFIX.len()..];
+        self.data.flags.remove(flag_name);
+    }
 }
 
 #[cfg(test)]

@@ -30,6 +30,12 @@ struct PatchData {
     data: PatchTarget,
 }
 
+#[derive(Deserialize)]
+struct DeleteData {
+    path: String,
+    // TODO care about version
+}
+
 pub struct StreamingUpdateProcessor {
     es_client: es::Client,
     store: Arc<Mutex<FeatureStore>>,
@@ -68,7 +74,7 @@ impl StreamingUpdateProcessor {
                     match event.event_type.as_str() {
                         "put" => process_put(&mut *store, event),
                         "patch" => process_patch(&mut *store, event),
-                        // TODO support delete
+                        "delete" => process_delete(&mut *store, event),
                         _ => Err(Error::InvalidEventType(event.event_type)),
                     }
                 })
@@ -105,4 +111,9 @@ fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
 fn process_patch(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
     Ok(store.patch(&patch.path, patch.data))
+}
+
+fn process_delete(store: &mut FeatureStore, event: es::Event) -> Result<()> {
+    let delete: DeleteData = parse_event_data(&event)?;
+    Ok(store.delete(&delete.path))
 }
