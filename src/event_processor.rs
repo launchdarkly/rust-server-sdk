@@ -50,9 +50,9 @@ impl EventProcessor {
                     request
                         .send()
                         .map_err(|e| error!("error sending event: {}", e))
-                        .map(|resp| {
-                            debug!("sent event: {:?}", resp);
-                            ()
+                        .map(|resp| match resp.error_for_status() {
+                            Ok(resp) => debug!("sent event: {:?}", resp),
+                            Err(e) => warn!("error response sending event: {}", e),
                         }),
                 );
             }
