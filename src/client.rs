@@ -139,6 +139,11 @@ impl Client {
             Some(flag) => flag,
             None => return Detail::err(eval::Error::FlagNotFound),
         };
+
+        if user.key.is_none() {
+            return Detail::err(eval::Error::UserNotSpecified);
+        }
+
         // TODO can we avoid the clone here?
         let result = flag.evaluate(user).map(|v| v.clone());
 

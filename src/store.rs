@@ -216,6 +216,10 @@ pub struct FeatureFlag {
 
 impl FeatureFlag {
     pub fn evaluate(&self, user: &User) -> Detail<&FlagValue> {
+        if user.key.is_none() {
+            return Detail::err(eval::Error::UserNotSpecified);
+        }
+
         if !self.on {
             return self.off_value(Reason::Off);
         }
@@ -424,7 +428,6 @@ mod tests {
     fn test_eval_flag_basic() {
         let alice = User::new("alice"); // not targeted
         let bob = User::new("bob"); // targeted
-        let nameless = User::new_without_key(); // untargetable
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
@@ -434,7 +437,6 @@ mod tests {
         assert_that!(detail.reason).is_equal_to(&Off);
 
         assert_that!(flag.evaluate(&bob)).is_equal_to(&detail);
-        assert_that!(flag.evaluate(&nameless)).is_equal_to(&detail);
 
         // flip off variation
         flag.off_variation = Some(0);
@@ -461,11 +463,6 @@ mod tests {
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
 
-        let detail = flag.evaluate(&nameless);
-        assert_that!(detail.value).contains_value(&Bool(true));
-        assert_that!(detail.variation_index).contains_value(0);
-        assert_that!(detail.reason).is_equal_to(&Fallthrough);
-
         // flip default variation
         flag.fallthrough = VariationOrRollout::Variation(1).into();
         let detail = flag.evaluate(&alice);
@@ -477,6 +474,25 @@ mod tests {
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
+    }
+
+    #[test]
+    fn test_eval_flag_missing_user_key() {
+        let nameless = User::new_without_key(); // untargetable
+        let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
+
+        assert!(!flag.on);
+        let detail = flag.evaluate(&nameless);
+        assert_that!(detail.value).is_none();
+        assert_that!(detail.variation_index).is_none();
+        assert_that!(detail.reason).is_equal_to(&Reason::Error(eval::Error::UserNotSpecified));
+
+        // flip targeting on
+        flag.on = true;
+        let detail = flag.evaluate(&nameless);
+        assert_that!(detail.value).is_none();
+        assert_that!(detail.variation_index).is_none();
+        assert_that!(detail.reason).is_equal_to(&Reason::Error(eval::Error::UserNotSpecified));
     }
 
     #[test]
