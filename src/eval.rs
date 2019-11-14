@@ -1,34 +1,25 @@
 use std::fmt::{self, Display, Formatter};
 
+pub type VariationIndex = usize;
+
 #[derive(Debug, PartialEq)]
 pub struct Detail<T> {
     pub value: Option<T>,
+    pub variation_index: Option<VariationIndex>,
     pub reason: Reason,
 }
 
 impl<T> Detail<T> {
-    pub fn new(value: T, reason: Reason) -> Detail<T> {
+    pub fn empty(reason: Reason) -> Detail<T> {
         Detail {
-            value: Some(value),
+            value: None,
+            variation_index: None,
             reason,
         }
     }
 
-    pub fn should(value: Option<T>, reason: Reason) -> Detail<T> {
-        value
-            .map(|value| Detail::new(value, reason))
-            .unwrap_or(Detail::err(Error::MalformedFlag))
-    }
-
-    pub fn maybe(value: Option<T>, reason: Reason) -> Detail<T> {
-        Detail { value, reason }
-    }
-
     pub fn err(e: Error) -> Detail<T> {
-        Detail {
-            value: None,
-            reason: Reason::Error(e),
-        }
+        Detail::empty(Reason::Error(e))
     }
 
     pub fn map<U, F>(self, f: F) -> Detail<U>
@@ -37,8 +28,16 @@ impl<T> Detail<T> {
     {
         Detail {
             value: self.value.map(f),
+            variation_index: self.variation_index,
             reason: self.reason,
         }
+    }
+
+    pub fn should_have_value(mut self, e: Error) -> Detail<T> {
+        if self.value.is_none() {
+            self.reason = Reason::Error(e);
+        }
+        self
     }
 
     pub fn try_map<U, F>(self, f: F, e: Error) -> Detail<U>
@@ -48,39 +47,38 @@ impl<T> Detail<T> {
         if self.value.is_none() {
             return Detail {
                 value: None,
+                variation_index: self.variation_index,
                 reason: self.reason,
             };
         }
         match f(self.value.unwrap()) {
             Some(v) => Detail {
                 value: Some(v),
+                variation_index: self.variation_index,
                 reason: self.reason,
             },
             None => Detail::err(e),
         }
     }
 
-    pub fn or(self, default: T) -> Detail<T> {
-        match self.value {
-            Some(_) => self,
-            None => Detail {
-                value: Some(default),
-                reason: self.reason,
-            },
+    pub fn or(mut self, default: T) -> Detail<T> {
+        if self.value.is_none() {
+            self.value = Some(default);
+            self.variation_index = None;
+            // TODO reset reason?
         }
+        self
     }
 
-    pub fn or_else<F>(self, default: F) -> Detail<T>
+    pub fn or_else<F>(mut self, default: F) -> Detail<T>
     where
         F: Fn() -> T,
     {
-        match self.value {
-            Some(_) => self,
-            None => Detail {
-                value: Some(default()),
-                reason: self.reason,
-            },
+        if self.value.is_none() {
+            self.value = Some(default());
+            self.variation_index = None;
         }
+        self
     }
 }
 

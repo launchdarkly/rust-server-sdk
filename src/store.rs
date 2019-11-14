@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
-use super::eval::{self, Detail, Reason};
+use super::eval::{self, Detail, Reason, VariationIndex};
 use super::users::{AttributeValue, User};
 
 use serde::{Deserialize, Serialize};
 
 const FLAGS_PREFIX: &'static str = "/flags/";
-
-type VariationIndex = usize;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -219,23 +217,21 @@ pub struct FeatureFlag {
 impl FeatureFlag {
     pub fn evaluate(&self, user: &User) -> Detail<&FlagValue> {
         if !self.on {
-            return Detail::maybe(self.off_value(), Reason::Off);
+            return self.off_value(Reason::Off);
         }
 
         for target in &self.targets {
             for value in &target.values {
                 if value == &user.key {
-                    return Detail::should(self.variation(target.variation), Reason::TargetMatch);
+                    return self.variation(target.variation, Reason::TargetMatch);
                 }
             }
         }
 
         for rule in &self.rules {
             if rule.matches(&user) {
-                return Detail::should(
-                    self.value_for_variation_or_rollout(&rule.variation_or_rollout),
-                    Reason::RuleMatch,
-                );
+                return self
+                    .value_for_variation_or_rollout(&rule.variation_or_rollout, Reason::RuleMatch);
             }
         }
 
@@ -245,30 +241,36 @@ impl FeatureFlag {
             .get()
             .as_ref()
             .ok()
-            .and_then(|vor| {
-                self.value_for_variation_or_rollout(vor)
-                    .map(|val| Detail::new(val, Reason::Fallthrough))
-            })
+            .map(|vor| self.value_for_variation_or_rollout(vor, Reason::Fallthrough))
             .unwrap_or(Detail::err(eval::Error::MalformedFlag))
     }
 
-    pub fn variation(&self, index: VariationIndex) -> Option<&FlagValue> {
-        self.variations.get(index)
+    pub fn variation(&self, index: VariationIndex, reason: Reason) -> Detail<&FlagValue> {
+        Detail {
+            value: self.variations.get(index),
+            variation_index: Some(index),
+            reason,
+        }
+        .should_have_value(eval::Error::MalformedFlag)
     }
 
-    pub fn off_value(&self) -> Option<&FlagValue> {
-        self.off_variation.and_then(|index| self.variation(index))
+    pub fn off_value(&self, reason: Reason) -> Detail<&FlagValue> {
+        match self.off_variation {
+            Some(index) => self.variation(index, reason),
+            None => Detail::empty(reason),
+        }
     }
 
     fn value_for_variation_or_rollout(
         &self,
         vr: &VariationOrRollout, /*, TODO user*/
-    ) -> Option<&FlagValue> {
+        reason: Reason,
+    ) -> Detail<&FlagValue> {
         match vr {
-            VariationOrRollout::Variation(index) => self.variation(*index),
+            VariationOrRollout::Variation(index) => self.variation(*index, reason),
             VariationOrRollout::Rollout(json) => {
                 error!("Rollout not yet implemented: {:?}", json);
-                None
+                Detail::err(eval::Error::Exception)
             }
         }
     }
@@ -427,6 +429,7 @@ mod tests {
         assert!(!flag.on);
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&Off);
 
         assert_that!(flag.evaluate(&bob)).is_equal_to(&detail);
@@ -435,31 +438,37 @@ mod tests {
         flag.off_variation = Some(0);
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).contains_value(&Bool(true));
+        assert_that!(detail.variation_index).contains_value(0);
 
         // off variation unspecified
         flag.off_variation = None;
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).is_none();
+        assert_that!(detail.variation_index).is_none();
         assert_that!(detail.reason).is_equal_to(&Off);
 
         // flip targeting on
         flag.on = true;
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).contains_value(&Bool(true));
+        assert_that!(detail.variation_index).contains_value(0);
         assert_that!(detail.reason).is_equal_to(&Fallthrough);
 
         let detail = flag.evaluate(&bob);
         assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
 
         // flip default variation
         flag.fallthrough = VariationOrRollout::Variation(1).into();
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.variation_index).contains_value(1);
 
         // bob's reason should still be TargetMatch even though his value is now the default
         let detail = flag.evaluate(&bob);
         assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
     }
 
@@ -479,6 +488,7 @@ mod tests {
         for user in vec![&alice, &bob] {
             let detail = flag.evaluate(user);
             assert_that!(detail.value).contains_value(&Bool(false));
+            assert_that!(detail.variation_index).contains_value(1);
             assert_that!(detail.reason).is_equal_to(&Off);
         }
 
@@ -486,10 +496,12 @@ mod tests {
         flag.on = true;
         let detail = flag.evaluate(&alice);
         assert_that!(detail.value).contains_value(&Bool(true));
+        assert_that!(detail.variation_index).contains_value(0);
         assert_that!(detail.reason).is_equal_to(&Fallthrough);
 
         let detail = flag.evaluate(&bob);
         assert_that!(detail.value).contains_value(&Bool(false));
+        assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&RuleMatch);
     }
 
