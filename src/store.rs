@@ -222,7 +222,7 @@ impl FeatureFlag {
 
         for target in &self.targets {
             for value in &target.values {
-                if value == &user.key {
+                if Some(value) == user.key.as_ref() {
                     return self.variation(target.variation, Reason::TargetMatch);
                 }
             }
@@ -424,6 +424,7 @@ mod tests {
     fn test_eval_flag_basic() {
         let alice = User::new("alice"); // not targeted
         let bob = User::new("bob"); // targeted
+        let nameless = User::new_without_key(); // untargetable
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
@@ -433,6 +434,7 @@ mod tests {
         assert_that!(detail.reason).is_equal_to(&Off);
 
         assert_that!(flag.evaluate(&bob)).is_equal_to(&detail);
+        assert_that!(flag.evaluate(&nameless)).is_equal_to(&detail);
 
         // flip off variation
         flag.off_variation = Some(0);
@@ -458,6 +460,11 @@ mod tests {
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
+
+        let detail = flag.evaluate(&nameless);
+        assert_that!(detail.value).contains_value(&Bool(true));
+        assert_that!(detail.variation_index).contains_value(0);
+        assert_that!(detail.reason).is_equal_to(&Fallthrough);
 
         // flip default variation
         flag.fallthrough = VariationOrRollout::Variation(1).into();

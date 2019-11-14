@@ -21,7 +21,7 @@ pub enum Event<'a> {
         #[serde(flatten)]
         base: BaseEvent,
         key: String,
-        user_key: &'a str,
+        user_key: Option<String>,
         value: FlagValue,
         default: FlagValue,
         version: u64,

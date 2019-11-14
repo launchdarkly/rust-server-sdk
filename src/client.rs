@@ -151,7 +151,7 @@ impl Client {
                         .as_millis() as u64,
                     user: user.clone(), // TODO pass user as owned to avoid clone?
                 },
-                user_key: &user.key,
+                user_key: user.key.clone(),
                 key: flag.key.clone(),
                 default: value.clone(), // TODO populate iff default value was used
                 value,                  // TODO need to know default value provided

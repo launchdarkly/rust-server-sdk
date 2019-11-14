@@ -52,7 +52,7 @@ impl AttributeValue {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct User {
-    pub key: String,
+    pub key: Option<String>,
 
     custom: HashMap<String, AttributeValue>,
 }
@@ -67,8 +67,15 @@ impl User {
         custom: HashMap<String, AttributeValue>,
     ) -> User {
         User {
-            key: key.into(),
+            key: Some(key.into()),
             custom: custom,
+        }
+    }
+
+    pub fn new_without_key() -> User {
+        User {
+            key: None,
+            custom: HashMap::default(),
         }
     }
 

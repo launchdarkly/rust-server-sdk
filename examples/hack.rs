@@ -70,11 +70,11 @@ fn main() {
                 for user in vec![&alice, &bob] {
                     for flag_key in &bool_flags {
                         let flag_detail = client.bool_variation_detail(user, flag_key, false);
-                        info!("user {}, flag {}: {:?}", user.key, flag_key, flag_detail);
+                        info!("user {:?}, flag {}: {:?}", user.key, flag_key, flag_detail);
                     }
                     for flag_key in &str_flags {
                         let flag_detail = client.str_variation_detail(user, flag_key, "default");
-                        info!("user {}, flag {}: {:?}", user.key, flag_key, flag_detail);
+                        info!("user {:?}, flag {}: {:?}", user.key, flag_key, flag_detail);
                     }
                 }
                 Ok(())
