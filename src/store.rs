@@ -66,10 +66,10 @@ struct Target {
 #[serde(rename_all = "camelCase")]
 enum Op {
     In,
-    // TODO actually implement these
     StartsWith,
     EndsWith,
     Contains,
+    // TODO actually implement these
     Matches,
     LessThan,
     LessThanOrEqual,
@@ -88,25 +88,35 @@ impl Op {
     fn matches(&self, lhs: &AttributeValue, rhs: &AttributeValue) -> bool {
         match self {
             Op::In => lhs == rhs,
-            Op::StartsWith
-                | Op::EndsWith
-                | Op::Contains
-                | Op::Matches
-                | Op::LessThan
-                | Op::LessThanOrEqual
-                | Op::GreaterThan
-                | Op::GreaterThanOrEqual
-                | Op::Before
-                | Op::After
-                | Op::SegmentMatch
-                | Op::SemVerEqual
-                | Op::SemVerGreaterThan
-                | Op::SemVerLessThan
-                => {
+            Op::StartsWith => string_op(lhs, rhs, |l, r| l.starts_with(r)),
+            Op::EndsWith => string_op(lhs, rhs, |l, r| l.ends_with(r)),
+            Op::Contains => string_op(lhs, rhs, |l, r| l.find(r).is_some()),
+            Op::Matches
+            | Op::LessThan
+            | Op::LessThanOrEqual
+            | Op::GreaterThan
+            | Op::GreaterThanOrEqual
+            | Op::Before
+            | Op::After
+            | Op::SegmentMatch
+            | Op::SemVerEqual
+            | Op::SemVerGreaterThan
+            | Op::SemVerLessThan => {
                 error!("Encountered unimplemented flag rule operation {:?}", self);
                 false
             }
         }
+    }
+}
+
+fn string_op<F: Fn(&String, &String) -> bool>(
+    lhs: &AttributeValue,
+    rhs: &AttributeValue,
+    f: F,
+) -> bool {
+    match (lhs.as_str(), rhs.as_str()) {
+        (Some(l), Some(r)) => f(l, r),
+        _ => false,
     }
 }
 
@@ -528,19 +538,72 @@ mod tests {
         assert_that!(detail.reason).is_equal_to(&RuleMatch);
     }
 
+    fn astring(s: &str) -> AttributeValue {
+        AttributeValue::String(s.into())
+    }
+
     #[test]
-    fn test_ops() {
-        use AttributeValue::String as AString;
+    fn test_op_in() {
+        assert!(Op::In.matches(&astring("foo"), &astring("foo")));
 
-        assert!(Op::In.matches(&AString("foo".into()), &AString("foo".into())));
-
-        assert!(!Op::In.matches(&AString("foo".into()), &AString("bar".into())));
+        assert!(!Op::In.matches(&astring("foo"), &astring("bar")));
         assert!(
-            !Op::In.matches(&AString("Foo".into()), &AString("foo".into())),
+            !Op::In.matches(&astring("Foo"), &astring("foo")),
             "case sensitive"
         );
 
         // TODO test anything other than strings
+    }
+
+    #[test]
+    fn test_op_starts_with() {
+        // degenerate cases
+        assert!(Op::StartsWith.matches(&astring(""), &astring("")));
+        assert!(Op::StartsWith.matches(&astring("a"), &astring("")));
+        assert!(Op::StartsWith.matches(&astring("a"), &astring("a")));
+
+        // test asymmetry
+        assert!(Op::StartsWith.matches(&astring("food"), &astring("foo")));
+        assert!(!Op::StartsWith.matches(&astring("foo"), &astring("food")));
+
+        assert!(
+            !Op::StartsWith.matches(&astring("Food"), &astring("foo")),
+            "case sensitive"
+        );
+    }
+
+    #[test]
+    fn test_op_ends_with() {
+        // degenerate cases
+        assert!(Op::EndsWith.matches(&astring(""), &astring("")));
+        assert!(Op::EndsWith.matches(&astring("a"), &astring("")));
+        assert!(Op::EndsWith.matches(&astring("a"), &astring("a")));
+
+        // test asymmetry
+        assert!(Op::EndsWith.matches(&astring("food"), &astring("ood")));
+        assert!(!Op::EndsWith.matches(&astring("ood"), &astring("food")));
+
+        assert!(
+            !Op::EndsWith.matches(&astring("FOOD"), &astring("ood")),
+            "case sensitive"
+        );
+    }
+
+    #[test]
+    fn test_op_contains() {
+        // degenerate cases
+        assert!(Op::Contains.matches(&astring(""), &astring("")));
+        assert!(Op::Contains.matches(&astring("a"), &astring("")));
+        assert!(Op::Contains.matches(&astring("a"), &astring("a")));
+
+        // test asymmetry
+        assert!(Op::Contains.matches(&astring("food"), &astring("oo")));
+        assert!(!Op::Contains.matches(&astring("oo"), &astring("food")));
+
+        assert!(
+            !Op::Contains.matches(&astring("FOOD"), &astring("oo")),
+            "case sensitive"
+        );
     }
 
     #[test]

@@ -29,6 +29,19 @@ where
 }
 
 impl AttributeValue {
+    pub fn as_str(&self) -> Option<&String> {
+        match self {
+            AttributeValue::String(s) => Some(s),
+            other => {
+                warn!(
+                    "Don't know how or whether to stringify attribute value {:?}",
+                    other
+                );
+                None
+            }
+        }
+    }
+
     pub fn find<P>(&self, p: P) -> Option<&AttributeValue>
     where
         P: Fn(&AttributeValue) -> bool,
