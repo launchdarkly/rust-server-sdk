@@ -502,14 +502,18 @@ mod tests {
         let detail = flag.evaluate(&nameless);
         assert_that!(detail.value).is_none();
         assert_that!(detail.variation_index).is_none();
-        assert_that!(detail.reason).is_equal_to(&Reason::Error(eval::Error::UserNotSpecified));
+        assert_that!(detail.reason).is_equal_to(&Reason::Error {
+            error: eval::Error::UserNotSpecified,
+        });
 
         // flip targeting on
         flag.on = true;
         let detail = flag.evaluate(&nameless);
         assert_that!(detail.value).is_none();
         assert_that!(detail.variation_index).is_none();
-        assert_that!(detail.reason).is_equal_to(&Reason::Error(eval::Error::UserNotSpecified));
+        assert_that!(detail.reason).is_equal_to(&Reason::Error {
+            error: eval::Error::UserNotSpecified,
+        });
     }
 
     #[test]

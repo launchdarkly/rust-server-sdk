@@ -1,4 +1,4 @@
-use std::fmt::{self, Display, Formatter};
+use serde::Serialize;
 
 pub type VariationIndex = usize;
 
@@ -19,7 +19,7 @@ impl<T> Detail<T> {
     }
 
     pub fn err(e: Error) -> Detail<T> {
-        Detail::empty(Reason::Error(e))
+        Detail::empty(Reason::Error { error: e })
     }
 
     pub fn map<U, F>(self, f: F) -> Detail<U>
@@ -35,7 +35,7 @@ impl<T> Detail<T> {
 
     pub fn should_have_value(mut self, e: Error) -> Detail<T> {
         if self.value.is_none() {
-            self.reason = Reason::Error(e);
+            self.reason = Reason::Error { error: e };
         }
         self
     }
@@ -83,7 +83,10 @@ impl<T> Detail<T> {
 }
 
 // Reason describes the reason that a flag evaluation producted a particular value.
-#[derive(Debug, PartialEq)]
+// The Serialize implementation is used internally in cases where LaunchDarkly
+// needs to unmarshal a Reason value from JSON.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "kind")]
 pub enum Reason {
     // Off indicates that the flag was off and therefore returned its configured off value.
     Off,
@@ -102,29 +105,14 @@ pub enum Reason {
     // EvalReasonError indicates that the flag could not be evaluated, e.g. because it does not
     // exist or due to an unexpected error. In this case the result value will be the default value
     // that the caller passed to the client.
-    Error(Error),
+    Error {
+        #[serde(rename = "errorKind")]
+        error: Error,
+    },
 }
 
-impl Display for Reason {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.code())
-    }
-}
-
-impl Reason {
-    fn code(&self) -> &'static str {
-        match self {
-            Reason::Off => "OFF",
-            Reason::TargetMatch => "TARGET_MATCH",
-            Reason::RuleMatch => "RULE_MATCH",
-            Reason::PrerequisiteFailed => "PREREQUISITE_FAILED",
-            Reason::Fallthrough => "FALLTHROUGH",
-            Reason::Error(_) => "ERROR",
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Error {
     // ClientNotReady indicates that the caller tried to evaluate a flag before the client
     // had successfully initialized.
@@ -144,35 +132,4 @@ pub enum Error {
     // Exception indicates that an unexpected error stopped flag evaluation; check the
     // log for details.
     Exception,
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.code())
-    }
-}
-
-impl Error {
-    fn code(&self) -> &'static str {
-        match self {
-            // ClientNotReady indicates that the caller tried to evaluate a flag before the client
-            // had successfully initialized.
-            Error::ClientNotReady => "CLIENT_NOT_READY",
-            // FlagNotFound indicates that the caller provided a flag key that did not match any
-            // known flag.
-            Error::FlagNotFound => "FLAG_NOT_FOUND",
-            // MalformedFlag indicates that there was an internal inconsistency in the flag data,
-            // e.g. a rule specified a nonexistent variation.
-            Error::MalformedFlag => "MALFORMED_FLAG",
-            // UserNotSpecified indicates that the caller passed a user without a key for the user
-            // parameter.
-            Error::UserNotSpecified => "USER_NOT_SPECIFIED",
-            // WrongType indicates that the result value was not of the requested type, e.g. you
-            // called BoolVariationDetail but the value was an integer.
-            Error::WrongType => "WRONG_TYPE",
-            // Exception indicates that an unexpected error stopped flag evaluation; check the
-            // log for details.
-            Error::Exception => "EXCEPTION",
-        }
-    }
 }
