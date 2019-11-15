@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum AttributeValue {
     String(String),
     Array(Vec<AttributeValue>),
+    Number(f64),
     // TODO implement other attribute types
     NotYetImplemented(serde_json::Value),
 }
@@ -29,12 +30,30 @@ where
 }
 
 impl AttributeValue {
+    /// as_str returns None unless self is a String. It will not convert.
     pub fn as_str(&self) -> Option<&String> {
         match self {
             AttributeValue::String(s) => Some(s),
+            AttributeValue::Number(_) => None,
             other => {
                 warn!(
                     "Don't know how or whether to stringify attribute value {:?}",
+                    other
+                );
+                None
+            }
+        }
+    }
+
+    /// to_f64 will return self if it is a float, otherwise convert it if possible, or else return
+    /// None.
+    pub fn to_f64(&self) -> Option<f64> {
+        match self {
+            AttributeValue::Number(f) => Some(*f),
+            AttributeValue::String(s) => s.parse().ok(),
+            other => {
+                warn!(
+                    "Don't know how or whether to convert attribute value {:?} to float",
                     other
                 );
                 None
@@ -47,7 +66,7 @@ impl AttributeValue {
         P: Fn(&AttributeValue) -> bool,
     {
         match self {
-            AttributeValue::String(_) => {
+            AttributeValue::String(_) | AttributeValue::Number(_) => {
                 if p(self) {
                     Some(&self)
                 } else {

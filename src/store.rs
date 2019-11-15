@@ -71,11 +71,11 @@ enum Op {
     EndsWith,
     Contains,
     Matches,
-    // TODO actually implement these
     LessThan,
     LessThanOrEqual,
     GreaterThan,
     GreaterThanOrEqual,
+    // TODO actually implement these
     Before,
     After,
     SegmentMatch,
@@ -89,6 +89,8 @@ impl Op {
     fn matches(&self, lhs: &AttributeValue, rhs: &AttributeValue) -> bool {
         match self {
             Op::In => lhs == rhs,
+
+            // string ops
             Op::StartsWith => string_op(lhs, rhs, |l, r| l.starts_with(r)),
             Op::EndsWith => string_op(lhs, rhs, |l, r| l.ends_with(r)),
             Op::Contains => string_op(lhs, rhs, |l, r| l.find(r).is_some()),
@@ -99,11 +101,14 @@ impl Op {
                     false
                 }
             }),
-            Op::LessThan
-            | Op::LessThanOrEqual
-            | Op::GreaterThan
-            | Op::GreaterThanOrEqual
-            | Op::Before
+
+            // numeric ops
+            Op::LessThan => numeric_op(lhs, rhs, |l, r| l < r),
+            Op::LessThanOrEqual => numeric_op(lhs, rhs, |l, r| l <= r),
+            Op::GreaterThan => numeric_op(lhs, rhs, |l, r| l > r),
+            Op::GreaterThanOrEqual => numeric_op(lhs, rhs, |l, r| l >= r),
+
+            Op::Before
             | Op::After
             | Op::SegmentMatch
             | Op::SemVerEqual
@@ -122,6 +127,13 @@ fn string_op<F: Fn(&String, &String) -> bool>(
     f: F,
 ) -> bool {
     match (lhs.as_str(), rhs.as_str()) {
+        (Some(l), Some(r)) => f(l, r),
+        _ => false,
+    }
+}
+
+fn numeric_op<F: Fn(f64, f64) -> bool>(lhs: &AttributeValue, rhs: &AttributeValue, f: F) -> bool {
+    match (lhs.to_f64(), rhs.to_f64()) {
         (Some(l), Some(r)) => f(l, r),
         _ => false,
     }
@@ -552,9 +564,13 @@ mod tests {
     fn astring(s: &str) -> AttributeValue {
         AttributeValue::String(s.into())
     }
+    fn anum(f: f64) -> AttributeValue {
+        AttributeValue::Number(f)
+    }
 
     #[test]
     fn test_op_in() {
+        // strings
         assert!(Op::In.matches(&astring("foo"), &astring("foo")));
 
         assert!(!Op::In.matches(&astring("foo"), &astring("bar")));
@@ -563,7 +579,10 @@ mod tests {
             "case sensitive"
         );
 
-        // TODO test anything other than strings
+        // numbers
+        assert!(Op::In.matches(&anum(42.0), &anum(42.0)));
+        assert!(!Op::In.matches(&anum(42.0), &anum(3.0)));
+        assert!(Op::In.matches(&anum(0.0), &anum(-0.0)));
     }
 
     #[test]
@@ -641,6 +660,41 @@ mod tests {
         );
 
         // TODO test more cases
+    }
+
+    #[test]
+    fn test_ops_numeric() {
+        // basic numeric comparisons
+        assert!(Op::LessThan.matches(&anum(0.0), &anum(1.0)));
+        assert!(!Op::LessThan.matches(&anum(0.0), &anum(0.0)));
+        assert!(!Op::LessThan.matches(&anum(1.0), &anum(0.0)));
+
+        assert!(Op::GreaterThan.matches(&anum(1.0), &anum(0.0)));
+        assert!(!Op::GreaterThan.matches(&anum(0.0), &anum(0.0)));
+        assert!(!Op::GreaterThan.matches(&anum(0.0), &anum(1.0)));
+
+        assert!(Op::LessThanOrEqual.matches(&anum(0.0), &anum(1.0)));
+        assert!(Op::LessThanOrEqual.matches(&anum(0.0), &anum(0.0)));
+        assert!(!Op::LessThanOrEqual.matches(&anum(1.0), &anum(0.0)));
+
+        assert!(Op::GreaterThanOrEqual.matches(&anum(1.0), &anum(0.0)));
+        assert!(Op::GreaterThanOrEqual.matches(&anum(0.0), &anum(0.0)));
+        assert!(!Op::GreaterThanOrEqual.matches(&anum(0.0), &anum(1.0)));
+
+        // conversions
+        assert!(
+            Op::LessThan.matches(&astring("0"), &anum(1.0)),
+            "should convert numeric string on LHS"
+        );
+        assert!(
+            Op::LessThan.matches(&anum(0.0), &astring("1")),
+            "should convert numeric string on RHS"
+        );
+
+        assert!(
+            !Op::LessThan.matches(&astring("Tuesday"), &anum(7.0)),
+            "non-numeric strings don't match"
+        );
     }
 
     #[test]
