@@ -233,7 +233,7 @@ pub struct FeatureFlag {
 
 impl FeatureFlag {
     pub fn evaluate(&self, user: &User) -> Detail<&FlagValue> {
-        if user.key.is_none() {
+        if user.key().is_none() {
             return Detail::err(eval::Error::UserNotSpecified);
         }
 
@@ -243,7 +243,7 @@ impl FeatureFlag {
 
         for target in &self.targets {
             for value in &target.values {
-                if Some(value) == user.key.as_ref() {
+                if Some(value) == user.key() {
                     return self.variation(target.variation, Reason::TargetMatch);
                 }
             }
@@ -669,6 +669,12 @@ mod tests {
             op: Op::In,
             values: vec!["foo".into(), "bar".into()],
         };
+        let key_clause = Clause {
+            attribute: "key".into(),
+            negate: false,
+            op: Op::In,
+            values: vec!["mu".into()],
+        };
 
         let matching_user = User::new_with_custom("mu", hashmap! {"a".into() => "foo".into()});
         let non_matching_user = User::new_with_custom("nmu", hashmap! {"a".into() => "lol".into()});
@@ -703,6 +709,9 @@ mod tests {
             !negated_many_val_clause.matches(&user_without_attr),
             "targeting missing attribute does not match even when negated"
         );
+
+        assert!(key_clause.matches(&matching_user), "should match key");
+        assert!(!key_clause.matches(&non_matching_user), "should match key");
 
         let user_with_many = User::new_with_custom(
             "uwm",

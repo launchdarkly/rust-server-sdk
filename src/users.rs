@@ -65,38 +65,44 @@ impl AttributeValue {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct User {
-    pub key: Option<String>,
+    _key: Option<AttributeValue>,
+    // TODO support other non-custom attributes
 
     custom: HashMap<String, AttributeValue>,
 }
 
 impl User {
-    pub fn new<S: Into<String>>(key: S) -> User {
+    pub fn new(key: &str) -> User {
         Self::new_with_custom(key, HashMap::with_capacity(0))
     }
 
-    pub fn new_with_custom<S: Into<String>>(
-        key: S,
-        custom: HashMap<String, AttributeValue>,
-    ) -> User {
+    pub fn new_with_custom(key: &str, custom: HashMap<String, AttributeValue>) -> User {
         User {
-            key: Some(key.into()),
+            _key: Some(key.into()),
             custom: custom,
         }
     }
 
     pub fn new_without_key() -> User {
         User {
-            key: None,
+            _key: None,
             custom: HashMap::default(),
         }
+    }
+
+    pub fn key(&self) -> Option<&String> {
+        self._key.as_ref().and_then(|av| av.as_str())
     }
 
     pub fn value_of<Q>(&self, attr: &Q) -> Option<&AttributeValue>
     where
         String: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + PartialEq<str>,
     {
+        if attr == "key" {
+            return self._key.as_ref();
+        }
+        // TODO handle other non-custom attributes
         self.custom.get(attr)
     }
 }

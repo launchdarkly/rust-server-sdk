@@ -140,7 +140,7 @@ impl Client {
             None => return Detail::err(eval::Error::FlagNotFound),
         };
 
-        if user.key.is_none() {
+        if user.key().is_none() {
             return Detail::err(eval::Error::UserNotSpecified);
         }
 
@@ -156,7 +156,7 @@ impl Client {
                         .as_millis() as u64,
                     user: user.clone(), // TODO pass user as owned to avoid clone?
                 },
-                user_key: user.key.clone(),
+                user_key: user.key().cloned(),
                 key: flag.key.clone(),
                 default: value.clone(), // TODO populate iff default value was used
                 value,                  // TODO need to know default value provided

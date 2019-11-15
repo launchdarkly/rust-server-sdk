@@ -27,7 +27,7 @@ fn main() {
         error!("Please enter your username on the command line.");
         exit(1);
     }
-    let user = User::new(flags[0].clone());
+    let user = User::new(&flags[0]);
 
     // TODO move this wrapper into Client type
     let ld = Arc::new(RwLock::new(Client::new(&sdk_key)));
