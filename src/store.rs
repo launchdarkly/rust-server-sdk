@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::eval::{self, Detail, Reason, VariationIndex};
 use super::users::{AttributeValue, User};
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const FLAGS_PREFIX: &'static str = "/flags/";
@@ -69,8 +70,8 @@ enum Op {
     StartsWith,
     EndsWith,
     Contains,
-    // TODO actually implement these
     Matches,
+    // TODO actually implement these
     LessThan,
     LessThanOrEqual,
     GreaterThan,
@@ -91,8 +92,14 @@ impl Op {
             Op::StartsWith => string_op(lhs, rhs, |l, r| l.starts_with(r)),
             Op::EndsWith => string_op(lhs, rhs, |l, r| l.ends_with(r)),
             Op::Contains => string_op(lhs, rhs, |l, r| l.find(r).is_some()),
-            Op::Matches
-            | Op::LessThan
+            Op::Matches => string_op(lhs, rhs, |l, r| match Regex::new(r) {
+                Ok(re) => re.is_match(l),
+                Err(e) => {
+                    warn!("Invalid regex for 'matches' operator ({}): {}", e, l);
+                    false
+                }
+            }),
+            Op::LessThan
             | Op::LessThanOrEqual
             | Op::GreaterThan
             | Op::GreaterThanOrEqual
@@ -604,6 +611,32 @@ mod tests {
             !Op::Contains.matches(&astring("FOOD"), &astring("oo")),
             "case sensitive"
         );
+    }
+
+    #[test]
+    fn test_op_matches() {
+        // degenerate cases
+        assert!(Op::Matches.matches(&astring(""), &astring("")));
+        assert!(Op::Matches.matches(&astring("a"), &astring("")));
+
+        // simple regexes
+        assert!(Op::Matches.matches(&astring("a"), &astring("a")));
+        assert!(Op::Matches.matches(&astring("a"), &astring(".")));
+        assert!(Op::Matches.matches(&astring("abc"), &astring(".*")));
+
+        assert!(!Op::Matches.matches(&astring(""), &astring(".")));
+
+        assert!(
+            Op::Matches.matches(&astring("party"), &astring("art")),
+            "should match part of string"
+        );
+
+        assert!(
+            !Op::Matches.matches(&astring(""), &astring(r"\")),
+            "invalid regex should match nothing"
+        );
+
+        // TODO test more cases
     }
 
     #[test]
