@@ -99,15 +99,25 @@ impl AttributeValue {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct User {
+    #[serde(rename = "key")]
     _key: Option<AttributeValue>,
+    #[serde(rename = "secondary")]
     _secondary: Option<AttributeValue>,
+    #[serde(rename = "ip")]
     _ip: Option<AttributeValue>,
+    #[serde(rename = "country")]
     _country: Option<AttributeValue>,
+    #[serde(rename = "email")]
     _email: Option<AttributeValue>,
+    #[serde(rename = "firstName")]
     _first_name: Option<AttributeValue>,
+    #[serde(rename = "lastName")]
     _last_name: Option<AttributeValue>,
+    #[serde(rename = "avatar")]
     _avatar: Option<AttributeValue>,
+    #[serde(rename = "name")]
     _name: Option<AttributeValue>,
+    #[serde(rename = "anonymous")]
     _anonymous: Option<AttributeValue>,
 
     custom: HashMap<String, AttributeValue>,
