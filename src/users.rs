@@ -99,25 +99,25 @@ impl AttributeValue {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct User {
-    #[serde(rename = "key")]
+    #[serde(rename = "key", skip_serializing_if = "Option::is_none")]
     _key: Option<AttributeValue>,
-    #[serde(rename = "secondary")]
+    #[serde(rename = "secondary", skip_serializing_if = "Option::is_none")]
     _secondary: Option<AttributeValue>,
-    #[serde(rename = "ip")]
+    #[serde(rename = "ip", skip_serializing_if = "Option::is_none")]
     _ip: Option<AttributeValue>,
-    #[serde(rename = "country")]
+    #[serde(rename = "country", skip_serializing_if = "Option::is_none")]
     _country: Option<AttributeValue>,
-    #[serde(rename = "email")]
+    #[serde(rename = "email", skip_serializing_if = "Option::is_none")]
     _email: Option<AttributeValue>,
-    #[serde(rename = "firstName")]
+    #[serde(rename = "firstName", skip_serializing_if = "Option::is_none")]
     _first_name: Option<AttributeValue>,
-    #[serde(rename = "lastName")]
+    #[serde(rename = "lastName", skip_serializing_if = "Option::is_none")]
     _last_name: Option<AttributeValue>,
-    #[serde(rename = "avatar")]
+    #[serde(rename = "avatar", skip_serializing_if = "Option::is_none")]
     _avatar: Option<AttributeValue>,
-    #[serde(rename = "name")]
+    #[serde(rename = "name", skip_serializing_if = "Option::is_none")]
     _name: Option<AttributeValue>,
-    #[serde(rename = "anonymous")]
+    #[serde(rename = "anonymous", skip_serializing_if = "Option::is_none")]
     _anonymous: Option<AttributeValue>,
 
     custom: HashMap<String, AttributeValue>,
