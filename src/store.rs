@@ -798,14 +798,44 @@ mod tests {
                 non_matching_user: User::new("nope".into()).build(),
                 user_without_attr: UserBuilder::new_with_optional_key(None).build(),
             },
-            "name" => AttributeTestCase {
-                matching_user: User::new("mu".into()).name("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).name("nope".into()).build(),
+            "secondary" => AttributeTestCase {
+                matching_user: User::new("mu".into()).secondary("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).secondary("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+            "ip" => AttributeTestCase {
+                matching_user: User::new("mu".into()).ip("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).ip("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+            "country" => AttributeTestCase {
+                matching_user: User::new("mu".into()).country("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).country("nope".into()).build(),
                 user_without_attr: User::new("uwa".into()).build(),
             },
             "email" => AttributeTestCase {
                 matching_user: User::new("mu".into()).email("match".into()).build(),
                 non_matching_user: User::new("nmu".into()).email("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+            "firstName" => AttributeTestCase {
+                matching_user: User::new("mu".into()).first_name("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).first_name("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+            "lastName" => AttributeTestCase {
+                matching_user: User::new("mu".into()).last_name("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).last_name("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+            "avatar" => AttributeTestCase {
+                matching_user: User::new("mu".into()).avatar("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).avatar("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+            "name" => AttributeTestCase {
+                matching_user: User::new("mu".into()).name("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).name("nope".into()).build(),
                 user_without_attr: User::new("uwa".into()).build(),
             },
         };
@@ -834,6 +864,24 @@ mod tests {
                 attr
             );
         }
+    }
+
+    #[test]
+    fn test_clause_matches_anonymous_attribute() {
+        let clause = Clause {
+            attribute: "anonymous".into(),
+            negate: false,
+            op: Op::In,
+            values: vec![true.into()],
+        };
+
+        let anon_user = User::new("anon".into()).anonymous(true).build();
+        let non_anon_user = User::new("nonanon".into()).anonymous(false).build();
+        let implicitly_non_anon_user = User::new("implicit".into()).build();
+
+        assert!(clause.matches(&anon_user));
+        assert!(!clause.matches(&non_anon_user));
+        assert!(!clause.matches(&implicitly_non_anon_user));
     }
 
     #[test]

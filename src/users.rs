@@ -10,6 +10,7 @@ pub enum AttributeValue {
     String(String),
     Array(Vec<AttributeValue>),
     Number(f64),
+    Bool(bool),
     // TODO implement other attribute types
     NotYetImplemented(serde_json::Value),
 }
@@ -23,6 +24,12 @@ impl From<&str> for AttributeValue {
 impl From<String> for AttributeValue {
     fn from(s: String) -> AttributeValue {
         AttributeValue::String(s)
+    }
+}
+
+impl From<bool> for AttributeValue {
+    fn from(b: bool) -> AttributeValue {
+        AttributeValue::Bool(b)
     }
 }
 
@@ -40,14 +47,7 @@ impl AttributeValue {
     pub fn as_str(&self) -> Option<&String> {
         match self {
             AttributeValue::String(s) => Some(s),
-            AttributeValue::Number(_) => None,
-            other => {
-                warn!(
-                    "Don't know how or whether to stringify attribute value {:?}",
-                    other
-                );
-                None
-            }
+            _ => None,
         }
     }
 
@@ -57,6 +57,7 @@ impl AttributeValue {
         match self {
             AttributeValue::Number(f) => Some(*f),
             AttributeValue::String(s) => s.parse().ok(),
+            AttributeValue::Bool(_) => None, // TODO check this
             other => {
                 warn!(
                     "Don't know how or whether to convert attribute value {:?} to float",
@@ -67,12 +68,20 @@ impl AttributeValue {
         }
     }
 
+    /// as_bool returns None unless self is a bool. It will not convert.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            AttributeValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
     pub fn find<P>(&self, p: P) -> Option<&AttributeValue>
     where
         P: Fn(&AttributeValue) -> bool,
     {
         match self {
-            AttributeValue::String(_) | AttributeValue::Number(_) => {
+            AttributeValue::String(_) | AttributeValue::Number(_) | AttributeValue::Bool(_) => {
                 if p(self) {
                     Some(&self)
                 } else {
@@ -90,10 +99,16 @@ impl AttributeValue {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct User {
-    // TODO support other non-custom attributes
     _key: Option<AttributeValue>,
-    _name: Option<AttributeValue>,
+    _secondary: Option<AttributeValue>,
+    _ip: Option<AttributeValue>,
+    _country: Option<AttributeValue>,
     _email: Option<AttributeValue>,
+    _first_name: Option<AttributeValue>,
+    _last_name: Option<AttributeValue>,
+    _avatar: Option<AttributeValue>,
+    _name: Option<AttributeValue>,
+    _anonymous: Option<AttributeValue>,
 
     custom: HashMap<String, AttributeValue>,
 }
@@ -106,20 +121,46 @@ impl User {
     pub fn key(&self) -> Option<&String> {
         self._key.as_ref().and_then(|av| av.as_str())
     }
-    pub fn name(&self) -> Option<&String> {
-        self._name.as_ref().and_then(|av| av.as_str())
+    pub fn secondary(&self) -> Option<&String> {
+        self._secondary.as_ref().and_then(|av| av.as_str())
+    }
+    pub fn ip(&self) -> Option<&String> {
+        self._ip.as_ref().and_then(|av| av.as_str())
+    }
+    pub fn country(&self) -> Option<&String> {
+        self._country.as_ref().and_then(|av| av.as_str())
     }
     pub fn email(&self) -> Option<&String> {
         self._email.as_ref().and_then(|av| av.as_str())
     }
-    // TODO expose other non-custom attributes
+    pub fn first_name(&self) -> Option<&String> {
+        self._first_name.as_ref().and_then(|av| av.as_str())
+    }
+    pub fn last_name(&self) -> Option<&String> {
+        self._last_name.as_ref().and_then(|av| av.as_str())
+    }
+    pub fn avatar(&self) -> Option<&String> {
+        self._avatar.as_ref().and_then(|av| av.as_str())
+    }
+    pub fn name(&self) -> Option<&String> {
+        self._name.as_ref().and_then(|av| av.as_str())
+    }
+    pub fn anonymous(&self) -> Option<bool> {
+        self._anonymous.as_ref().and_then(|av| av.as_bool())
+    }
 
     pub fn value_of(&self, attr: &str) -> Option<&AttributeValue> {
         match attr {
             "key" => self._key.as_ref(),
-            "name" => self._name.as_ref(),
+            "secondary" => self._secondary.as_ref(),
+            "ip" => self._ip.as_ref(),
+            "country" => self._country.as_ref(),
             "email" => self._email.as_ref(),
-            // TODO handle other non-custom attributes
+            "firstName" => self._first_name.as_ref(),
+            "lastName" => self._last_name.as_ref(),
+            "avatar" => self._avatar.as_ref(),
+            "name" => self._name.as_ref(),
+            "anonymous" => self._anonymous.as_ref(),
             _ => self.custom.get(attr),
         }
     }
@@ -127,8 +168,15 @@ impl User {
 
 pub struct UserBuilder {
     key: Option<String>,
-    name: Option<String>,
+    secondary: Option<String>,
+    ip: Option<String>,
+    country: Option<String>,
     email: Option<String>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    avatar: Option<String>,
+    name: Option<String>,
+    anonymous: Option<bool>,
     custom: HashMap<String, AttributeValue>,
 }
 
@@ -140,10 +188,48 @@ impl UserBuilder {
     pub fn new_with_optional_key(key: Option<String>) -> Self {
         Self {
             key,
-            name: None,
+            secondary: None,
+            ip: None,
+            country: None,
             email: None,
+            first_name: None,
+            last_name: None,
+            avatar: None,
+            name: None,
+            anonymous: None,
             custom: HashMap::with_capacity(USER_CUSTOM_STARTING_CAPACITY),
         }
+    }
+
+    pub fn secondary(&mut self, secondary: String) -> &Self {
+        self.secondary = Some(secondary);
+        self
+    }
+    pub fn ip(&mut self, ip: String) -> &Self {
+        self.ip = Some(ip);
+        self
+    }
+    pub fn country(&mut self, country: String) -> &Self {
+        self.country = Some(country);
+        self
+    }
+
+    pub fn email(&mut self, email: String) -> &Self {
+        self.email = Some(email);
+        self
+    }
+
+    pub fn first_name(&mut self, first_name: String) -> &Self {
+        self.first_name = Some(first_name);
+        self
+    }
+    pub fn last_name(&mut self, last_name: String) -> &Self {
+        self.last_name = Some(last_name);
+        self
+    }
+    pub fn avatar(&mut self, avatar: String) -> &Self {
+        self.avatar = Some(avatar);
+        self
     }
 
     pub fn name(&mut self, name: String) -> &Self {
@@ -151,8 +237,8 @@ impl UserBuilder {
         self
     }
 
-    pub fn email(&mut self, email: String) -> &Self {
-        self.email = Some(email);
+    pub fn anonymous(&mut self, anonymous: bool) -> &Self {
+        self.anonymous = Some(anonymous);
         self
     }
 
@@ -165,8 +251,15 @@ impl UserBuilder {
         use AttributeValue::String as AString;
         User {
             _key: self.key.clone().map(AString),
-            _name: self.name.clone().map(AString),
+            _secondary: self.secondary.clone().map(AString),
+            _ip: self.ip.clone().map(AString),
+            _country: self.country.clone().map(AString),
             _email: self.email.clone().map(AString),
+            _first_name: self.first_name.clone().map(AString),
+            _last_name: self.last_name.clone().map(AString),
+            _avatar: self.avatar.clone().map(AString),
+            _name: self.name.clone().map(AString),
+            _anonymous: self.anonymous.map(AttributeValue::Bool),
             custom: self.custom.clone(),
         }
     }
