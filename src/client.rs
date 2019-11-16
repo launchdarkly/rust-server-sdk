@@ -23,17 +23,29 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct Client {
     //sdk_key: String,
-    //config: Config,
+    config: Config,
     event_processor: EventProcessor,
     update_processor: StreamingUpdateProcessor,
     store: Arc<Mutex<FeatureStore>>,
 }
 
-//pub struct Config {}
+#[derive(Clone, Copy)]
+pub struct Config {
+    inline_users_in_events: bool,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            inline_users_in_events: false,
+        }
+    }
+}
 
 pub struct ConfigBuilder {
     stream_base_url: String,
     events_base_url: String,
+    config: Config,
 }
 
 impl ConfigBuilder {
@@ -49,6 +61,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn inline_users_in_events<'a>(&'a mut self, inline: bool) -> &'a mut ConfigBuilder {
+        self.config.inline_users_in_events = inline;
+        self
+    }
+
     pub fn build(&self, sdk_key: &str) -> Result<Client> {
         let store = Arc::new(Mutex::new(FeatureStore::new()));
         let event_processor = EventProcessor::new(
@@ -60,6 +77,7 @@ impl ConfigBuilder {
             StreamingUpdateProcessor::new(&self.stream_base_url, sdk_key, &store)
                 .map_err(|e| Error::InvalidConfig(Box::new(e)))?;
         Ok(Client {
+            config: self.config,
             event_processor: event_processor,
             update_processor: update_processor,
             store: store,
@@ -74,6 +92,7 @@ impl Client {
 
     pub fn configure() -> ConfigBuilder {
         ConfigBuilder {
+            config: Config::default(),
             stream_base_url: DEFAULT_STREAM_BASE_URL.to_string(),
             events_base_url: DEFAULT_EVENTS_BASE_URL.to_string(),
         }
@@ -155,6 +174,11 @@ impl Client {
                         .unwrap()
                         .as_millis() as u64,
                     user: user.clone(), // TODO pass user as owned to avoid clone?
+                },
+                user: if self.config.inline_users_in_events {
+                    Some(user.clone())
+                } else {
+                    None
                 },
                 user_key: user.key().cloned(),
                 key: flag.key.clone(),

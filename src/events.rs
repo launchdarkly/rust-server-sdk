@@ -21,6 +21,8 @@ pub enum Event<'a> {
         #[serde(flatten)]
         base: BaseEvent,
         key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user: Option<User>,
         user_key: Option<String>,
         value: FlagValue,
         default: FlagValue,
