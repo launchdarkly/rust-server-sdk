@@ -380,7 +380,7 @@ mod tests {
     use super::*;
 
     use crate::eval::Reason::*;
-    use crate::users::User;
+    use crate::users::{User, UserBuilder};
 
     #[test]
     fn test_parse_variation_or_rollout() {
@@ -455,8 +455,8 @@ mod tests {
 
     #[test]
     fn test_eval_flag_basic() {
-        let alice = User::new("alice"); // not targeted
-        let bob = User::new("bob"); // targeted
+        let alice = User::new("alice".into()).build(); // not targeted
+        let bob = User::new("bob".into()).build(); // targeted
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_eval_flag_missing_user_key() {
-        let nameless = User::new_without_key(); // untargetable
+        let nameless = UserBuilder::new_with_optional_key(None).build(); // untargetable
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
@@ -530,13 +530,12 @@ mod tests {
 
     #[test]
     fn test_eval_flag_rules() {
-        let alice = User::new("alice");
-        let bob = User::new_with_custom(
-            "bob",
-            hashmap! {
+        let alice = User::new("alice".into()).build();
+        let bob = User::new("bob".into())
+            .custom(hashmap! {
                 "team".into() => "Avengers".into(),
-            },
-        );
+            })
+            .build();
 
         let mut flag: FeatureFlag = serde_json::from_str(FLAG_WITH_RULES_JSON).unwrap();
 
@@ -730,9 +729,13 @@ mod tests {
             values: vec!["mu".into()],
         };
 
-        let matching_user = User::new_with_custom("mu", hashmap! {"a".into() => "foo".into()});
-        let non_matching_user = User::new_with_custom("nmu", hashmap! {"a".into() => "lol".into()});
-        let user_without_attr = User::new("uwa");
+        let matching_user = User::new("mu".into())
+            .custom(hashmap! {"a".into() => "foo".into()})
+            .build();
+        let non_matching_user = User::new("nmu".into())
+            .custom(hashmap! {"a".into() => "lol".into()})
+            .build();
+        let user_without_attr = User::new("uwa".into()).build();
 
         assert!(one_val_clause.matches(&matching_user));
         assert!(!one_val_clause.matches(&non_matching_user));
@@ -765,17 +768,108 @@ mod tests {
         );
 
         assert!(key_clause.matches(&matching_user), "should match key");
-        assert!(!key_clause.matches(&non_matching_user), "should match key");
-
-        let user_with_many = User::new_with_custom(
-            "uwm",
-            hashmap! {"a".into() => vec!["foo", "bar", "lol"].into()},
+        assert!(
+            !key_clause.matches(&non_matching_user),
+            "should not match non-matching key"
         );
+
+        let user_with_many = User::new("uwm".into())
+            .custom(hashmap! {"a".into() => vec!["foo", "bar", "lol"].into()})
+            .build();
 
         assert!(one_val_clause.matches(&user_with_many));
         assert!(many_val_clause.matches(&user_with_many));
 
         assert!(!negated_clause.matches(&user_with_many));
         assert!(!negated_many_val_clause.matches(&user_with_many));
+    }
+
+    struct AttributeTestCase {
+        matching_user: User,
+        non_matching_user: User,
+        user_without_attr: User,
+    }
+
+    #[test]
+    fn test_clause_matches_attributes() {
+        let tests: HashMap<&str, AttributeTestCase> = hashmap! {
+            "key" => AttributeTestCase {
+                matching_user: User::new("match".into()).build(),
+                non_matching_user: User::new("nope".into()).build(),
+                user_without_attr: UserBuilder::new_with_optional_key(None).build(),
+            },
+            "name" => AttributeTestCase {
+                matching_user: User::new("mu".into()).name("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).name("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+            "email" => AttributeTestCase {
+                matching_user: User::new("mu".into()).email("match".into()).build(),
+                non_matching_user: User::new("nmu".into()).email("nope".into()).build(),
+                user_without_attr: User::new("uwa".into()).build(),
+            },
+        };
+
+        for (attr, test_case) in tests {
+            let clause = Clause {
+                attribute: attr.into(),
+                negate: false,
+                op: Op::In,
+                values: vec!["match".into()],
+            };
+
+            assert!(
+                clause.matches(&test_case.matching_user),
+                "should match {}",
+                attr
+            );
+            assert!(
+                !clause.matches(&test_case.non_matching_user),
+                "should not match non-matching {}",
+                attr
+            );
+            assert!(
+                !clause.matches(&test_case.user_without_attr),
+                "should not match user with null {}",
+                attr
+            );
+        }
+    }
+
+    #[test]
+    fn test_clause_matches_custom_attributes() {
+        for attr in vec![
+            "custom",  // check we can have an attribute called "custom"
+            "custom1", // check custom attributes work the same
+        ] {
+            let clause = Clause {
+                attribute: attr.into(),
+                negate: false,
+                op: Op::In,
+                values: vec!["match".into()],
+            };
+
+            let matching_user = User::new("mu".into())
+                .custom(hashmap! {attr.into() => "match".into()})
+                .build();
+            let non_matching_user = User::new("nmu".into())
+                .custom(hashmap! {attr.into() => "nope".into()})
+                .build();
+            let user_without_attr = User::new("uwa".into())
+                .custom(hashmap! {attr.into() => AttributeValue::Null})
+                .build();
+
+            assert!(clause.matches(&matching_user), "should match {}", attr);
+            assert!(
+                !clause.matches(&non_matching_user),
+                "should not match non-matching {}",
+                attr
+            );
+            assert!(
+                !clause.matches(&user_without_attr),
+                "should not match user with null {}",
+                attr
+            );
+        }
     }
 }
