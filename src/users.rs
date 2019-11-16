@@ -97,7 +97,7 @@ impl AttributeValue {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct User {
     #[serde(rename = "key")]
     _key: Option<AttributeValue>,
