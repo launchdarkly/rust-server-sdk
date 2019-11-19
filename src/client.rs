@@ -14,7 +14,7 @@ const DEFAULT_EVENTS_BASE_URL: &'static str = "https://events.launchdarkly.com";
 #[derive(Debug)]
 pub enum Error {
     FlagWrongType(String, String),
-    InvalidConfig(Box<std::fmt::Debug>),
+    InvalidConfig(Box<dyn std::fmt::Debug>),
     EvaluationError(eval::Error),
     NoSuchFlag(String),
 }

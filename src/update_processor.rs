@@ -10,7 +10,7 @@ use super::store::{AllData, FeatureStore, PatchTarget};
 #[derive(Debug)]
 pub enum Error {
     EventSource(es::Error),
-    InvalidEventData(String, Box<std::error::Error + Send>),
+    InvalidEventData(String, Box<dyn std::error::Error + Send>),
     InvalidEventPath(String, String),
     InvalidEventType(String),
     MissingEventField(String, String),
