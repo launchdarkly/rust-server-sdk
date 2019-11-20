@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::{self, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 const USER_CUSTOM_STARTING_CAPACITY: usize = 10;
@@ -73,6 +74,37 @@ impl AttributeValue {
         match self {
             AttributeValue::Bool(b) => Some(*b),
             _ => None,
+        }
+    }
+
+    /// to_datetime will attempt to convert any of the following into a chrono::DateTime in UTC:
+    ///  * RFC3339/ISO8601 timestamp (example: "2016-04-16T17:09:12.759-07:00")
+    ///  * Unix epoch milliseconds as string
+    ///  * Unix milliseconds as number
+    /// It will return None if the conversion fails or if no conversion is possible.
+    pub fn to_datetime(&self) -> Option<chrono::DateTime<Utc>> {
+        match self {
+            AttributeValue::Number(millis) => {
+                // TODO this has undefined behaviour for huge floats: https://stackoverflow.com/a/41139453
+                Some(Utc.timestamp_nanos((millis * 1e6).round() as i64))
+            }
+            AttributeValue::String(s) => {
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                    Some(dt.with_timezone(&Utc))
+                } else if let Ok(millis) = s.parse() {
+                    Utc.timestamp_millis_opt(millis).single()
+                } else {
+                    None
+                }
+            }
+            AttributeValue::Bool(_) => None,
+            other => {
+                warn!(
+                    "Don't know how or whether to convert attribute value {:?} to datetime",
+                    other
+                );
+                None
+            }
         }
     }
 

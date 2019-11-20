@@ -5,6 +5,7 @@ authors = ["Sam Stokes <sstokes@launchdarkly.com>"]
 edition = "2018"
 
 [dependencies]
+chrono = "0.4.9"
 futures = "0.1.25"
 log = "0.4.6"
 regex = "1"

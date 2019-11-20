@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::eval::{self, Detail, Reason, VariationIndex};
 use super::users::{AttributeValue, User};
 
+use chrono::{self, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -75,9 +76,9 @@ enum Op {
     LessThanOrEqual,
     GreaterThan,
     GreaterThanOrEqual,
-    // TODO actually implement these
     Before,
     After,
+    // TODO actually implement these
     SegmentMatch,
     SemVerEqual,
     SemVerGreaterThan,
@@ -108,12 +109,9 @@ impl Op {
             Op::GreaterThan => numeric_op(lhs, rhs, |l, r| l > r),
             Op::GreaterThanOrEqual => numeric_op(lhs, rhs, |l, r| l >= r),
 
-            Op::Before
-            | Op::After
-            | Op::SegmentMatch
-            | Op::SemVerEqual
-            | Op::SemVerGreaterThan
-            | Op::SemVerLessThan => {
+            Op::Before => time_op(lhs, rhs, |l, r| l < r),
+            Op::After => time_op(lhs, rhs, |l, r| l > r),
+            Op::SegmentMatch | Op::SemVerEqual | Op::SemVerGreaterThan | Op::SemVerLessThan => {
                 error!("Encountered unimplemented flag rule operation {:?}", self);
                 false
             }
@@ -134,6 +132,17 @@ fn string_op<F: Fn(&String, &String) -> bool>(
 
 fn numeric_op<F: Fn(f64, f64) -> bool>(lhs: &AttributeValue, rhs: &AttributeValue, f: F) -> bool {
     match (lhs.to_f64(), rhs.to_f64()) {
+        (Some(l), Some(r)) => f(l, r),
+        _ => false,
+    }
+}
+
+fn time_op<F: Fn(chrono::DateTime<Utc>, chrono::DateTime<Utc>) -> bool>(
+    lhs: &AttributeValue,
+    rhs: &AttributeValue,
+    f: F,
+) -> bool {
+    match (lhs.to_datetime(), rhs.to_datetime()) {
         (Some(l), Some(r)) => f(l, r),
         _ => false,
     }
@@ -374,6 +383,8 @@ impl FeatureStore {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use spectral::prelude::*;
 
     use super::FlagValue::*;
@@ -694,6 +705,48 @@ mod tests {
             !Op::LessThan.matches(&astring("Tuesday"), &anum(7.0)),
             "non-numeric strings don't match"
         );
+    }
+
+    #[test]
+    fn test_ops_time() {
+        let today = SystemTime::now();
+        let today_millis = today
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as f64;
+        let yesterday_millis = today_millis - 86_400_000 as f64;
+
+        // basic UNIX timestamp comparisons
+        assert!(Op::Before.matches(&anum(yesterday_millis), &anum(today_millis)));
+        assert!(!Op::Before.matches(&anum(today_millis), &anum(yesterday_millis)));
+        assert!(!Op::Before.matches(&anum(today_millis), &anum(today_millis)));
+
+        assert!(Op::After.matches(&anum(today_millis), &anum(yesterday_millis)));
+        assert!(!Op::After.matches(&anum(yesterday_millis), &anum(today_millis)));
+        assert!(!Op::After.matches(&anum(today_millis), &anum(today_millis)));
+
+        // numeric strings get converted as millis
+        assert!(Op::Before.matches(&astring(&yesterday_millis.to_string()), &anum(today_millis)));
+        assert!(Op::After.matches(&anum(today_millis), &astring(&yesterday_millis.to_string())));
+
+        // date-formatted strings get parsed
+        assert!(Op::Before.matches(
+            &astring("2019-11-19T17:29:00.000000-07:00"),
+            &anum(today_millis)
+        ));
+        assert!(
+            Op::Before.matches(&astring("2019-11-19T17:29:00-07:00"), &anum(today_millis)),
+            "fractional seconds part is optional"
+        );
+
+        assert!(Op::After.matches(
+            &anum(today_millis),
+            &astring("2019-11-19T17:29:00.000000-07:00")
+        ));
+
+        // nonsense strings don't match
+        assert!(!Op::Before.matches(&astring("fish"), &anum(today_millis)));
+        assert!(!Op::After.matches(&anum(today_millis), &astring("fish")));
     }
 
     #[test]
