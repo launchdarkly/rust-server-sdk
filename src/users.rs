@@ -12,6 +12,7 @@ pub enum AttributeValue {
     Array(Vec<AttributeValue>),
     Number(f64),
     Bool(bool),
+    Null,
     // TODO implement other attribute types
     NotYetImplemented(serde_json::Value),
 }
@@ -59,6 +60,7 @@ impl AttributeValue {
             AttributeValue::Number(f) => Some(*f),
             AttributeValue::String(s) => s.parse().ok(),
             AttributeValue::Bool(_) => None, // TODO check this
+            AttributeValue::Null => None,
             other => {
                 warn!(
                     "Don't know how or whether to convert attribute value {:?} to float",
@@ -97,7 +99,7 @@ impl AttributeValue {
                     None
                 }
             }
-            AttributeValue::Bool(_) => None,
+            AttributeValue::Bool(_) | AttributeValue::Null => None,
             other => {
                 warn!(
                     "Don't know how or whether to convert attribute value {:?} to datetime",
@@ -121,6 +123,7 @@ impl AttributeValue {
                 }
             }
             AttributeValue::Array(values) => values.iter().find(|v| p(v)),
+            AttributeValue::Null => None,
             AttributeValue::NotYetImplemented(_) => {
                 warn!("attribute type not implemented: {:?}", self);
                 None
