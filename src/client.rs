@@ -166,7 +166,7 @@ impl Client {
         // TODO can we avoid the clone here?
         let result = flag.evaluate(user).map(|v| v.clone());
 
-        result.value.clone().map(|value| {
+        if let Some(value) = result.value.clone() {
             let event = Event::FeatureRequest {
                 base: BaseEvent {
                     creation_date: std::time::SystemTime::now()
@@ -188,14 +188,14 @@ impl Client {
                 prereq_of: None,
             };
             self.event_processor.send(event);
-        });
+        }
 
         result
     }
 }
 
 fn trim_base_url(mut url: &str) -> &str {
-    while url.ends_with("/") {
+    while url.ends_with('/') {
         let untrimmed_url = url;
         url = &url[..url.len() - 1];
         debug!("trimming base url: {} -> {}", untrimmed_url, url);

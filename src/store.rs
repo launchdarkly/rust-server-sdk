@@ -284,7 +284,7 @@ impl FeatureFlag {
             .as_ref()
             .ok()
             .map(|vor| self.value_for_variation_or_rollout(vor, Reason::Fallthrough))
-            .unwrap_or(Detail::err(eval::Error::MalformedFlag))
+            .unwrap_or_else(|| Detail::err(eval::Error::MalformedFlag))
     }
 
     pub fn variation(&self, index: VariationIndex, reason: Reason) -> Detail<&FlagValue> {
@@ -381,6 +381,12 @@ impl FeatureStore {
     }
 }
 
+impl Default for FeatureStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::SystemTime;
@@ -466,8 +472,8 @@ mod tests {
 
     #[test]
     fn test_eval_flag_basic() {
-        let alice = User::new("alice".into()).build(); // not targeted
-        let bob = User::new("bob".into()).build(); // targeted
+        let alice = User::with_key("alice".into()).build(); // not targeted
+        let bob = User::with_key("bob".into()).build(); // targeted
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
@@ -541,8 +547,8 @@ mod tests {
 
     #[test]
     fn test_eval_flag_rules() {
-        let alice = User::new("alice".into()).build();
-        let bob = User::new("bob".into())
+        let alice = User::with_key("alice".into()).build();
+        let bob = User::with_key("bob".into())
             .custom(hashmap! {
                 "team".into() => "Avengers".into(),
             })
@@ -782,13 +788,13 @@ mod tests {
             values: vec!["mu".into()],
         };
 
-        let matching_user = User::new("mu".into())
+        let matching_user = User::with_key("mu".into())
             .custom(hashmap! {"a".into() => "foo".into()})
             .build();
-        let non_matching_user = User::new("nmu".into())
+        let non_matching_user = User::with_key("nmu".into())
             .custom(hashmap! {"a".into() => "lol".into()})
             .build();
-        let user_without_attr = User::new("uwa".into()).build();
+        let user_without_attr = User::with_key("uwa".into()).build();
 
         assert!(one_val_clause.matches(&matching_user));
         assert!(!one_val_clause.matches(&non_matching_user));
@@ -826,7 +832,7 @@ mod tests {
             "should not match non-matching key"
         );
 
-        let user_with_many = User::new("uwm".into())
+        let user_with_many = User::with_key("uwm".into())
             .custom(hashmap! {"a".into() => vec!["foo", "bar", "lol"].into()})
             .build();
 
@@ -847,49 +853,49 @@ mod tests {
     fn test_clause_matches_attributes() {
         let tests: HashMap<&str, AttributeTestCase> = hashmap! {
             "key" => AttributeTestCase {
-                matching_user: User::new("match".into()).build(),
-                non_matching_user: User::new("nope".into()).build(),
+                matching_user: User::with_key("match".into()).build(),
+                non_matching_user: User::with_key("nope".into()).build(),
                 user_without_attr: UserBuilder::new_with_optional_key(None).build(),
             },
             "secondary" => AttributeTestCase {
-                matching_user: User::new("mu".into()).secondary("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).secondary("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).secondary("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).secondary("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
             "ip" => AttributeTestCase {
-                matching_user: User::new("mu".into()).ip("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).ip("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).ip("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).ip("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
             "country" => AttributeTestCase {
-                matching_user: User::new("mu".into()).country("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).country("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).country("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).country("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
             "email" => AttributeTestCase {
-                matching_user: User::new("mu".into()).email("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).email("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).email("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).email("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
             "firstName" => AttributeTestCase {
-                matching_user: User::new("mu".into()).first_name("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).first_name("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).first_name("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).first_name("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
             "lastName" => AttributeTestCase {
-                matching_user: User::new("mu".into()).last_name("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).last_name("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).last_name("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).last_name("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
             "avatar" => AttributeTestCase {
-                matching_user: User::new("mu".into()).avatar("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).avatar("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).avatar("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).avatar("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
             "name" => AttributeTestCase {
-                matching_user: User::new("mu".into()).name("match".into()).build(),
-                non_matching_user: User::new("nmu".into()).name("nope".into()).build(),
-                user_without_attr: User::new("uwa".into()).build(),
+                matching_user: User::with_key("mu".into()).name("match".into()).build(),
+                non_matching_user: User::with_key("nmu".into()).name("nope".into()).build(),
+                user_without_attr: User::with_key("uwa".into()).build(),
             },
         };
 
@@ -928,9 +934,9 @@ mod tests {
             values: vec![true.into()],
         };
 
-        let anon_user = User::new("anon".into()).anonymous(true).build();
-        let non_anon_user = User::new("nonanon".into()).anonymous(false).build();
-        let implicitly_non_anon_user = User::new("implicit".into()).build();
+        let anon_user = User::with_key("anon".into()).anonymous(true).build();
+        let non_anon_user = User::with_key("nonanon".into()).anonymous(false).build();
+        let implicitly_non_anon_user = User::with_key("implicit".into()).build();
 
         assert!(clause.matches(&anon_user));
         assert!(!clause.matches(&non_anon_user));
@@ -950,13 +956,13 @@ mod tests {
                 values: vec!["match".into()],
             };
 
-            let matching_user = User::new("mu".into())
+            let matching_user = User::with_key("mu".into())
                 .custom(hashmap! {attr.into() => "match".into()})
                 .build();
-            let non_matching_user = User::new("nmu".into())
+            let non_matching_user = User::with_key("nmu".into())
                 .custom(hashmap! {attr.into() => "nope".into()})
                 .build();
-            let user_without_attr = User::new("uwa".into())
+            let user_without_attr = User::with_key("uwa".into())
                 .custom(hashmap! {attr.into() => AttributeValue::Null})
                 .build();
 

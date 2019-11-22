@@ -27,7 +27,7 @@ fn main() {
         error!("Please enter your username on the command line.");
         exit(1);
     }
-    let user = User::new(flags[0].clone()).build();
+    let user = User::with_key(flags[0].clone()).build();
 
     // TODO move this wrapper into Client type
     let ld = Arc::new(RwLock::new(Client::new(&sdk_key)));
@@ -55,7 +55,7 @@ fn main() {
 
     let cb = cursive.cb_sink().clone();
 
-    let bar = ProgressBar::new()
+    let progress = ProgressBar::new()
         .with_task(move |counter| {
             fake_load(executor, ld, user, counter);
 
@@ -63,7 +63,7 @@ fn main() {
         })
         .full_width();
 
-    cursive.add_layer(bar);
+    cursive.add_layer(progress);
 
     cursive.set_autorefresh(true);
     cursive.run();

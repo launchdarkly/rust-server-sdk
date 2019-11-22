@@ -48,7 +48,7 @@ impl StreamingUpdateProcessor {
         store: &Arc<Mutex<FeatureStore>>,
     ) -> Result<StreamingUpdateProcessor> {
         let stream_url = format!("{}/all", base_url);
-        let client_builder = es::Client::for_url(&stream_url).map_err(|e| Error::EventSource(e))?;
+        let client_builder = es::Client::for_url(&stream_url).map_err(Error::EventSource)?;
         let es_client = client_builder
             .header("Authorization", sdk_key)
             .unwrap()
@@ -65,7 +65,7 @@ impl StreamingUpdateProcessor {
 
         tokio::spawn(lazy(move || {
             event_stream
-                .map_err(|e| Error::EventSource(e))
+                .map_err(Error::EventSource)
                 .for_each(move |event| {
                     let mut store = store.lock().unwrap();
 
@@ -84,10 +84,9 @@ impl StreamingUpdateProcessor {
 }
 
 fn event_field<'a>(event: &'a es::Event, field: &'a str) -> Result<&'a [u8]> {
-    event.field(field).ok_or(Error::MissingEventField(
-        event.event_type.clone(),
-        field.to_string(),
-    ))
+    event
+        .field(field)
+        .ok_or_else(|| Error::MissingEventField(event.event_type.clone(), field.to_string()))
 }
 
 fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
@@ -99,7 +98,8 @@ fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
 fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let put: PutData = parse_event_data(&event)?;
     if put.path == "/" {
-        Ok(store.init(put.data))
+        store.init(put.data);
+        Ok(())
     } else {
         Err(Error::InvalidEventPath(
             event.event_type,
@@ -110,10 +110,12 @@ fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
 
 fn process_patch(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
-    Ok(store.patch(&patch.path, patch.data))
+    store.patch(&patch.path, patch.data);
+    Ok(())
 }
 
 fn process_delete(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let delete: DeleteData = parse_event_data(&event)?;
-    Ok(store.delete(&delete.path))
+    store.delete(&delete.path);
+    Ok(())
 }

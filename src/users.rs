@@ -159,7 +159,7 @@ pub struct User {
 }
 
 impl User {
-    pub fn new(key: String) -> UserBuilder {
+    pub fn with_key(key: String) -> UserBuilder {
         UserBuilder::new(key)
     }
 
