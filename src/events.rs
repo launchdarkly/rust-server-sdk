@@ -15,9 +15,9 @@ pub struct BaseEvent {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind")]
+#[allow(clippy::large_enum_variant)]
 pub enum Event<'a> {
     #[serde(rename = "feature", rename_all = "camelCase")]
-    #[allow(clippy::large_enum_variant)]
     FeatureRequest {
         #[serde(flatten)]
         base: BaseEvent,

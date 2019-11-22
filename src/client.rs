@@ -61,7 +61,7 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn inline_users_in_events<'a>(&'a mut self, inline: bool) -> &'a mut ConfigBuilder {
+    pub fn inline_users_in_events(&mut self, inline: bool) -> &mut ConfigBuilder {
         self.config.inline_users_in_events = inline;
         self
     }
