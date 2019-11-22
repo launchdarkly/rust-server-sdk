@@ -7,7 +7,7 @@ use chrono::{self, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-const FLAGS_PREFIX: &'static str = "/flags/";
+const FLAGS_PREFIX: &str = "/flags/";
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -194,7 +194,7 @@ impl Rule {
                 return false;
             }
         }
-        return true;
+        true
     }
 }
 

@@ -8,8 +8,8 @@ use super::store::{FeatureStore, FlagValue};
 use super::update_processor::StreamingUpdateProcessor;
 use super::users::User;
 
-const DEFAULT_STREAM_BASE_URL: &'static str = "https://stream.launchdarkly.com";
-const DEFAULT_EVENTS_BASE_URL: &'static str = "https://events.launchdarkly.com";
+const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
+const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 #[derive(Debug)]
 pub enum Error {
@@ -78,9 +78,9 @@ impl ConfigBuilder {
                 .map_err(|e| Error::InvalidConfig(Box::new(e)))?;
         Ok(Client {
             config: self.config,
-            event_processor: event_processor,
-            update_processor: update_processor,
-            store: store,
+            event_processor,
+            update_processor,
+            store,
         })
     }
 }

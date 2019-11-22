@@ -17,7 +17,7 @@ impl EventProcessor {
     pub fn new(base_url: r::Url, sdk_key: &str) -> Self {
         EventProcessor {
             http: ra::Client::new(),
-            base_url: base_url,
+            base_url,
             sdk_key: sdk_key.to_string(),
         }
     }
