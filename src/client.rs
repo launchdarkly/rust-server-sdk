@@ -187,7 +187,6 @@ impl Client {
             key: flag.key.clone(),
             default: default_for_event,
             value: result.value.clone().unwrap(),
-            variation: result.variation_index,
             version: flag.version,
             prereq_of: None,
         };
