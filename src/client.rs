@@ -108,9 +108,8 @@ impl Client {
         flag_name: &str,
         default: bool,
     ) -> Detail<bool> {
-        self.evaluate_detail(user, flag_name)
+        self.evaluate_detail(user, flag_name, default.into())
             .try_map(|val| val.as_bool(), eval::Error::Exception)
-            .or(default)
     }
 
     pub fn str_variation_detail(
@@ -119,9 +118,8 @@ impl Client {
         flag_name: &str,
         default: &str,
     ) -> Detail<String> {
-        self.evaluate_detail(user, flag_name)
+        self.evaluate_detail(user, flag_name, default.to_string().into())
             .try_map(|val| val.as_string(), eval::Error::Exception)
-            .or_else(|| default.to_string())
     }
 
     pub fn float_variation_detail(
@@ -130,15 +128,13 @@ impl Client {
         flag_name: &str,
         default: f64,
     ) -> Detail<f64> {
-        self.evaluate_detail(user, flag_name)
+        self.evaluate_detail(user, flag_name, default.into())
             .try_map(|val| val.as_float(), eval::Error::Exception)
-            .or(default)
     }
 
     pub fn int_variation_detail(&self, user: &User, flag_name: &str, default: i64) -> Detail<i64> {
-        self.evaluate_detail(user, flag_name)
+        self.evaluate_detail(user, flag_name, default.into())
             .try_map(|val| val.as_int(), eval::Error::Exception)
-            .or(default)
     }
 
     pub fn all_flags_detail(&self, user: &User) -> HashMap<String, Detail<FlagValue>> {
@@ -152,43 +148,50 @@ impl Client {
         evals.collect()
     }
 
-    pub fn evaluate_detail(&self, user: &User, flag_name: &str) -> Detail<FlagValue> {
+    pub fn evaluate_detail(
+        &self,
+        user: &User,
+        flag_name: &str,
+        default: FlagValue,
+    ) -> Detail<FlagValue> {
         let store = self.store.lock().unwrap();
         let flag = match store.flag(flag_name) {
             Some(flag) => flag,
-            None => return Detail::err(eval::Error::FlagNotFound),
+            None => return Detail::err_default(eval::Error::FlagNotFound, default),
         };
 
         if user.key().is_none() {
-            return Detail::err(eval::Error::UserNotSpecified);
+            // TODO still send event in this case
+            return Detail::err_default(eval::Error::UserNotSpecified, default);
         }
 
-        // TODO can we avoid the clone here?
-        let result = flag.evaluate(user).map(|v| v.clone());
+        let default_for_event = default.clone();
 
-        if let Some(value) = result.value.clone() {
-            let event = Event::FeatureRequest {
-                base: BaseEvent {
-                    creation_date: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64,
-                    user: user.clone(), // TODO pass user as owned to avoid clone?
-                },
-                user: if self.config.inline_users_in_events {
-                    Some(user.clone())
-                } else {
-                    None
-                },
-                user_key: user.key().cloned(),
-                key: flag.key.clone(),
-                default: value.clone(), // TODO populate iff default value was used
-                value,                  // TODO need to know default value provided
-                version: flag.version,
-                prereq_of: None,
-            };
-            self.event_processor.send(event);
-        }
+        // TODO can we avoid the clone here if this returns a &FlagValue instead?
+        let result = flag.evaluate(user).map(|v| v.clone()).or(default);
+
+        let event = Event::FeatureRequest {
+            base: BaseEvent {
+                creation_date: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+                user: user.clone(), // TODO pass user as owned to avoid clone?
+            },
+            user: if self.config.inline_users_in_events {
+                Some(user.clone())
+            } else {
+                None
+            },
+            user_key: user.key().cloned(),
+            key: flag.key.clone(),
+            default: default_for_event,
+            value: result.value.clone().unwrap(),
+            variation: result.variation_index,
+            version: flag.version,
+            prereq_of: None,
+        };
+        self.event_processor.send(event);
 
         result
     }

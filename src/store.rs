@@ -19,6 +19,30 @@ pub enum FlagValue {
     NotYetImplemented(serde_json::Value),
 }
 
+impl From<bool> for FlagValue {
+    fn from(b: bool) -> FlagValue {
+        return FlagValue::Bool(b);
+    }
+}
+
+impl From<String> for FlagValue {
+    fn from(s: String) -> FlagValue {
+        return FlagValue::Str(s);
+    }
+}
+
+impl From<f64> for FlagValue {
+    fn from(f: f64) -> FlagValue {
+        return FlagValue::Float(f);
+    }
+}
+
+impl From<i64> for FlagValue {
+    fn from(i: i64) -> FlagValue {
+        return FlagValue::Float(i as f64);
+    }
+}
+
 impl FlagValue {
     // TODO implement type coercion here?
 

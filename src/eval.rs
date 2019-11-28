@@ -18,8 +18,16 @@ impl<T> Detail<T> {
         }
     }
 
-    pub fn err(e: Error) -> Detail<T> {
-        Detail::empty(Reason::Error { error: e })
+    pub fn err_default(error: Error, default: T) -> Detail<T> {
+        Detail {
+            value: Some(default),
+            variation_index: None,
+            reason: Reason::Error { error },
+        }
+    }
+
+    pub fn err(error: Error) -> Detail<T> {
+        Detail::empty(Reason::Error { error })
     }
 
     pub fn map<U, F>(self, f: F) -> Detail<U>
