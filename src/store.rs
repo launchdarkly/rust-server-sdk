@@ -21,25 +21,25 @@ pub enum FlagValue {
 
 impl From<bool> for FlagValue {
     fn from(b: bool) -> FlagValue {
-        return FlagValue::Bool(b);
+        FlagValue::Bool(b)
     }
 }
 
 impl From<String> for FlagValue {
     fn from(s: String) -> FlagValue {
-        return FlagValue::Str(s);
+        FlagValue::Str(s)
     }
 }
 
 impl From<f64> for FlagValue {
     fn from(f: f64) -> FlagValue {
-        return FlagValue::Float(f);
+        FlagValue::Float(f)
     }
 }
 
 impl From<i64> for FlagValue {
     fn from(i: i64) -> FlagValue {
-        return FlagValue::Float(i as f64);
+        FlagValue::Float(i as f64)
     }
 }
 
