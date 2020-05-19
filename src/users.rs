@@ -215,6 +215,11 @@ impl User {
             _ => self.custom.get(attr),
         }
     }
+
+    pub fn attribute<T: Into<AttributeValue>>(&mut self, key: &str, value: T) {
+        // TODO handle non-custom too
+        self.custom.insert(key.to_string(), value.into());
+    }
 }
 
 pub struct UserBuilder {

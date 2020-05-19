@@ -72,7 +72,7 @@ fn main() {
 fn fake_load(
     mut executor: impl tokio_executor::Executor,
     ld: Arc<RwLock<Client>>,
-    user: User,
+    mut user: User,
     counter: Counter,
 ) {
     let mut entered = tokio_executor::enter().expect("enter");
@@ -80,15 +80,18 @@ fn fake_load(
     tokio_executor::with_default(&mut executor, &mut entered, |_| {
         let ld = ld.read().unwrap();
 
-        while counter.get() < 80 {
+        while counter.get() < 20 {
             thread::sleep(Duration::from_millis(20));
             counter.tick(1);
         }
 
         while counter.get() < 100 {
-            thread::sleep(Duration::from_millis(100));
+            user.attribute("progress", counter.get() as i64);
 
-            let increase = ld.bool_variation_detail(&user, "test-demo", false);
+            let millis = ld.int_variation_detail(&user, "progress-delay", 100);
+            thread::sleep(Duration::from_millis(millis.value.unwrap() as u64));
+
+            let increase = ld.bool_variation_detail(&user, "make-progress", false);
 
             if increase.value.unwrap() {
                 counter.tick(1);
