@@ -2,6 +2,7 @@ use std::fmt::{self, Display, Formatter};
 
 use serde::Serialize;
 
+use super::eval::VariationIndex;
 use super::store::FlagValue;
 use super::users::User;
 
@@ -59,6 +60,7 @@ pub enum Event {
         key: String,
         user_key: Option<String>,
         value: FlagValue,
+        variation: Option<VariationIndex>,
         default: FlagValue,
         version: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
