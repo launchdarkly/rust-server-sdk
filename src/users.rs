@@ -35,6 +35,12 @@ impl From<bool> for AttributeValue {
     }
 }
 
+impl From<i64> for AttributeValue {
+    fn from(i: i64) -> AttributeValue {
+        AttributeValue::Number(i as f64)
+    }
+}
+
 impl<T> From<Vec<T>> for AttributeValue
 where
     AttributeValue: From<T>,
