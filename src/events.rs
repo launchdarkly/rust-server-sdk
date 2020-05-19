@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
 use serde::Serialize;
@@ -71,6 +72,12 @@ pub enum Event {
         #[serde(flatten)]
         base: BaseEvent,
     },
+    #[serde(rename = "summary", rename_all = "camelCase")]
+    Summary {
+        start_date: u64,
+        end_date: u64,
+        features: HashMap<String, FeatureSummary>,
+    },
 }
 
 impl Display for Event {
@@ -91,7 +98,54 @@ impl Event {
                 base.user = base.user.force_inlined();
                 Some(Event::Index { base })
             }
-            Event::Index { .. } => None,
+            Event::Index { .. } | Event::Summary { .. } => None,
         }
     }
+
+    pub fn make_singleton_summary(&self) -> Option<Event> {
+        match self {
+            Event::FeatureRequest {
+                base: BaseEvent { creation_date, .. },
+                key,
+                value,
+                version,
+                variation,
+                default,
+                ..
+            } => {
+                let feature = FeatureSummary {
+                    default: default.clone(),
+                    counters: vec![VariationCounter {
+                        value: value.clone(),
+                        version: *version,
+                        variation: *variation,
+                        count: 1,
+                    }],
+                };
+                let mut features = HashMap::with_capacity(1);
+                features.insert(key.clone(), feature);
+                Some(Event::Summary {
+                    start_date: *creation_date,
+                    end_date: *creation_date,
+                    features,
+                })
+            }
+            Event::Index { .. } | Event::Summary { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FeatureSummary {
+    pub default: FlagValue,
+    pub counters: Vec<VariationCounter>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VariationCounter {
+    pub value: FlagValue,
+    pub version: u64,
+    pub count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variation: Option<VariationIndex>,
 }

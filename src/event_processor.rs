@@ -58,9 +58,15 @@ impl EventProcessor {
             }
         }
 
-        match event.make_index_event() {
-            Some(index) => self._send(index),
-            None => Ok(()),
+        if let Some(index) = event.make_index_event() {
+            self._send(index)?;
         }
+
+        // TODO make real summaries once we have batching
+        if let Some(summary) = event.make_singleton_summary() {
+            self._send(summary)?;
+        }
+
+        Ok(())
     }
 }
