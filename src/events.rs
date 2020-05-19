@@ -6,24 +6,57 @@ use super::store::FlagValue;
 use super::users::User;
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum MaybeInlinedUser {
+    Inlined(User),
+    NotInlined(User),
+}
+
+impl MaybeInlinedUser {
+    pub fn new(inline: bool, user: User) -> Self {
+        if inline {
+            MaybeInlinedUser::Inlined(user)
+        } else {
+            MaybeInlinedUser::NotInlined(user)
+        }
+    }
+
+    fn is_inlined(&self) -> bool {
+        match self {
+            MaybeInlinedUser::Inlined(_) => true,
+            MaybeInlinedUser::NotInlined(_) => false,
+        }
+    }
+
+    fn not_inlined(&self) -> bool {
+        !self.is_inlined()
+    }
+
+    fn force_inlined(self) -> Self {
+        match self {
+            MaybeInlinedUser::Inlined(_) => self,
+            MaybeInlinedUser::NotInlined(u) => MaybeInlinedUser::Inlined(u),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseEvent {
     pub creation_date: u64,
-    #[serde(skip_serializing)]
-    pub user: User,
+    #[serde(skip_serializing_if = "MaybeInlinedUser::not_inlined")]
+    pub user: MaybeInlinedUser,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
-pub enum Event<'a> {
+pub enum Event {
     #[serde(rename = "feature", rename_all = "camelCase")]
     FeatureRequest {
         #[serde(flatten)]
         base: BaseEvent,
         key: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        user: Option<User>,
         user_key: Option<String>,
         value: FlagValue,
         default: FlagValue,
@@ -35,11 +68,10 @@ pub enum Event<'a> {
     Index {
         #[serde(flatten)]
         base: BaseEvent,
-        user: &'a User,
     },
 }
 
-impl<'a> Display for Event<'a> {
+impl Display for Event {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let json = serde_json::to_string_pretty(self)
             .unwrap_or_else(|e| format!("JSON serialization failed ({}): {:?}", e, self));
@@ -47,14 +79,16 @@ impl<'a> Display for Event<'a> {
     }
 }
 
-impl<'a> Event<'a> {
+impl Event {
     pub fn make_index_event(&self) -> Option<Event> {
         match self {
-            Event::FeatureRequest { base, .. } => Some(Event::Index {
-                // difficult to avoid clone here because we can't express internal references
-                base: base.clone(),
-                user: &base.user,
-            }),
+            Event::FeatureRequest { base, .. } => {
+                // difficult to avoid clone here because we can't express that we're not "really"
+                // borrowing base.clone().user
+                let mut base = base.clone();
+                base.user = base.user.force_inlined();
+                Some(Event::Index { base })
+            }
             Event::Index { .. } => None,
         }
     }

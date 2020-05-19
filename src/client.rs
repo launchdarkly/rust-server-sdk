@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use super::eval::{self, Detail};
 use super::event_processor::EventProcessor;
-use super::events::{BaseEvent, Event};
+use super::events::{BaseEvent, Event, MaybeInlinedUser};
 use super::store::{FeatureStore, FlagValue};
 use super::update_processor::StreamingUpdateProcessor;
 use super::users::User;
@@ -176,12 +176,7 @@ impl Client {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64,
-                user: user.clone(), // TODO pass user as owned to avoid clone?
-            },
-            user: if self.config.inline_users_in_events {
-                Some(user.clone())
-            } else {
-                None
+                user: MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
             },
             user_key: user.key().cloned(),
             key: flag.key.clone(),
