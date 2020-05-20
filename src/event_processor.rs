@@ -1,25 +1,28 @@
+use super::event_sink as sink;
 use super::events::Event;
 
-use futures::Future;
+use std::sync::{Arc, RwLock};
+
 use reqwest as r;
 use reqwest::r#async as ra;
-use tokio::executor::{DefaultExecutor, Executor};
 
 type Error = String; // TODO
 
 pub struct EventProcessor {
-    http: ra::Client,
-    base_url: r::Url,
-    sdk_key: String,
+    sink: Arc<RwLock<dyn sink::EventSink>>,
 }
 
 impl EventProcessor {
     pub fn new(base_url: r::Url, sdk_key: &str) -> Self {
-        EventProcessor {
+        Self::new_with_sink(Arc::new(RwLock::new(sink::OneShotTokioSink {
             http: ra::Client::new(),
             base_url,
             sdk_key: sdk_key.to_string(),
-        }
+        })))
+    }
+
+    pub fn new_with_sink(sink: Arc<RwLock<(impl sink::EventSink + 'static)>>) -> Self {
+        EventProcessor { sink }
     }
 
     pub fn send(&self, event: Event) {
@@ -29,34 +32,13 @@ impl EventProcessor {
     }
 
     fn _send(&self, event: Event) -> Result<(), Error> {
-        let mut url = self.base_url.clone();
-        url.set_path("/bulk");
         let json = serde_json::to_vec(&vec![&event]).map_err(|e| e.to_string())?;
         debug!(
             "Sending: {}",
             serde_json::to_string_pretty(&vec![&event]).map_err(|e| e.to_string())?,
         );
-        let request = self
-            .http
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("Authorization", self.sdk_key.clone())
-            .body(json);
-        match DefaultExecutor::current().status() {
-            // TODO queue events instead of dropping them
-            Err(e) => info!("skipping event send because executor is not ready: {}", e),
-            Ok(_) => {
-                tokio::spawn(
-                    request
-                        .send()
-                        .map_err(|e| error!("error sending event: {}", e))
-                        .map(|resp| match resp.error_for_status() {
-                            Ok(resp) => debug!("sent event: {:?}", resp),
-                            Err(e) => warn!("error response sending event: {}", e),
-                        }),
-                );
-            }
-        }
+
+        let result = self.sink.write().unwrap().send(json);
 
         if let Some(index) = event.make_index_event() {
             self._send(index)?;
@@ -67,6 +49,41 @@ impl EventProcessor {
             self._send(summary)?;
         }
 
-        Ok(())
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use spectral::prelude::*;
+
+    use super::*;
+    use crate::events::BaseEvent;
+    use crate::users::UserBuilder;
+
+    #[test]
+    fn serializes_index_event() {
+        let jsons = Arc::new(RwLock::new(sink::TestSink::new()));
+        let ep = EventProcessor::new_with_sink(jsons.clone());
+
+        let user =
+            crate::events::MaybeInlinedUser::Inlined(UserBuilder::new("foo".to_string()).build());
+        ep.send(Event::Index {
+            base: BaseEvent {
+                creation_date: 42,
+                user,
+            },
+        });
+
+        let jsons = jsons.read().unwrap();
+        assert_that!(*jsons).has_length(1);
+        let json = &jsons[0];
+        assert_that!(utf8(json)).is_equal_to(
+            r#"[{"kind":"index","creationDate":42,"user":{"key":"foo","custom":{}}}]"#,
+        );
+    }
+
+    fn utf8(bytes: &[u8]) -> &str {
+        std::str::from_utf8(bytes).expect("not utf-8")
     }
 }
