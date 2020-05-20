@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::eval::{self, Detail};
 use super::event_processor::EventProcessor;
+use super::event_sink::{self, EventSink};
 use super::events::{BaseEvent, Event, MaybeInlinedUser};
 use super::store::{FeatureStore, FlagValue};
 use super::update_processor::StreamingUpdateProcessor;
@@ -42,37 +43,48 @@ impl Default for Config {
     }
 }
 
-pub struct ConfigBuilder {
+pub struct ClientBuilder {
     stream_base_url: String,
     events_base_url: String,
     config: Config,
+    event_sink: Option<Arc<RwLock<dyn EventSink>>>,
 }
 
-impl ConfigBuilder {
-    pub fn stream_base_url<'a>(&'a mut self, url: &str) -> &'a mut ConfigBuilder {
+impl ClientBuilder {
+    pub fn stream_base_url<'a>(&'a mut self, url: &str) -> &'a mut ClientBuilder {
         let url = trim_base_url(url);
         self.stream_base_url = url.to_owned();
         self
     }
 
-    pub fn events_base_url<'a>(&'a mut self, url: &str) -> &'a mut ConfigBuilder {
+    pub fn events_base_url<'a>(&'a mut self, url: &str) -> &'a mut ClientBuilder {
         let url = trim_base_url(url);
         self.events_base_url = url.to_owned();
         self
     }
 
-    pub fn inline_users_in_events(&mut self, inline: bool) -> &mut ConfigBuilder {
+    pub fn inline_users_in_events(&mut self, inline: bool) -> &mut ClientBuilder {
         self.config.inline_users_in_events = inline;
+        self
+    }
+
+    #[cfg(test)]
+    fn event_sink(&mut self, sink: Arc<RwLock<dyn EventSink>>) -> &mut ClientBuilder {
+        self.event_sink = Some(sink);
         self
     }
 
     pub fn build(&self, sdk_key: &str) -> Result<Client> {
         let store = Arc::new(Mutex::new(FeatureStore::new()));
-        let event_processor = EventProcessor::new(
-            reqwest::Url::parse(&self.events_base_url)
-                .map_err(|e| Error::InvalidConfig(Box::new(e)))?,
-            sdk_key,
-        );
+        let event_processor = match &self.event_sink {
+            None => reqwest::Url::parse(&self.events_base_url)
+                .map_err(|e| Error::InvalidConfig(Box::new(e)))
+                .map(|base_url| EventProcessor::new(base_url, sdk_key))?,
+            Some(sink) => {
+                // clone sink Arc so we don't have to consume builder
+                EventProcessor::new_with_sink(sink.clone())
+            }
+        };
         let update_processor =
             StreamingUpdateProcessor::new(&self.stream_base_url, sdk_key, &store)
                 .map_err(|e| Error::InvalidConfig(Box::new(e)))?;
@@ -90,11 +102,12 @@ impl Client {
         Client::configure().build(sdk_key).unwrap()
     }
 
-    pub fn configure() -> ConfigBuilder {
-        ConfigBuilder {
+    pub fn configure() -> ClientBuilder {
+        ClientBuilder {
             config: Config::default(),
             stream_base_url: DEFAULT_STREAM_BASE_URL.to_string(),
             events_base_url: DEFAULT_EVENTS_BASE_URL.to_string(),
+            event_sink: None,
         }
     }
 
@@ -204,7 +217,9 @@ fn trim_base_url(mut url: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::trim_base_url;
+    use super::*;
+
+    use spectral::prelude::*;
 
     #[test]
     fn test_trim_base_url() {
@@ -215,5 +230,26 @@ mod tests {
         assert_eq!(trim_base_url("http://localhost/"), "http://localhost");
 
         assert_eq!(trim_base_url("localhost////////"), "localhost");
+    }
+
+    #[test]
+    fn can_construct_client_and_override_event_sink() {
+        let jsons = Arc::new(RwLock::new(event_sink::TestSink::new()));
+
+        let client = Client::configure()
+            .event_sink(jsons.clone())
+            .build("dummy_key")
+            .unwrap();
+
+        let result = client.bool_variation_detail(
+            &User::with_key("foo".to_string()).build(),
+            "someFlag",
+            false,
+        );
+
+        assert_that!(result.value).contains_value(false);
+
+        let jsons = jsons.read().unwrap();
+        assert_that!(*jsons).is_empty();
     }
 }

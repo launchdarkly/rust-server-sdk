@@ -21,7 +21,7 @@ impl EventProcessor {
         })))
     }
 
-    pub fn new_with_sink(sink: Arc<RwLock<(impl sink::EventSink + 'static)>>) -> Self {
+    pub fn new_with_sink(sink: Arc<RwLock<dyn sink::EventSink>>) -> Self {
         EventProcessor { sink }
     }
 
@@ -59,7 +59,7 @@ mod tests {
 
     use super::*;
     use crate::events::BaseEvent;
-    use crate::users::UserBuilder;
+    use crate::users::User;
 
     #[test]
     fn serializes_index_event() {
@@ -67,7 +67,7 @@ mod tests {
         let ep = EventProcessor::new_with_sink(jsons.clone());
 
         let user =
-            crate::events::MaybeInlinedUser::Inlined(UserBuilder::new("foo".to_string()).build());
+            crate::events::MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
         ep.send(Event::Index {
             base: BaseEvent {
                 creation_date: 42,
