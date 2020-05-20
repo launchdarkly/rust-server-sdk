@@ -426,13 +426,12 @@ mod tests {
     #[test]
     fn test_parse_variation_or_rollout() {
         let variation: VariationOrRolloutOrMalformed =
-            serde_json::from_str("{\"variation\":4}").expect("should parse");
+            serde_json::from_str(r#"{"variation":4}"#).expect("should parse");
         assert_that!(variation.get()).is_ok_containing(&VariationOrRollout::Variation(4));
 
-        let rollout: VariationOrRolloutOrMalformed = serde_json::from_str(
-            "{\"rollout\":{\"variations\":[{\"variation\":1,\"weight\":100000}]}}",
-        )
-        .expect("should parse");
+        let rollout: VariationOrRolloutOrMalformed =
+            serde_json::from_str(r#"{"rollout":{"variations":[{"variation":1,"weight":100000}]}}"#)
+                .expect("should parse");
         assert_that!(rollout.get()).is_ok_containing(&VariationOrRollout::Rollout(
             json! { {"variations": [{"variation": 1, "weight": 100000}]} },
         ));
@@ -442,42 +441,42 @@ mod tests {
         assert_that!(malformed.get()).is_err();
     }
 
-    const TEST_FLAG_JSON: &str = "{
-        \"key\": \"test-flag\",
-        \"version\": 1,
-        \"on\": false,
-        \"targets\": [
-            {\"values\": [\"bob\"], \"variation\": 1}
+    const TEST_FLAG_JSON: &str = r#"{
+        "key": "test-flag",
+        "version": 1,
+        "on": false,
+        "targets": [
+            {"values": ["bob"], "variation": 1}
         ],
-        \"rules\": [],
-        \"fallthrough\": {\"variation\": 0},
-        \"offVariation\": 1,
-        \"variations\": [true, false]
-    }";
+        "rules": [],
+        "fallthrough": {"variation": 0},
+        "offVariation": 1,
+        "variations": [true, false]
+    }"#;
 
-    const FLAG_WITH_RULES_JSON: &str = "{
-        \"key\": \"with-rules\",
-        \"version\": 1,
-        \"on\": false,
-        \"targets\": [],
-        \"rules\": [
+    const FLAG_WITH_RULES_JSON: &str = r#"{
+        "key": "with-rules",
+        "version": 1,
+        "on": false,
+        "targets": [],
+        "rules": [
             {
-                \"clauses\": [
+                "clauses": [
                     {
-                        \"attribute\": \"team\",
-                        \"negate\": false,
-                        \"op\": \"in\",
-                        \"values\": [\"Avengers\"]
+                        "attribute": "team",
+                        "negate": false,
+                        "op": "in",
+                        "values": ["Avengers"]
                     }
                 ],
-                \"id\": \"667e5007-01e4-4b51-9e33-5abe7f892790\",
-                \"variation\": 1
+                "id": "667e5007-01e4-4b51-9e33-5abe7f892790",
+                "variation": 1
             }
         ],
-        \"fallthrough\": {\"variation\": 0},
-        \"offVariation\": 1,
-        \"variations\": [true, false]
-    }";
+        "fallthrough": {"variation": 0},
+        "offVariation": 1,
+        "variations": [true, false]
+    }"#;
 
     #[test]
     fn test_parse_flag() {
