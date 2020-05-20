@@ -93,7 +93,7 @@ impl<T> Detail<T> {
 // Reason describes the reason that a flag evaluation producted a particular value.
 // The Serialize implementation is used internally in cases where LaunchDarkly
 // needs to unmarshal a Reason value from JSON.
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "kind")]
 pub enum Reason {
     // Off indicates that the flag was off and therefore returned its configured off value.
@@ -119,7 +119,7 @@ pub enum Reason {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Error {
     // ClientNotReady indicates that the caller tried to evaluate a flag before the client

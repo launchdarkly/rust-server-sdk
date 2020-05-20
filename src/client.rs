@@ -181,6 +181,7 @@ impl Client {
             user_key: user.key().cloned(),
             key: flag.key.clone(),
             default: default_for_event,
+            reason: result.reason,
             value: result.value.clone().unwrap(),
             variation: result.variation_index,
             version: flag.version,
