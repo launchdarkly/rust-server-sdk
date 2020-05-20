@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use super::eval::{self, Detail};
 use super::event_processor::EventProcessor;
-use super::event_sink::{self, EventSink};
+use super::event_sink::EventSink;
 use super::events::{BaseEvent, Event, MaybeInlinedUser};
 use super::store::{FeatureStore, FlagValue};
-use super::update_processor::StreamingUpdateProcessor;
+use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
 use super::users::User;
 
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
@@ -26,7 +26,7 @@ pub struct Client {
     //sdk_key: String,
     config: Config,
     event_processor: EventProcessor,
-    update_processor: StreamingUpdateProcessor,
+    update_processor: Arc<Mutex<dyn UpdateProcessor>>,
     store: Arc<Mutex<FeatureStore>>,
 }
 
@@ -47,6 +47,7 @@ pub struct ClientBuilder {
     stream_base_url: String,
     events_base_url: String,
     config: Config,
+    update_processor: Option<Arc<Mutex<dyn UpdateProcessor>>>,
     event_sink: Option<Arc<RwLock<dyn EventSink>>>,
 }
 
@@ -68,6 +69,14 @@ impl ClientBuilder {
         self
     }
 
+    pub fn update_processor(
+        &mut self,
+        processor: Arc<Mutex<dyn UpdateProcessor>>,
+    ) -> &mut ClientBuilder {
+        self.update_processor = Some(processor);
+        self
+    }
+
     #[cfg(test)]
     fn event_sink(&mut self, sink: Arc<RwLock<dyn EventSink>>) -> &mut ClientBuilder {
         self.event_sink = Some(sink);
@@ -75,7 +84,7 @@ impl ClientBuilder {
     }
 
     pub fn build(&self, sdk_key: &str) -> Result<Client> {
-        let store = Arc::new(Mutex::new(FeatureStore::new()));
+        let store = FeatureStore::new();
         let event_processor = match &self.event_sink {
             None => reqwest::Url::parse(&self.events_base_url)
                 .map_err(|e| Error::InvalidConfig(Box::new(e)))
@@ -85,14 +94,18 @@ impl ClientBuilder {
                 EventProcessor::new_with_sink(sink.clone())
             }
         };
-        let update_processor =
-            StreamingUpdateProcessor::new(&self.stream_base_url, sdk_key, &store)
-                .map_err(|e| Error::InvalidConfig(Box::new(e)))?;
+        let update_processor = match &self.update_processor {
+            None => Arc::new(Mutex::new(
+                StreamingUpdateProcessor::new(&self.stream_base_url, sdk_key)
+                    .map_err(|e| Error::InvalidConfig(Box::new(e)))?,
+            )),
+            Some(update_processor) => update_processor.clone(),
+        };
         Ok(Client {
             config: self.config,
             event_processor,
             update_processor,
-            store,
+            store: Arc::new(Mutex::new(store)),
         })
     }
 }
@@ -107,12 +120,16 @@ impl Client {
             config: Config::default(),
             stream_base_url: DEFAULT_STREAM_BASE_URL.to_string(),
             events_base_url: DEFAULT_EVENTS_BASE_URL.to_string(),
+            update_processor: None,
             event_sink: None,
         }
     }
 
     pub fn start(&mut self) {
-        self.update_processor.subscribe()
+        self.update_processor
+            .lock()
+            .unwrap()
+            .subscribe(self.store.clone())
     }
 
     pub fn bool_variation_detail(
@@ -218,6 +235,10 @@ fn trim_base_url(mut url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::Reason;
+    use crate::event_sink::MockSink;
+    use crate::store::{FeatureFlag, PatchTarget};
+    use crate::update_processor::{MockUpdateProcessor, PatchData};
 
     use spectral::prelude::*;
 
@@ -233,23 +254,53 @@ mod tests {
     }
 
     #[test]
-    fn can_construct_client_and_override_event_sink() {
-        let jsons = Arc::new(RwLock::new(event_sink::TestSink::new()));
+    // TODO split this test up: test update_processor and event_processor separately and just
+    // mutate store to test evals
+    fn client_receives_updates_evals_flags_and_sends_events() {
+        let user = User::with_key("foo".to_string()).build();
 
-        let client = Client::configure()
+        let updates = Arc::new(Mutex::new(MockUpdateProcessor::new()));
+        let jsons = Arc::new(RwLock::new(MockSink::new()));
+
+        let mut client = Client::configure()
+            .update_processor(updates.clone())
             .event_sink(jsons.clone())
             .build("dummy_key")
-            .unwrap();
+            .expect("client should build");
 
-        let result = client.bool_variation_detail(
-            &User::with_key("foo".to_string()).build(),
-            "someFlag",
-            false,
-        );
+        let result = client.bool_variation_detail(&user, "someFlag", false);
 
         assert_that!(result.value).contains_value(false);
 
+        {
+            let jsons = jsons.read().unwrap();
+            assert_that!(*jsons).is_empty();
+        }
+
+        client.start();
+
+        let updates = updates.lock().unwrap();
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(FeatureFlag::basic_flag("myFlag")),
+            })
+            .expect("patch should apply");
+
+        let result = client.bool_variation_detail(&user, "myFlag", false);
+
+        assert_that!(result.value).contains_value(true);
+        assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
+
         let jsons = jsons.read().unwrap();
-        assert_that!(*jsons).is_empty();
+        assert_that!(*jsons).has_length(3); // TODO should be 2
+        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"feature""#)); // TODO should not
+        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"summary""#));
+        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"index""#));
+    }
+
+    fn utf8(bytes: &[u8]) -> &str {
+        std::str::from_utf8(bytes).expect("not utf-8")
     }
 }

@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn serializes_index_event() {
-        let jsons = Arc::new(RwLock::new(sink::TestSink::new()));
+        let jsons = Arc::new(RwLock::new(sink::MockSink::new()));
         let ep = EventProcessor::new_with_sink(jsons.clone());
 
         let user =

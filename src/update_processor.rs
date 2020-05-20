@@ -19,48 +19,45 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Deserialize)]
-struct PutData {
+pub(crate) struct PutData {
     path: String,
     data: AllData,
 }
 
 #[derive(Deserialize)]
-struct PatchData {
-    path: String,
-    data: PatchTarget,
+pub(crate) struct PatchData {
+    pub path: String,
+    pub data: PatchTarget,
 }
 
 #[derive(Deserialize)]
-struct DeleteData {
+pub(crate) struct DeleteData {
     path: String,
     // TODO care about version
 }
 
+pub trait UpdateProcessor: Send {
+    fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>);
+}
+
 pub struct StreamingUpdateProcessor {
     es_client: es::Client,
-    store: Arc<Mutex<FeatureStore>>,
 }
 
 impl StreamingUpdateProcessor {
-    pub fn new(
-        base_url: &str,
-        sdk_key: &str,
-        store: &Arc<Mutex<FeatureStore>>,
-    ) -> Result<StreamingUpdateProcessor> {
+    pub fn new(base_url: &str, sdk_key: &str) -> Result<StreamingUpdateProcessor> {
         let stream_url = format!("{}/all", base_url);
         let client_builder = es::Client::for_url(&stream_url).map_err(Error::EventSource)?;
         let es_client = client_builder
             .header("Authorization", sdk_key)
             .unwrap()
             .build();
-        Ok(StreamingUpdateProcessor {
-            es_client,
-            store: store.clone(),
-        })
+        Ok(StreamingUpdateProcessor { es_client })
     }
+}
 
-    pub fn subscribe(&mut self) {
-        let store = self.store.clone();
+impl UpdateProcessor for StreamingUpdateProcessor {
+    fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>) {
         let event_stream = self.es_client.stream();
 
         tokio::spawn(lazy(move || {
@@ -80,6 +77,35 @@ impl StreamingUpdateProcessor {
                 })
                 .map_err(|e| error!("update processor got an error: {:?}", e))
         }));
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct MockUpdateProcessor {
+    store: Option<Arc<Mutex<FeatureStore>>>,
+}
+
+#[cfg(test)]
+impl MockUpdateProcessor {
+    pub fn new() -> Self {
+        return MockUpdateProcessor { store: None };
+    }
+
+    pub fn patch(&self, patch: PatchData) -> Result<()> {
+        Ok(self
+            .store
+            .as_ref()
+            .expect("not subscribed")
+            .lock()
+            .unwrap()
+            .patch(&patch.path, patch.data))
+    }
+}
+
+#[cfg(test)]
+impl UpdateProcessor for MockUpdateProcessor {
+    fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>) {
+        self.store = Some(store);
     }
 }
 

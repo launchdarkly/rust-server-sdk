@@ -277,6 +277,22 @@ pub struct FeatureFlag {
 }
 
 impl FeatureFlag {
+    #[cfg(test)]
+    pub fn basic_flag(key: &str) -> FeatureFlag {
+        FeatureFlag {
+            key: key.to_string(),
+            version: 42,
+            on: true,
+            targets: vec![],
+            rules: vec![],
+            fallthrough: VariationOrRolloutOrMalformed::VariationOrRollout(
+                VariationOrRollout::Variation(1),
+            ),
+            off_variation: Some(0),
+            variations: vec![false.into(), true.into()],
+        }
+    }
+
     pub fn evaluate(&self, user: &User) -> Detail<&FlagValue> {
         if user.key().is_none() {
             return Detail::err(eval::Error::UserNotSpecified);

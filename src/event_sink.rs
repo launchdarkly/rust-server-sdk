@@ -50,10 +50,10 @@ impl EventSink for OneShotTokioSink {
 }
 
 #[cfg(test)]
-pub type TestSink = Vec<Vec<u8>>;
+pub type MockSink = Vec<Vec<u8>>;
 
 #[cfg(test)]
-impl EventSink for TestSink {
+impl EventSink for MockSink {
     fn send(&mut self, json: Vec<u8>) -> Result<(), Error> {
         self.push(json);
         Ok(())
