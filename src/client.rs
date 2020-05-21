@@ -189,10 +189,31 @@ impl Client {
             flag,
             result.clone(),
             default_for_event,
+            true,
         );
         self.event_processor.send(event);
 
         result
+    }
+
+    pub fn evaluate(&self, user: &User, flag_key: &str, default: FlagValue) -> FlagValue {
+        let default_for_event = default.clone();
+
+        let (flag, result) = self.evaluate_internal(user, flag_key, default);
+
+        let event = Event::new_feature_request(
+            flag_key,
+            MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+            flag,
+            result.clone(),
+            default_for_event,
+            false,
+        );
+        self.event_processor.send(event);
+
+        // unwrap is safe here because value should have been replaced with default if it was None.
+        // TODO that is ugly, use the type system to fix it
+        result.value.unwrap()
     }
 
     fn evaluate_internal(

@@ -75,7 +75,8 @@ pub enum Event {
         value: FlagValue,
         variation: Option<VariationIndex>,
         default: FlagValue,
-        reason: Reason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<Reason>,
         version: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prereq_of: Option<String>,
@@ -108,12 +109,18 @@ impl Event {
         flag: Option<FeatureFlag>,
         detail: Detail<FlagValue>,
         default: FlagValue,
+        send_reason: bool,
     ) -> Self {
         let user_key = user.key().cloned();
 
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO that is ugly, use the type system to fix it
         let value = detail.value.unwrap();
+
+        let reason = match send_reason {
+            false => None,
+            true => Some(detail.reason),
+        };
 
         Event::FeatureRequest {
             base: BaseEvent {
@@ -126,7 +133,7 @@ impl Event {
             user_key,
             key: flag_key.to_owned(),
             default,
-            reason: detail.reason,
+            reason,
             value,
             variation: detail.variation_index,
             version: flag.map(|f| f.version),
