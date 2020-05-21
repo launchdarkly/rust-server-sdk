@@ -277,7 +277,7 @@ mod tests {
     fn client_receives_updates_evals_flags_and_sends_events() {
         let user = User::with_key("foo".to_string()).build();
 
-        let (mut client, updates, jsons) = make_mocked_client();
+        let (mut client, updates, events) = make_mocked_client();
 
         let result = client.bool_variation_detail(&user, "someFlag", false);
 
@@ -299,17 +299,17 @@ mod tests {
         assert_that!(result.value).contains_value(true);
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
 
-        let jsons = jsons.read().unwrap();
-        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"feature""#)); // TODO test this is absent unless trackEvents = true or various other conditions
-        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"summary""#));
-        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"index""#));
+        let events = events.read().unwrap();
+        assert_that!(*events).matching_contains(|event| event.kind() == "feature"); // TODO test this is absent unless trackEvents = true or various other conditions
+        assert_that!(*events).matching_contains(|event| event.kind() == "summary");
+        assert_that!(*events).matching_contains(|event| event.kind() == "index");
     }
 
     #[test]
     fn user_with_no_key_still_sends_event() {
         let user = crate::users::UserBuilder::new_with_optional_key(None).build();
 
-        let (mut client, updates, jsons) = make_mocked_client();
+        let (mut client, updates, events) = make_mocked_client();
         client.start();
 
         let updates = updates.lock().unwrap();
@@ -328,9 +328,9 @@ mod tests {
             error: eval::Error::UserNotSpecified,
         });
 
-        let jsons = jsons.read().unwrap();
-        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"feature""#)); // TODO test this is absent unless trackEvents = true or various other conditions
-        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"summary""#));
+        let events = events.read().unwrap();
+        assert_that!(*events).matching_contains(|event| event.kind() == "feature"); // TODO test this is absent unless trackEvents = true or various other conditions
+        assert_that!(*events).matching_contains(|event| event.kind() == "summary")
     }
 
     fn make_mocked_client() -> (
@@ -339,18 +339,14 @@ mod tests {
         Arc<RwLock<MockSink>>,
     ) {
         let updates = Arc::new(Mutex::new(MockUpdateProcessor::new()));
-        let jsons = Arc::new(RwLock::new(MockSink::new()));
+        let events = Arc::new(RwLock::new(MockSink::new()));
 
         let client = Client::configure()
             .update_processor(updates.clone())
-            .event_sink(jsons.clone())
+            .event_sink(events.clone())
             .build("dummy_key")
             .expect("client should build");
 
-        (client, updates, jsons)
-    }
-
-    fn utf8(bytes: &[u8]) -> &str {
-        std::str::from_utf8(bytes).expect("not utf-8")
+        (client, updates, events)
     }
 }

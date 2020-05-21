@@ -7,7 +7,7 @@ use super::eval::{Detail, Reason, VariationIndex};
 use super::store::{FeatureFlag, FlagValue};
 use super::users::User;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 /// a user that may be inlined in the event. TODO have the event processor handle this
 pub enum MaybeInlinedUser {
@@ -54,7 +54,7 @@ impl MaybeInlinedUser {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseEvent {
     pub creation_date: u64,
@@ -62,7 +62,7 @@ pub struct BaseEvent {
     pub user: MaybeInlinedUser,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
 pub enum Event {
@@ -185,15 +185,24 @@ impl Event {
             Event::Index { .. } | Event::Summary { .. } => None,
         }
     }
+
+    #[cfg(test)]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Event::FeatureRequest { .. } => "feature",
+            Event::Index { .. } => "index",
+            Event::Summary { .. } => "summary",
+        }
+    }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FeatureSummary {
     pub default: FlagValue,
     pub counters: Vec<VariationCounter>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct VariationCounter {
     pub value: FlagValue,
     pub version: Option<u64>,

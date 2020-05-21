@@ -1,3 +1,5 @@
+use super::events::Event;
+
 use futures::Future;
 use reqwest as r;
 use reqwest::r#async as ra;
@@ -6,7 +8,7 @@ use tokio::executor::{DefaultExecutor, Executor};
 type Error = String; // TODO
 
 pub trait EventSink: Send + Sync {
-    fn send(&mut self, json: Vec<u8>) -> Result<(), Error>;
+    fn send(&mut self, event: &Event) -> Result<(), Error>;
 }
 
 /// Inefficient and hacky event sink that spawns a new task on the global tokio reactor for every
@@ -19,7 +21,16 @@ pub struct OneShotTokioSink {
 }
 
 impl EventSink for OneShotTokioSink {
-    fn send(&mut self, json: Vec<u8>) -> Result<(), Error> {
+    fn send(&mut self, event: &Event) -> Result<(), Error> {
+        let batch = vec![event];
+
+        debug!(
+            "Sending: {}",
+            serde_json::to_string_pretty(&batch).unwrap_or_else(|e| e.to_string())
+        );
+
+        let json = serde_json::to_vec(&batch).map_err(|e| e.to_string())?;
+
         let mut url = self.base_url.clone();
         url.set_path("/bulk");
 
@@ -50,12 +61,13 @@ impl EventSink for OneShotTokioSink {
 }
 
 #[cfg(test)]
-pub type MockSink = Vec<Vec<u8>>;
+pub type MockSink = Vec<Event>;
 
 #[cfg(test)]
 impl EventSink for MockSink {
-    fn send(&mut self, json: Vec<u8>) -> Result<(), Error> {
-        self.push(json);
+    fn send(&mut self, event: &Event) -> Result<(), Error> {
+        let event: Event = event.clone();
+        self.push(event.clone());
         Ok(())
     }
 }

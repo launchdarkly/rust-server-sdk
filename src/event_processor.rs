@@ -32,13 +32,7 @@ impl EventProcessor {
     }
 
     fn _send(&self, event: Event) -> Result<(), Error> {
-        let json = serde_json::to_vec(&vec![&event]).map_err(|e| e.to_string())?;
-        debug!(
-            "Sending: {}",
-            serde_json::to_string_pretty(&vec![&event]).map_err(|e| e.to_string())?,
-        );
-
-        let result = self.sink.write().unwrap().send(json);
+        let result = self.sink.write().unwrap().send(&event);
 
         if let Some(index) = event.make_index_event() {
             self._send(index)?;
@@ -62,28 +56,23 @@ mod tests {
     use crate::users::User;
 
     #[test]
-    fn serializes_index_event() {
-        let jsons = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = EventProcessor::new_with_sink(jsons.clone());
+    fn sends_index_event() {
+        let events = Arc::new(RwLock::new(sink::MockSink::new()));
+        let ep = EventProcessor::new_with_sink(events.clone());
 
         let user =
             crate::events::MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
-        ep.send(Event::Index {
+        let index = Event::Index {
             base: BaseEvent {
                 creation_date: 42,
                 user,
             },
-        });
+        };
+        ep.send(index.clone());
 
-        let jsons = jsons.read().unwrap();
-        assert_that!(*jsons).has_length(1);
-        let json = &jsons[0];
-        assert_that!(utf8(json)).is_equal_to(
-            r#"[{"kind":"index","creationDate":42,"user":{"key":"foo","custom":{}}}]"#,
-        );
-    }
-
-    fn utf8(bytes: &[u8]) -> &str {
-        std::str::from_utf8(bytes).expect("not utf-8")
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(1);
+        let event = &events[0];
+        assert_that!(event).is_equal_to(&index);
     }
 }
