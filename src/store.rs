@@ -43,6 +43,21 @@ impl From<i64> for FlagValue {
     }
 }
 
+impl From<serde_json::Value> for FlagValue {
+    fn from(v: serde_json::Value) -> Self {
+        use serde_json::Value;
+        match v {
+            Value::Bool(b) => b.into(),
+            Value::Number(n) => match n.as_f64() {
+                None => FlagValue::NotYetImplemented(format!("{}", n).into()),
+                Some(f) => f.into(),
+            },
+            Value::String(s) => s.into(),
+            Value::Null | Value::Object(_) | Value::Array(_) => FlagValue::NotYetImplemented(v),
+        }
+    }
+}
+
 impl FlagValue {
     // TODO implement type coercion here?
 
@@ -79,6 +94,21 @@ impl FlagValue {
     pub fn as_int(&self) -> Option<i64> {
         // TODO this has undefined behaviour for huge floats: https://stackoverflow.com/a/41139453
         self.as_float().map(|f| f.round() as i64)
+    }
+
+    pub fn as_json(&self) -> serde_json::Value {
+        use serde_json::{Number, Value};
+        match self {
+            FlagValue::Bool(b) => Value::Bool(*b),
+            FlagValue::Str(s) => Value::String(s.clone()),
+            FlagValue::Float(f) => Number::from_f64(*f)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+            FlagValue::NotYetImplemented(v) => {
+                warn!("variation type not yet implemented: {:?}", self);
+                v.clone()
+            }
+        }
     }
 }
 
