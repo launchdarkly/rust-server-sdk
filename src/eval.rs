@@ -2,7 +2,7 @@ use serde::Serialize;
 
 pub type VariationIndex = usize;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Detail<T> {
     pub value: Option<T>,
     pub variation_index: Option<VariationIndex>,

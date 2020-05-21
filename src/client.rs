@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use super::eval::{self, Detail};
 use super::event_processor::EventProcessor;
 use super::event_sink::EventSink;
-use super::events::{BaseEvent, Event, MaybeInlinedUser};
-use super::store::{FeatureStore, FlagValue};
+use super::events::{Event, MaybeInlinedUser};
+use super::store::{FeatureFlag, FeatureStore, FlagValue};
 use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
 use super::users::User;
 
@@ -135,35 +135,30 @@ impl Client {
     pub fn bool_variation_detail(
         &self,
         user: &User,
-        flag_name: &str,
+        flag_key: &str,
         default: bool,
     ) -> Detail<bool> {
-        self.evaluate_detail(user, flag_name, default.into())
+        self.evaluate_detail(user, flag_key, default.into())
             .try_map(|val| val.as_bool(), eval::Error::Exception)
     }
 
     pub fn str_variation_detail(
         &self,
         user: &User,
-        flag_name: &str,
+        flag_key: &str,
         default: &str,
     ) -> Detail<String> {
-        self.evaluate_detail(user, flag_name, default.to_string().into())
+        self.evaluate_detail(user, flag_key, default.to_string().into())
             .try_map(|val| val.as_string(), eval::Error::Exception)
     }
 
-    pub fn float_variation_detail(
-        &self,
-        user: &User,
-        flag_name: &str,
-        default: f64,
-    ) -> Detail<f64> {
-        self.evaluate_detail(user, flag_name, default.into())
+    pub fn float_variation_detail(&self, user: &User, flag_key: &str, default: f64) -> Detail<f64> {
+        self.evaluate_detail(user, flag_key, default.into())
             .try_map(|val| val.as_float(), eval::Error::Exception)
     }
 
-    pub fn int_variation_detail(&self, user: &User, flag_name: &str, default: i64) -> Detail<i64> {
-        self.evaluate_detail(user, flag_name, default.into())
+    pub fn int_variation_detail(&self, user: &User, flag_key: &str, default: i64) -> Detail<i64> {
+        self.evaluate_detail(user, flag_key, default.into())
             .try_map(|val| val.as_int(), eval::Error::Exception)
     }
 
@@ -181,45 +176,54 @@ impl Client {
     pub fn evaluate_detail(
         &self,
         user: &User,
-        flag_name: &str,
+        flag_key: &str,
         default: FlagValue,
     ) -> Detail<FlagValue> {
-        let store = self.store.lock().unwrap();
-        let flag = match store.flag(flag_name) {
-            Some(flag) => flag,
-            None => return Detail::err_default(eval::Error::FlagNotFound, default),
-        };
-
-        if user.key().is_none() {
-            // TODO still send event in this case
-            return Detail::err_default(eval::Error::UserNotSpecified, default);
-        }
-
         let default_for_event = default.clone();
 
-        // TODO can we avoid the clone here if this returns a &FlagValue instead?
-        let result = flag.evaluate(user).map(|v| v.clone()).or(default);
+        let (flag, result) = self.evaluate_internal(user, flag_key, default);
 
-        let event = Event::FeatureRequest {
-            base: BaseEvent {
-                creation_date: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64,
-                user: MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
-            },
-            user_key: user.key().cloned(),
-            key: flag.key.clone(),
-            default: default_for_event,
-            reason: result.reason,
-            value: result.value.clone().unwrap(),
-            variation: result.variation_index,
-            version: flag.version,
-            prereq_of: None,
-        };
+        let event = Event::new_feature_request(
+            flag_key,
+            MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+            flag,
+            result.clone(),
+            default_for_event,
+        );
         self.event_processor.send(event);
 
         result
+    }
+
+    fn evaluate_internal(
+        &self,
+        user: &User,
+        flag_key: &str,
+        default: FlagValue,
+    ) -> (Option<FeatureFlag>, Detail<FlagValue>) {
+        let store = self.store.lock().unwrap();
+        let flag = match store.flag(flag_key) {
+            // TODO eliminate this clone by wrangling lifetimes
+            Some(flag) => flag.clone(),
+            None => {
+                return (
+                    None,
+                    Detail::err_default(eval::Error::FlagNotFound, default),
+                )
+            }
+        };
+
+        if user.key().is_none() {
+            return (
+                Some(flag),
+                Detail::err_default(eval::Error::UserNotSpecified, default),
+            );
+        }
+
+        // TODO eliminate this clone by wrangling lifetimes
+        let result = flag.evaluate(user).map(|v| v.clone()).or(default);
+
+        (Some(flag), result)
     }
 }
 
@@ -235,7 +239,7 @@ fn trim_base_url(mut url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::Reason;
+    use crate::eval::{self, Reason};
     use crate::event_sink::MockSink;
     use crate::store::{FeatureFlag, PatchTarget};
     use crate::update_processor::{MockUpdateProcessor, PatchData};
@@ -259,23 +263,11 @@ mod tests {
     fn client_receives_updates_evals_flags_and_sends_events() {
         let user = User::with_key("foo".to_string()).build();
 
-        let updates = Arc::new(Mutex::new(MockUpdateProcessor::new()));
-        let jsons = Arc::new(RwLock::new(MockSink::new()));
-
-        let mut client = Client::configure()
-            .update_processor(updates.clone())
-            .event_sink(jsons.clone())
-            .build("dummy_key")
-            .expect("client should build");
+        let (mut client, updates, jsons) = make_mocked_client();
 
         let result = client.bool_variation_detail(&user, "someFlag", false);
 
         assert_that!(result.value).contains_value(false);
-
-        {
-            let jsons = jsons.read().unwrap();
-            assert_that!(*jsons).is_empty();
-        }
 
         client.start();
 
@@ -294,10 +286,54 @@ mod tests {
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
 
         let jsons = jsons.read().unwrap();
-        assert_that!(*jsons).has_length(3); // TODO should be 2
-        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"feature""#)); // TODO should not
+        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"feature""#)); // TODO test this is absent unless trackEvents = true or various other conditions
         assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"summary""#));
         assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"index""#));
+    }
+
+    #[test]
+    fn user_with_no_key_still_sends_event() {
+        let user = crate::users::UserBuilder::new_with_optional_key(None).build();
+
+        let (mut client, updates, jsons) = make_mocked_client();
+        client.start();
+
+        let updates = updates.lock().unwrap();
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(FeatureFlag::basic_flag("myFlag")),
+            })
+            .expect("patch should apply");
+
+        let result = client.bool_variation_detail(&user, "myFlag", false);
+
+        assert_that!(result.value).contains_value(false);
+        assert_that!(result.reason).is_equal_to(Reason::Error {
+            error: eval::Error::UserNotSpecified,
+        });
+
+        let jsons = jsons.read().unwrap();
+        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"feature""#)); // TODO test this is absent unless trackEvents = true or various other conditions
+        assert_that!(*jsons).matching_contains(|json| utf8(json).contains(r#""kind":"summary""#));
+    }
+
+    fn make_mocked_client() -> (
+        Client,
+        Arc<Mutex<MockUpdateProcessor>>,
+        Arc<RwLock<MockSink>>,
+    ) {
+        let updates = Arc::new(Mutex::new(MockUpdateProcessor::new()));
+        let jsons = Arc::new(RwLock::new(MockSink::new()));
+
+        let client = Client::configure()
+            .update_processor(updates.clone())
+            .event_sink(jsons.clone())
+            .build("dummy_key")
+            .expect("client should build");
+
+        (client, updates, jsons)
     }
 
     fn utf8(bytes: &[u8]) -> &str {

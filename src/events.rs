@@ -3,12 +3,13 @@ use std::fmt::{self, Display, Formatter};
 
 use serde::Serialize;
 
-use super::eval::{Reason, VariationIndex};
-use super::store::FlagValue;
+use super::eval::{Detail, Reason, VariationIndex};
+use super::store::{FeatureFlag, FlagValue};
 use super::users::User;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
+/// a user that may be inlined in the event. TODO have the event processor handle this
 pub enum MaybeInlinedUser {
     Inlined(User),
     NotInlined(User),
@@ -40,6 +41,17 @@ impl MaybeInlinedUser {
             MaybeInlinedUser::NotInlined(u) => MaybeInlinedUser::Inlined(u),
         }
     }
+
+    fn user(&self) -> &User {
+        match self {
+            MaybeInlinedUser::Inlined(u) => u,
+            MaybeInlinedUser::NotInlined(u) => u,
+        }
+    }
+
+    fn key(&self) -> Option<&String> {
+        self.user().key()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,7 +76,7 @@ pub enum Event {
         variation: Option<VariationIndex>,
         default: FlagValue,
         reason: Reason,
-        version: u64,
+        version: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prereq_of: Option<String>,
     },
@@ -90,6 +102,38 @@ impl Display for Event {
 }
 
 impl Event {
+    pub fn new_feature_request(
+        flag_key: &str,
+        user: MaybeInlinedUser,
+        flag: Option<FeatureFlag>,
+        detail: Detail<FlagValue>,
+        default: FlagValue,
+    ) -> Self {
+        let user_key = user.key().cloned();
+
+        // unwrap is safe here because value should have been replaced with default if it was None.
+        // TODO that is ugly, use the type system to fix it
+        let value = detail.value.unwrap();
+
+        Event::FeatureRequest {
+            base: BaseEvent {
+                creation_date: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+                user,
+            },
+            user_key,
+            key: flag_key.to_owned(),
+            default,
+            reason: detail.reason,
+            value,
+            variation: detail.variation_index,
+            version: flag.map(|f| f.version),
+            prereq_of: None,
+        }
+    }
+
     pub fn make_index_event(&self) -> Option<Event> {
         match self {
             Event::FeatureRequest { base, .. } => {
@@ -145,7 +189,7 @@ pub struct FeatureSummary {
 #[derive(Debug, Serialize)]
 pub struct VariationCounter {
     pub value: FlagValue,
-    pub version: u64,
+    pub version: Option<u64>,
     pub count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variation: Option<VariationIndex>,
