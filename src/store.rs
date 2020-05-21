@@ -292,14 +292,23 @@ enum VariationOrRollout {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct Prereq {
+    key: String,
+    variation: VariationIndex,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeatureFlag {
     pub key: String,
     pub version: u64,
 
     on: bool,
+
     targets: Vec<Target>,
     rules: Vec<Rule>,
+    prerequisites: Vec<Prereq>,
+
     fallthrough: VariationOrRolloutOrMalformed,
     off_variation: Option<VariationIndex>,
     variations: Vec<FlagValue>,
@@ -315,6 +324,7 @@ impl FeatureFlag {
             on: true,
             targets: vec![],
             rules: vec![],
+            prerequisites: vec![],
             fallthrough: VariationOrRolloutOrMalformed::VariationOrRollout(
                 VariationOrRollout::Variation(1),
             ),
@@ -323,13 +333,28 @@ impl FeatureFlag {
         }
     }
 
-    pub fn evaluate(&self, user: &User) -> Detail<&FlagValue> {
+    pub fn evaluate(&self, user: &User, store: &FeatureStore) -> Detail<&FlagValue> {
         if user.key().is_none() {
             return Detail::err(eval::Error::UserNotSpecified);
         }
 
         if !self.on {
             return self.off_value(Reason::Off);
+        }
+
+        for prereq in &self.prerequisites {
+            if let Some(flag) = store.flag(&prereq.key) {
+                if flag.evaluate(user, store).variation_index != Some(prereq.variation) {
+                    // TODO capture prereq event
+                    return self.off_value(Reason::PrerequisiteFailed {
+                        prerequisite_key: prereq.key.to_string(),
+                    });
+                }
+            } else {
+                return self.off_value(Reason::PrerequisiteFailed {
+                    prerequisite_key: prereq.key.to_string(),
+                });
+            }
         }
 
         for target in &self.targets {
@@ -495,6 +520,7 @@ mod tests {
             {"values": ["bob"], "variation": 1}
         ],
         "rules": [],
+        "prerequisites": [],
         "fallthrough": {"variation": 0},
         "offVariation": 1,
         "variations": [true, false]
@@ -519,6 +545,7 @@ mod tests {
                 "variation": 1
             }
         ],
+        "prerequisites": [],
         "fallthrough": {"variation": 0},
         "offVariation": 1,
         "variations": [true, false]
@@ -546,46 +573,46 @@ mod tests {
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
-        let detail = flag.evaluate(&alice);
+        let detail = flag.evaluate(&alice, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&Off);
 
-        assert_that!(flag.evaluate(&bob)).is_equal_to(&detail);
+        assert_that!(flag.evaluate(&bob, &FeatureStore::new())).is_equal_to(&detail);
 
         // flip off variation
         flag.off_variation = Some(0);
-        let detail = flag.evaluate(&alice);
+        let detail = flag.evaluate(&alice, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(true));
         assert_that!(detail.variation_index).contains_value(0);
 
         // off variation unspecified
         flag.off_variation = None;
-        let detail = flag.evaluate(&alice);
+        let detail = flag.evaluate(&alice, &FeatureStore::new());
         assert_that!(detail.value).is_none();
         assert_that!(detail.variation_index).is_none();
         assert_that!(detail.reason).is_equal_to(&Off);
 
         // flip targeting on
         flag.on = true;
-        let detail = flag.evaluate(&alice);
+        let detail = flag.evaluate(&alice, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(true));
         assert_that!(detail.variation_index).contains_value(0);
         assert_that!(detail.reason).is_equal_to(&Fallthrough);
 
-        let detail = flag.evaluate(&bob);
+        let detail = flag.evaluate(&bob, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
 
         // flip default variation
         flag.fallthrough = VariationOrRollout::Variation(1).into();
-        let detail = flag.evaluate(&alice);
+        let detail = flag.evaluate(&alice, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
 
         // bob's reason should still be TargetMatch even though his value is now the default
-        let detail = flag.evaluate(&bob);
+        let detail = flag.evaluate(&bob, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
@@ -597,7 +624,7 @@ mod tests {
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
-        let detail = flag.evaluate(&nameless);
+        let detail = flag.evaluate(&nameless, &FeatureStore::new());
         assert_that!(detail.value).is_none();
         assert_that!(detail.variation_index).is_none();
         assert_that!(detail.reason).is_equal_to(&Reason::Error {
@@ -606,7 +633,7 @@ mod tests {
 
         // flip targeting on
         flag.on = true;
-        let detail = flag.evaluate(&nameless);
+        let detail = flag.evaluate(&nameless, &FeatureStore::new());
         assert_that!(detail.value).is_none();
         assert_that!(detail.variation_index).is_none();
         assert_that!(detail.reason).is_equal_to(&Reason::Error {
@@ -627,7 +654,7 @@ mod tests {
 
         assert!(!flag.on);
         for user in vec![&alice, &bob] {
-            let detail = flag.evaluate(user);
+            let detail = flag.evaluate(user, &FeatureStore::new());
             assert_that!(detail.value).contains_value(&Bool(false));
             assert_that!(detail.variation_index).contains_value(1);
             assert_that!(detail.reason).is_equal_to(&Off);
@@ -635,15 +662,72 @@ mod tests {
 
         // flip targeting on
         flag.on = true;
-        let detail = flag.evaluate(&alice);
+        let detail = flag.evaluate(&alice, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(true));
         assert_that!(detail.variation_index).contains_value(0);
         assert_that!(detail.reason).is_equal_to(&Fallthrough);
 
-        let detail = flag.evaluate(&bob);
+        let detail = flag.evaluate(&bob, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&RuleMatch);
+    }
+
+    #[test]
+    fn test_eval_flag_prereqs() {
+        let mut store = FeatureStore::new();
+        let mut flag = FeatureFlag::basic_flag("flag");
+        assert!(flag.on);
+        flag.prerequisites.push(Prereq {
+            key: "prereq".to_string(),
+            variation: 1,
+        });
+        store.patch("/flags/flag", PatchTarget::Flag(flag.clone()));
+
+        let alice = User::with_key("alice".into()).build();
+        let bob = User::with_key("bob".into()).build();
+
+        // prerequisite missing => prerequisite failed.
+        for user in vec![&alice, &bob] {
+            let detail = flag.evaluate(user, &FeatureStore::new());
+            assert_that!(detail.value).contains_value(&Bool(false));
+            assert_that!(detail.reason).is_equal_to(&PrerequisiteFailed {
+                prerequisite_key: "prereq".to_string(),
+            });
+        }
+
+        let mut prereq = FeatureFlag::basic_flag("prereq");
+        assert!(prereq.on);
+        prereq.targets.push(Target {
+            values: vec!["bob".into()],
+            variation: 0,
+        });
+        store.patch("/flags/prereq", PatchTarget::Flag(prereq.clone()));
+
+        // prerequisite on
+        let detail = flag.evaluate(&alice, &store);
+        asserting!("alice should pass prereq and see fallthrough")
+            .that(&detail.value)
+            .contains_value(&Bool(true));
+        let detail = flag.evaluate(&bob, &store);
+        asserting!("bob should see prereq failed due to target")
+            .that(&detail.value)
+            .contains_value(&Bool(false));
+        assert_that!(detail.reason).is_equal_to(Reason::PrerequisiteFailed {
+            prerequisite_key: "prereq".to_string(),
+        });
+
+        prereq.on = false;
+        store.patch("/flags/prereq", PatchTarget::Flag(prereq.clone()));
+
+        // prerequisite off
+        for user in vec![&alice, &bob] {
+            let detail = flag.evaluate(user, &store);
+            assert_that!(detail.value).contains_value(&Bool(false));
+            assert_that!(detail.reason).is_equal_to(&PrerequisiteFailed {
+                prerequisite_key: "prereq".to_string(),
+            });
+        }
     }
 
     fn astring(s: &str) -> AttributeValue {

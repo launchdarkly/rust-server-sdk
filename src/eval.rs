@@ -93,7 +93,7 @@ impl<T> Detail<T> {
 // Reason describes the reason that a flag evaluation producted a particular value.
 // The Serialize implementation is used internally in cases where LaunchDarkly
 // needs to unmarshal a Reason value from JSON.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "kind")]
 pub enum Reason {
     // Off indicates that the flag was off and therefore returned its configured off value.
@@ -105,8 +105,10 @@ pub enum Reason {
     RuleMatch,
     // PrerequisiteFailed indicates that the flag was considered off because it had at
     // least one prerequisite flag that either was off or did not return the desired variation.
-    // TODO include prerequisiteKey
-    PrerequisiteFailed,
+    PrerequisiteFailed {
+        #[serde(rename = "prerequisiteKey")]
+        prerequisite_key: String,
+    },
     // Fallthrough indicates that the flag was on but the user did not match any targets
     // or rules.
     Fallthrough,

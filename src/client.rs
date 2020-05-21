@@ -167,7 +167,7 @@ impl Client {
         let flags = store.all_flags();
         let evals = flags.iter().map(|(key, flag)| {
             // TODO don't send events
-            let val = flag.evaluate(user).map(|v| v.clone());
+            let val = flag.evaluate(user, &store).map(|v| v.clone());
             (key.clone(), val)
         });
         evals.collect()
@@ -235,7 +235,7 @@ impl Client {
         };
 
         // TODO eliminate this clone by wrangling lifetimes
-        let result = flag.evaluate(user).map(|v| v.clone()).or(default);
+        let result = flag.evaluate(user, &store).map(|v| v.clone()).or(default);
 
         (Some(flag), result)
     }
