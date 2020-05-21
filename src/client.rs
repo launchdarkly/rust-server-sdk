@@ -234,13 +234,6 @@ impl Client {
             }
         };
 
-        if user.key().is_none() {
-            return (
-                Some(flag),
-                Detail::err_default(eval::Error::UserNotSpecified, default),
-            );
-        }
-
         // TODO eliminate this clone by wrangling lifetimes
         let result = flag.evaluate(user).map(|v| v.clone()).or(default);
 
