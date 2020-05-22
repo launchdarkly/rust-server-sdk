@@ -2,7 +2,6 @@
 extern crate log;
 #[macro_use]
 extern crate maplit;
-extern crate simplelog;
 
 use std::env;
 use std::process::exit;
@@ -11,13 +10,13 @@ use std::time::Duration;
 use ldclient::client::Client;
 use ldclient::users::User;
 
+use env_logger::Env;
 use futures::future::lazy;
 use futures::stream::Stream;
-use simplelog::{Config, LevelFilter, TermLogger};
 use tokio::timer::Interval;
 
 fn main() {
-    TermLogger::init(LevelFilter::Info, Config::default()).unwrap();
+    env_logger::init_from_env(Env::new().default_filter_or("info"));
 
     info!("Connecting...");
 

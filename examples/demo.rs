@@ -15,10 +15,9 @@ use cursive::utils::Counter;
 use cursive::views::{Dialog, ProgressBar};
 use cursive::Cursive;
 use futures::future::lazy;
-use simplelog::{Config, LevelFilter, TermLogger};
 
 fn main() {
-    TermLogger::init(LevelFilter::Info, Config::default()).unwrap();
+    env_logger::init();
 
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
 
