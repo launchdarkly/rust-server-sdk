@@ -1,73 +1,69 @@
 use super::events::Event;
 
-use futures::Future;
 use reqwest as r;
-use reqwest::r#async as ra;
-use tokio::executor::{DefaultExecutor, Executor};
 
 type Error = String; // TODO
 
 pub trait EventSink: Send + Sync {
-    fn send(&mut self, event: &Event) -> Result<(), Error>;
+    fn send(&mut self, events: Vec<Event>) -> Result<(), Error>;
 }
 
-/// Inefficient and hacky event sink that spawns a new task on the global tokio reactor for every
-/// send.
-/// TODO improve this.
-pub struct OneShotTokioSink {
-    pub http: ra::Client,
-    pub base_url: r::Url,
-    pub sdk_key: String,
+pub struct ReqwestSink {
+    url: r::Url,
+    sdk_key: String,
+    http: r::Client,
 }
 
-impl EventSink for OneShotTokioSink {
-    fn send(&mut self, event: &Event) -> Result<(), Error> {
-        let batch = vec![event];
+impl ReqwestSink {
+    pub fn new(base_url: &r::Url, sdk_key: &str) -> Result<Self, Error> {
+        let mut url = base_url.clone();
+        url.set_path("/bulk");
 
+        let http = r::Client::builder().build().map_err(|e| e.to_string())?;
+
+        Ok(ReqwestSink {
+            http,
+            url,
+            sdk_key: sdk_key.to_owned(),
+        })
+    }
+}
+
+impl EventSink for ReqwestSink {
+    fn send(&mut self, events: Vec<Event>) -> Result<(), Error> {
         debug!(
             "Sending: {}",
-            serde_json::to_string_pretty(&batch).unwrap_or_else(|e| e.to_string())
+            serde_json::to_string_pretty(&events).unwrap_or_else(|e| e.to_string())
         );
 
-        let json = serde_json::to_vec(&batch).map_err(|e| e.to_string())?;
-
-        let mut url = self.base_url.clone();
-        url.set_path("/bulk");
+        let json =
+            serde_json::to_vec(&events).map_err(|e| format!("error serializing event: {}", e))?;
 
         let request = self
             .http
-            .post(url)
+            .post(self.url.clone())
             .header("Content-Type", "application/json")
             .header("Authorization", self.sdk_key.clone())
             .body(json);
-        match DefaultExecutor::current().status() {
-            // TODO queue events instead of dropping them
-            Err(e) => info!("skipping event send because executor is not ready: {}", e),
-            Ok(_) => {
-                tokio::spawn(
-                    request
-                        .send()
-                        .map_err(|e| error!("error sending event: {}", e))
-                        .map(|resp| match resp.error_for_status() {
-                            Ok(resp) => debug!("sent event: {:?}", resp),
-                            Err(e) => warn!("error response sending event: {}", e),
-                        }),
-                );
-            }
-        }
 
+        let resp = request
+            .send()
+            .map(|resp| resp.error_for_status())
+            .map_err(|e| format!("error sending event: {}", e))?;
+
+        debug!("sent event: {:?}", resp);
         Ok(())
     }
 }
 
 #[cfg(test)]
+// TODO retain batch structure
 pub type MockSink = Vec<Event>;
 
 #[cfg(test)]
 impl EventSink for MockSink {
-    fn send(&mut self, event: &Event) -> Result<(), Error> {
-        let event: Event = event.clone();
-        self.push(event.clone());
+    fn send(&mut self, events: Vec<Event>) -> Result<(), Error> {
+        self.extend(events);
         Ok(())
     }
 }

@@ -1,28 +1,32 @@
 use super::event_sink as sink;
 use super::events::Event;
 
-use std::sync::{Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use reqwest as r;
-use reqwest::r#async as ra;
 
 type Error = String; // TODO
 
 pub struct EventProcessor {
-    sink: Arc<RwLock<dyn sink::EventSink>>,
+    batcher: Batcher<Event>,
 }
 
 impl EventProcessor {
-    pub fn new(base_url: r::Url, sdk_key: &str) -> Self {
-        Self::new_with_sink(Arc::new(RwLock::new(sink::OneShotTokioSink {
-            http: ra::Client::new(),
-            base_url,
-            sdk_key: sdk_key.to_string(),
-        })))
+    pub fn new(base_url: r::Url, sdk_key: &str) -> Result<Self, Error> {
+        let sink = sink::ReqwestSink::new(&base_url, sdk_key)?;
+        Self::new_with_sink(Arc::new(RwLock::new(sink)))
     }
 
-    pub fn new_with_sink(sink: Arc<RwLock<dyn sink::EventSink>>) -> Self {
-        EventProcessor { sink }
+    pub fn new_with_sink(sink: Arc<RwLock<dyn sink::EventSink>>) -> Result<Self, Error> {
+        // TODO don't hardcode batcher params
+        let batcher = Batcher::start(5, Duration::from_secs(5), move |events: Vec<Event>| {
+            if let Err(e) = sink.write().unwrap().send(events) {
+                warn!("failed to send event: {}", e);
+            }
+        })?;
+        Ok(EventProcessor { batcher })
     }
 
     pub fn send(&self, event: Event) {
@@ -32,18 +36,84 @@ impl EventProcessor {
     }
 
     fn _send(&self, event: Event) -> Result<(), Error> {
-        let result = self.sink.write().unwrap().send(&event);
+        let result = self.batcher.add(event.clone());
 
         if let Some(index) = event.make_index_event() {
             self._send(index)?;
         }
 
-        // TODO make real summaries once we have batching
+        // TODO make real summaries now we have batching
         if let Some(summary) = event.make_singleton_summary() {
             self._send(summary)?;
         }
 
         result
+    }
+}
+
+struct Batcher<T> {
+    sender: mpsc::SyncSender<T>,
+}
+
+impl<T: Send + 'static> Batcher<T> {
+    pub fn start(
+        batch_size: usize,
+        batch_timeout: Duration,
+        on_batch: impl Fn(Vec<T>) + Send + 'static,
+    ) -> Result<Batcher<T>, Error> {
+        let (sender, receiver) = mpsc::sync_channel(500); // TODO hardcode
+
+        let _worker_handle = thread::Builder::new()
+            // TODO make this an object?
+            .spawn(move || 'batch: loop {
+                debug!("waiting for a batch to send");
+
+                let batch_deadline: Instant = Instant::now() + batch_timeout;
+
+                let mut batch = Vec::new();
+
+                'event: loop {
+                    debug!("waiting for an event to add to the batch");
+
+                    let now = Instant::now();
+
+                    let batch_ready = match receiver
+                        .recv_timeout(batch_deadline.saturating_duration_since(now))
+                    {
+                        Ok(item) => {
+                            batch.push(item);
+                            batch.len() > batch_size
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            debug!("batch timer expired");
+                            true
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            debug!("batch sender disconnected");
+                            // TODO flush and terminate
+                            true
+                        }
+                    };
+
+                    if batch_ready {
+                        break 'event;
+                    }
+
+                    debug!("Not ready to send batch");
+                }
+
+                if batch.is_empty() {
+                    debug!("Nothing to send");
+                } else {
+                    on_batch(batch);
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Batcher { sender })
+    }
+
+    pub fn add(&self, item: T) -> Result<(), Error> {
+        self.sender.send(item).map_err(|e| e.to_string())
     }
 }
 

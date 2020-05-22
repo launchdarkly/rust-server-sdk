@@ -88,10 +88,14 @@ impl ClientBuilder {
         let event_processor = match &self.event_sink {
             None => reqwest::Url::parse(&self.events_base_url)
                 .map_err(|e| Error::InvalidConfig(Box::new(e)))
-                .map(|base_url| EventProcessor::new(base_url, sdk_key))?,
+                .and_then(|base_url| {
+                    EventProcessor::new(base_url, sdk_key)
+                        .map_err(|e| Error::InvalidConfig(Box::new(e)))
+                })?,
             Some(sink) => {
                 // clone sink Arc so we don't have to consume builder
                 EventProcessor::new_with_sink(sink.clone())
+                    .map_err(|e| Error::InvalidConfig(Box::new(e)))?
             }
         };
         let update_processor = match &self.update_processor {
