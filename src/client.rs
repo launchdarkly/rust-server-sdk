@@ -13,11 +13,13 @@ const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 #[derive(Debug)]
+// TODO redo (confused with eval::Error)
 pub enum Error {
     FlagWrongType(String, String),
     InvalidConfig(Box<dyn std::fmt::Debug>),
     EvaluationError(eval::Error),
     NoSuchFlag(String),
+    FlushFailed(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -136,6 +138,10 @@ impl Client {
             .subscribe(self.store.clone())
     }
 
+    pub fn flush(&self) -> Result<()> {
+        self.event_processor.flush().map_err(Error::FlushFailed)
+    }
+
     pub fn bool_variation_detail(
         &self,
         user: &User,
@@ -170,7 +176,6 @@ impl Client {
         let store = self.store.lock().unwrap();
         let flags = store.all_flags();
         let evals = flags.iter().map(|(key, flag)| {
-            // TODO don't send events
             let val = flag.evaluate(user, &store).map(|v| v.clone());
             (key.clone(), val)
         });
@@ -281,7 +286,7 @@ mod tests {
     fn client_receives_updates_evals_flags_and_sends_events() {
         let user = User::with_key("foo".to_string()).build();
 
-        let (mut client, updates, events) = make_mocked_client();
+        let (mut client, updates, _events) = make_mocked_client();
 
         let result = client.bool_variation_detail(&user, "someFlag", false);
 
@@ -302,11 +307,6 @@ mod tests {
 
         assert_that!(result.value).contains_value(true);
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
-
-        let events = events.read().unwrap();
-        assert_that!(*events).matching_contains(|event| event.kind() == "feature"); // TODO test this is absent unless trackEvents = true or various other conditions
-        assert_that!(*events).matching_contains(|event| event.kind() == "summary");
-        assert_that!(*events).matching_contains(|event| event.kind() == "index");
     }
 
     #[test]
@@ -331,6 +331,8 @@ mod tests {
         assert_that!(result.reason).is_equal_to(Reason::Error {
             error: eval::Error::UserNotSpecified,
         });
+
+        client.flush().expect("flush should succeed");
 
         let events = events.read().unwrap();
         assert_that!(*events).matching_contains(|event| event.kind() == "feature"); // TODO test this is absent unless trackEvents = true or various other conditions

@@ -21,7 +21,7 @@ impl EventProcessor {
 
     pub fn new_with_sink(sink: Arc<RwLock<dyn sink::EventSink>>) -> Result<Self, Error> {
         // TODO don't hardcode batcher params
-        let batcher = Batcher::start(5, Duration::from_secs(5), move |events: Vec<Event>| {
+        let batcher = Batcher::start(1000, Duration::from_secs(30), move |events: Vec<Event>| {
             if let Err(e) = sink.write().unwrap().send(events) {
                 warn!("failed to send event: {}", e);
             }
@@ -33,6 +33,10 @@ impl EventProcessor {
         debug!("Okay, sending event: {}", event);
 
         self._send(event).expect("failed to send event");
+    }
+
+    pub fn flush(&self) -> Result<(), Error> {
+        self.batcher.flush()
     }
 
     fn _send(&self, event: Event) -> Result<(), Error> {
@@ -53,6 +57,7 @@ impl EventProcessor {
 
 struct Batcher<T> {
     sender: mpsc::SyncSender<T>,
+    flusher: mpsc::SyncSender<mpsc::SyncSender<()>>,
 }
 
 impl<T: Send + 'static> Batcher<T> {
@@ -63,31 +68,29 @@ impl<T: Send + 'static> Batcher<T> {
     ) -> Result<Batcher<T>, Error> {
         let (sender, receiver) = mpsc::sync_channel(500); // TODO hardcode
 
+        let flush_poll_interval = Duration::from_millis(100); // TODO hardcode
+        let (flusher, flush_receiver) = mpsc::sync_channel::<mpsc::SyncSender<()>>(10); // TODO hardcode
+
         let _worker_handle = thread::Builder::new()
-            // TODO make this an object?
+            // TODO make this an object with methods, this is confusing
             .spawn(move || 'batch: loop {
                 debug!("waiting for a batch to send");
 
                 let batch_deadline: Instant = Instant::now() + batch_timeout;
 
                 let mut batch = Vec::new();
+                let mut flushes = Vec::new();
 
                 'event: loop {
-                    debug!("waiting for an event to add to the batch");
-
-                    let now = Instant::now();
-
-                    let batch_ready = match receiver
-                        .recv_timeout(batch_deadline.saturating_duration_since(now))
-                    {
+                    // Rust doesn't have a (stable) select on multiple channels, so we have to
+                    // contort a bit to support flush without blocking flush requesters until the
+                    // batch deadline
+                    let mut batch_ready = match receiver.recv_timeout(flush_poll_interval) {
                         Ok(item) => {
                             batch.push(item);
                             batch.len() > batch_size
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            debug!("batch timer expired");
-                            true
-                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => Instant::now() >= batch_deadline,
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
                             debug!("batch sender disconnected");
                             // TODO flush and terminate
@@ -95,25 +98,59 @@ impl<T: Send + 'static> Batcher<T> {
                         }
                     };
 
+                    // check if anyone asked us to flush
+                    while let Ok(flush) = flush_receiver.try_recv() {
+                        debug!("flush requested");
+                        flushes.push(flush);
+                        batch_ready = true;
+                    }
+
                     if batch_ready {
                         break 'event;
                     }
-
-                    debug!("Not ready to send batch");
                 }
 
-                if batch.is_empty() {
-                    debug!("Nothing to send");
-                } else {
+                if !batch.is_empty() {
+                    if !flushes.is_empty() {
+                        // flush requested, just send everything left in the channel (even if the
+                        // current batch was "full")
+                        let mut extra = 0;
+                        while let Ok(item) = receiver.try_recv() {
+                            batch.push(item);
+                            extra += 1;
+                        }
+                        if extra > 0 {
+                            debug!("Sending {} extra items early due to flush", extra);
+                        }
+                    }
+
+                    debug!("Sending batch of {} items", batch.len());
+
                     on_batch(batch);
+                }
+
+                for flush in flushes {
+                    debug!("flush completed");
+                    let _ = flush.try_send(());
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Batcher { sender })
+
+        Ok(Batcher { sender, flusher })
     }
 
     pub fn add(&self, item: T) -> Result<(), Error> {
         self.sender.send(item).map_err(|e| e.to_string())
+    }
+
+    pub fn flush(&self) -> Result<(), Error> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.flusher
+            .send(sender)
+            .map_err(|e| format!("failed to request flush: {}", e))?;
+        receiver
+            .recv()
+            .map_err(|e| format!("failed to wait for flush: {}", e))
     }
 }
 
@@ -122,27 +159,60 @@ mod tests {
     use spectral::prelude::*;
 
     use super::*;
-    use crate::events::BaseEvent;
+    use crate::eval::{Detail, Reason};
+    use crate::store::{FeatureFlag, FlagValue};
     use crate::users::User;
 
     #[test]
-    fn sends_index_event() {
+    fn feature_event_emits_index_and_summary() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = EventProcessor::new_with_sink(events.clone());
+        let ep = EventProcessor::new_with_sink(events.clone())
+            .expect("event processor should initialize");
 
+        let flag = FeatureFlag::basic_flag("flag");
         let user =
             crate::events::MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
-        let index = Event::Index {
-            base: BaseEvent {
-                creation_date: 42,
-                user,
-            },
+        let detail = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough,
         };
-        ep.send(index.clone());
+
+        let feature_request = Event::new_feature_request(
+            &flag.key.clone(),
+            user.clone(),
+            Some(flag.clone()),
+            detail.clone(),
+            FlagValue::from(false),
+            true,
+        );
+        ep.send(feature_request.clone());
+
+        ep.flush().expect("flush should not fail");
 
         let events = events.read().unwrap();
-        assert_that!(*events).has_length(1);
-        let event = &events[0];
-        assert_that!(event).is_equal_to(&index);
+        assert_that!(*events).has_length(3);
+
+        // TODO test that it only does this under certain conditions (trackEvents = true, etc)
+        asserting!("emits original feature event")
+            .that(&*events)
+            .matching_contains(|event| event == &feature_request);
+
+        asserting!("emits index event")
+            .that(&*events)
+            .matching_contains(|event| match event {
+                Event::Index { base: b } => b.user == user,
+                _ => false,
+            });
+
+        asserting!("emits summary event")
+            .that(&*events)
+            .matching_contains(|event| match event {
+                Event::Summary { features, .. } => {
+                    let counter = &features[&flag.key].counters[0];
+                    &counter.value == detail.value.as_ref().unwrap() && counter.count == 1
+                }
+                _ => false,
+            });
     }
 }
