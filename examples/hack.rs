@@ -48,10 +48,10 @@ fn main() {
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
     let events_url_opt = env::var("LAUNCHDARKLY_EVENTS_URL");
 
-    let alice = User::with_key("alice".into())
+    let alice = User::with_key("alice")
         .custom(hashmap! { "team".into() => "Avengers".into() })
         .build();
-    let bob = User::with_key("bob".into()).build();
+    let bob = User::with_key("bob").build();
 
     let mut client_builder = Client::configure();
     let _ = stream_url_opt.map(|url| {

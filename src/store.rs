@@ -286,9 +286,42 @@ pub enum PatchTarget {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-enum VariationOrRollout {
+pub enum VariationOrRollout {
     Variation(VariationIndex),
-    Rollout(serde_json::Value),
+    Rollout {
+        bucket_by: Option<String>,
+        variations: Vec<WeightedVariation>,
+    },
+}
+
+impl VariationOrRollout {
+    fn variation(&self, flag_key: &str, user: &User, salt: &str) -> Option<VariationIndex> {
+        match self {
+            VariationOrRollout::Variation(index) => Some(*index),
+            VariationOrRollout::Rollout {
+                bucket_by,
+                variations,
+            } => {
+                let bucket = user.bucket(flag_key, bucket_by.as_ref().map(String::as_str), salt);
+                let mut sum = 0.0;
+                for variation in variations {
+                    sum += variation.weight / 100_000.0;
+                    if bucket < sum {
+                        return Some(variation.variation);
+                    }
+                }
+                None
+            }
+        }
+    }
+}
+
+type VariationWeight = f32;
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct WeightedVariation {
+    pub variation: VariationIndex,
+    pub weight: VariationWeight,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -312,6 +345,9 @@ pub struct FeatureFlag {
     fallthrough: VariationOrRolloutOrMalformed,
     off_variation: Option<VariationIndex>,
     variations: Vec<FlagValue>,
+
+    salt: String,
+
     // TODO implement more flag fields
 }
 
@@ -330,6 +366,7 @@ impl FeatureFlag {
             ),
             off_variation: Some(0),
             variations: vec![false.into(), true.into()],
+            salt: "kosher".to_string(),
         }
     }
 
@@ -367,8 +404,11 @@ impl FeatureFlag {
 
         for rule in &self.rules {
             if rule.matches(&user) {
-                return self
-                    .value_for_variation_or_rollout(&rule.variation_or_rollout, Reason::RuleMatch);
+                return self.value_for_variation_or_rollout(
+                    &rule.variation_or_rollout,
+                    &user,
+                    Reason::RuleMatch,
+                );
             }
         }
 
@@ -378,7 +418,7 @@ impl FeatureFlag {
             .get()
             .as_ref()
             .ok()
-            .map(|vor| self.value_for_variation_or_rollout(vor, Reason::Fallthrough))
+            .map(|vor| self.value_for_variation_or_rollout(vor, &user, Reason::Fallthrough))
             .unwrap_or_else(|| Detail::err(eval::Error::MalformedFlag))
     }
 
@@ -400,16 +440,14 @@ impl FeatureFlag {
 
     fn value_for_variation_or_rollout(
         &self,
-        vr: &VariationOrRollout, /*, TODO user*/
+        vr: &VariationOrRollout,
+        user: &User,
         reason: Reason,
     ) -> Detail<&FlagValue> {
-        match vr {
-            VariationOrRollout::Variation(index) => self.variation(*index, reason),
-            VariationOrRollout::Rollout(json) => {
-                error!("Rollout not yet implemented: {:?}", json);
-                Detail::err(eval::Error::Exception)
-            }
-        }
+        vr.variation(&self.key, user, &self.salt)
+            .map_or(Detail::err(eval::Error::MalformedFlag), |variation| {
+                self.variation(variation, reason)
+            })
     }
 }
 
@@ -503,9 +541,13 @@ mod tests {
         let rollout: VariationOrRolloutOrMalformed =
             serde_json::from_str(r#"{"rollout":{"variations":[{"variation":1,"weight":100000}]}}"#)
                 .expect("should parse");
-        assert_that!(rollout.get()).is_ok_containing(&VariationOrRollout::Rollout(
-            json! { {"variations": [{"variation": 1, "weight": 100000}]} },
-        ));
+        assert_that!(rollout.get()).is_ok_containing(&VariationOrRollout::Rollout {
+            bucket_by: None,
+            variations: vec![WeightedVariation {
+                variation: 1,
+                weight: 100000.0,
+            }],
+        });
 
         let malformed: VariationOrRolloutOrMalformed =
             serde_json::from_str("{}").expect("should parse");
@@ -523,6 +565,7 @@ mod tests {
         "prerequisites": [],
         "fallthrough": {"variation": 0},
         "offVariation": 1,
+        "salt": "kosher",
         "variations": [true, false]
     }"#;
 
@@ -548,6 +591,7 @@ mod tests {
         "prerequisites": [],
         "fallthrough": {"variation": 0},
         "offVariation": 1,
+        "salt": "kosher",
         "variations": [true, false]
     }"#;
 
@@ -568,8 +612,8 @@ mod tests {
 
     #[test]
     fn test_eval_flag_basic() {
-        let alice = User::with_key("alice".into()).build(); // not targeted
-        let bob = User::with_key("bob".into()).build(); // targeted
+        let alice = User::with_key("alice").build(); // not targeted
+        let bob = User::with_key("bob").build(); // targeted
         let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
 
         assert!(!flag.on);
@@ -643,8 +687,8 @@ mod tests {
 
     #[test]
     fn test_eval_flag_rules() {
-        let alice = User::with_key("alice".into()).build();
-        let bob = User::with_key("bob".into())
+        let alice = User::with_key("alice").build();
+        let bob = User::with_key("bob")
             .custom(hashmap! {
                 "team".into() => "Avengers".into(),
             })
@@ -684,8 +728,8 @@ mod tests {
         });
         store.patch("/flags/flag", PatchTarget::Flag(flag.clone()));
 
-        let alice = User::with_key("alice".into()).build();
-        let bob = User::with_key("bob".into()).build();
+        let alice = User::with_key("alice").build();
+        let bob = User::with_key("bob").build();
 
         // prerequisite missing => prerequisite failed.
         for user in vec![&alice, &bob] {
@@ -941,13 +985,13 @@ mod tests {
             values: vec!["mu".into()],
         };
 
-        let matching_user = User::with_key("mu".into())
+        let matching_user = User::with_key("mu")
             .custom(hashmap! {"a".into() => "foo".into()})
             .build();
-        let non_matching_user = User::with_key("nmu".into())
+        let non_matching_user = User::with_key("nmu")
             .custom(hashmap! {"a".into() => "lol".into()})
             .build();
-        let user_without_attr = User::with_key("uwa".into()).build();
+        let user_without_attr = User::with_key("uwa").build();
 
         assert!(one_val_clause.matches(&matching_user));
         assert!(!one_val_clause.matches(&non_matching_user));
@@ -985,7 +1029,7 @@ mod tests {
             "should not match non-matching key"
         );
 
-        let user_with_many = User::with_key("uwm".into())
+        let user_with_many = User::with_key("uwm")
             .custom(hashmap! {"a".into() => vec!["foo", "bar", "lol"].into()})
             .build();
 
@@ -1006,49 +1050,49 @@ mod tests {
     fn test_clause_matches_attributes() {
         let tests: HashMap<&str, AttributeTestCase> = hashmap! {
             "key" => AttributeTestCase {
-                matching_user: User::with_key("match".into()).build(),
-                non_matching_user: User::with_key("nope".into()).build(),
+                matching_user: User::with_key("match").build(),
+                non_matching_user: User::with_key("nope").build(),
                 user_without_attr: UserBuilder::new_with_optional_key(None).build(),
             },
             "secondary" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).secondary("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).secondary("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").secondary("match".into()).build(),
+                non_matching_user: User::with_key("nmu").secondary("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
             "ip" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).ip("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).ip("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").ip("match".into()).build(),
+                non_matching_user: User::with_key("nmu").ip("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
             "country" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).country("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).country("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").country("match".into()).build(),
+                non_matching_user: User::with_key("nmu").country("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
             "email" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).email("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).email("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").email("match".into()).build(),
+                non_matching_user: User::with_key("nmu").email("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
             "firstName" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).first_name("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).first_name("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").first_name("match".into()).build(),
+                non_matching_user: User::with_key("nmu").first_name("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
             "lastName" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).last_name("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).last_name("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").last_name("match".into()).build(),
+                non_matching_user: User::with_key("nmu").last_name("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
             "avatar" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).avatar("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).avatar("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").avatar("match".into()).build(),
+                non_matching_user: User::with_key("nmu").avatar("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
             "name" => AttributeTestCase {
-                matching_user: User::with_key("mu".into()).name("match".into()).build(),
-                non_matching_user: User::with_key("nmu".into()).name("nope".into()).build(),
-                user_without_attr: User::with_key("uwa".into()).build(),
+                matching_user: User::with_key("mu").name("match".into()).build(),
+                non_matching_user: User::with_key("nmu").name("nope".into()).build(),
+                user_without_attr: User::with_key("uwa").build(),
             },
         };
 
@@ -1087,9 +1131,9 @@ mod tests {
             values: vec![true.into()],
         };
 
-        let anon_user = User::with_key("anon".into()).anonymous(true).build();
-        let non_anon_user = User::with_key("nonanon".into()).anonymous(false).build();
-        let implicitly_non_anon_user = User::with_key("implicit".into()).build();
+        let anon_user = User::with_key("anon").anonymous(true).build();
+        let non_anon_user = User::with_key("nonanon").anonymous(false).build();
+        let implicitly_non_anon_user = User::with_key("implicit").build();
 
         assert!(clause.matches(&anon_user));
         assert!(!clause.matches(&non_anon_user));
@@ -1109,13 +1153,13 @@ mod tests {
                 values: vec!["match".into()],
             };
 
-            let matching_user = User::with_key("mu".into())
+            let matching_user = User::with_key("mu")
                 .custom(hashmap! {attr.into() => "match".into()})
                 .build();
-            let non_matching_user = User::with_key("nmu".into())
+            let non_matching_user = User::with_key("nmu")
                 .custom(hashmap! {attr.into() => "nope".into()})
                 .build();
-            let user_without_attr = User::with_key("uwa".into())
+            let user_without_attr = User::with_key("uwa")
                 .custom(hashmap! {attr.into() => AttributeValue::Null})
                 .build();
 
@@ -1131,5 +1175,34 @@ mod tests {
                 attr
             );
         }
+    }
+
+    #[test]
+    fn variation_index_for_user() {
+        const HASH_KEY: &str = "hashKey";
+        const SALT: &str = "saltyA";
+
+        let wv1 = WeightedVariation {
+            variation: 0,
+            weight: 60_000.0,
+        };
+        let wv2 = WeightedVariation {
+            variation: 1,
+            weight: 40_000.0,
+        };
+        let rollout = VariationOrRollout::Rollout {
+            bucket_by: None,
+            variations: vec![wv1, wv2],
+        };
+
+        asserting!("userKeyA should get variation 0")
+            .that(&rollout.variation(HASH_KEY, &User::with_key("userKeyA").build(), SALT))
+            .contains_value(0);
+        asserting!("userKeyB should get variation 1")
+            .that(&rollout.variation(HASH_KEY, &User::with_key("userKeyB").build(), SALT))
+            .contains_value(1);
+        asserting!("userKeyC should get variation 0")
+            .that(&rollout.variation(HASH_KEY, &User::with_key("userKeyC").build(), SALT))
+            .contains_value(0);
     }
 }

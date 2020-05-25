@@ -2,8 +2,11 @@ use std::collections::HashMap;
 
 use chrono::{self, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
 
 const USER_CUSTOM_STARTING_CAPACITY: usize = 10;
+const BUCKET_SCALE_INT: i64 = 0xFFFFFFFFFFFFFFF;
+const BUCKET_SCALE: f32 = BUCKET_SCALE_INT as f32;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -38,6 +41,12 @@ impl From<bool> for AttributeValue {
 impl From<i64> for AttributeValue {
     fn from(i: i64) -> AttributeValue {
         AttributeValue::Number(i as f64)
+    }
+}
+
+impl From<f64> for AttributeValue {
+    fn from(f: f64) -> Self {
+        AttributeValue::Number(f)
     }
 }
 
@@ -136,6 +145,14 @@ impl AttributeValue {
             }
         }
     }
+
+    fn as_bucketable(&self) -> Option<String> {
+        match self {
+            AttributeValue::String(s) => Some(s.clone()),
+            AttributeValue::Number(n) => Some(format!("{}", n)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -165,7 +182,7 @@ pub struct User {
 }
 
 impl User {
-    pub fn with_key(key: String) -> UserBuilder {
+    pub fn with_key(key: impl Into<String>) -> UserBuilder {
         UserBuilder::new(key)
     }
 
@@ -220,6 +237,41 @@ impl User {
         // TODO handle non-custom too
         self.custom.insert(key.to_string(), value.into());
     }
+
+    pub fn bucket(&self, flag_key: &str, by_attr: Option<&str>, salt: &str) -> f32 {
+        let attr_value = match by_attr {
+            Some(attr) => self.value_of(attr),
+            None => self._key.as_ref(),
+        };
+        self._bucket(flag_key, attr_value, salt).unwrap_or(0.0)
+    }
+
+    fn _bucket(
+        &self,
+        flag_key: &str,
+        attr_value: Option<&AttributeValue>,
+        salt: &str,
+    ) -> Option<f32> {
+        let mut id = attr_value?.as_bucketable()?;
+
+        for secondary in self.secondary() {
+            id.push('.');
+            id.push_str(secondary);
+        }
+
+        let mut hash = Sha1::new();
+        hash.update(flag_key.as_bytes());
+        hash.update(b".");
+        hash.update(salt.as_bytes());
+        hash.update(b".");
+        hash.update(id.as_bytes());
+        let hexhash = hash.hexdigest();
+
+        let hexhash_15 = &hexhash[..15]; // yes, 15 chars, not 16
+        let numhash = i64::from_str_radix(hexhash_15, 16).unwrap();
+
+        Some(numhash as f32 / BUCKET_SCALE)
+    }
 }
 
 pub struct UserBuilder {
@@ -237,8 +289,8 @@ pub struct UserBuilder {
 }
 
 impl UserBuilder {
-    pub fn new(key: String) -> Self {
-        Self::new_with_optional_key(Some(key))
+    pub fn new(key: impl Into<String>) -> Self {
+        Self::new_with_optional_key(Some(key.into()))
     }
 
     pub fn new_with_optional_key(key: Option<String>) -> Self {
@@ -318,5 +370,59 @@ impl UserBuilder {
             _anonymous: self.anonymous.map(AttributeValue::Bool),
             custom: self.custom.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use spectral::prelude::*;
+
+    const BUCKET_TOLERANCE: f32 = 0.0000001;
+
+    #[test]
+    fn bucket_user_by_key() {
+        let user = User::with_key("userKeyA").build();
+        let bucket = user.bucket("hashKey", None, "saltyA");
+        assert_that!(bucket).is_close_to(0.42157587, BUCKET_TOLERANCE);
+
+        let user = User::with_key("userKeyB").build();
+        let bucket = user.bucket("hashKey", None, "saltyA");
+        assert_that!(bucket).is_close_to(0.6708485, BUCKET_TOLERANCE);
+
+        let user = User::with_key("userKeyC").build();
+        let bucket = user.bucket("hashKey", None, "saltyA");
+        assert_that!(bucket).is_close_to(0.10343106, BUCKET_TOLERANCE);
+    }
+
+    #[test]
+    fn bucket_user_by_int_attr() {
+        const USER_KEY: &str = "userKeyD";
+
+        let custom = hashmap! {
+            "intAttr".into() => 33333.into(),
+        };
+        let user = User::with_key(USER_KEY).custom(custom).build();
+        let bucket = user.bucket("hashKey", Some("intAttr"), "saltyA");
+        assert_that!(bucket).is_close_to(0.54771423, BUCKET_TOLERANCE);
+
+        let custom = hashmap! {
+        "stringAttr".into() => "33333".into(),
+        };
+        let user = User::with_key(USER_KEY).custom(custom).build();
+        let bucket2 = user.bucket("hashKey", Some("stringAttr"), "saltyA");
+        assert_that!(bucket).is_close_to(bucket2, BUCKET_TOLERANCE);
+    }
+
+    #[test]
+    fn bucket_user_by_float_attr_not_allowed() {
+        const USER_KEY: &str = "userKeyE";
+        let custom = hashmap! {
+            "floatAttr".into() => 999.999.into(),
+        };
+        let user = User::with_key(USER_KEY).custom(custom).build();
+        let bucket = user.bucket("hashKey", Some("floatAttr"), "saltyA");
+        assert_that!(bucket).is_close_to(0.0, BUCKET_TOLERANCE);
     }
 }
