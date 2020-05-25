@@ -200,7 +200,10 @@ impl Client {
             default_for_event,
             true,
         );
-        self.event_processor.send(event);
+        let _ = self
+            .event_processor
+            .send(event)
+            .map_err(|e| warn!("failed to send event: {}", e));
 
         result
     }
@@ -218,7 +221,10 @@ impl Client {
             default_for_event,
             false,
         );
-        self.event_processor.send(event);
+        let _ = self
+            .event_processor
+            .send(event)
+            .map_err(|e| warn!("failed to send event: {}", e));
 
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO that is ugly, use the type system to fix it

@@ -57,7 +57,6 @@ impl EventSink for ReqwestSink {
 }
 
 #[cfg(test)]
-// TODO retain batch structure
 pub type MockSink = Vec<Event>;
 
 #[cfg(test)]
