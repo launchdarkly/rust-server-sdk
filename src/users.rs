@@ -13,7 +13,8 @@ const BUCKET_SCALE: f32 = BUCKET_SCALE_INT as f32;
 pub enum AttributeValue {
     String(String),
     Array(Vec<AttributeValue>),
-    Number(f64),
+    Int(i64),
+    Float(f64),
     Bool(bool),
     Null,
     // TODO implement other attribute types
@@ -40,13 +41,13 @@ impl From<bool> for AttributeValue {
 
 impl From<i64> for AttributeValue {
     fn from(i: i64) -> AttributeValue {
-        AttributeValue::Number(i as f64)
+        AttributeValue::Int(i)
     }
 }
 
 impl From<f64> for AttributeValue {
     fn from(f: f64) -> Self {
-        AttributeValue::Number(f)
+        AttributeValue::Float(f)
     }
 }
 
@@ -72,7 +73,8 @@ impl AttributeValue {
     /// None.
     pub fn to_f64(&self) -> Option<f64> {
         match self {
-            AttributeValue::Number(f) => Some(*f),
+            AttributeValue::Float(f) => Some(*f),
+            AttributeValue::Int(i) => Some(*i as f64),
             AttributeValue::String(s) => s.parse().ok(),
             AttributeValue::Bool(_) => None, // TODO check this
             AttributeValue::Null => None,
@@ -101,7 +103,8 @@ impl AttributeValue {
     /// It will return None if the conversion fails or if no conversion is possible.
     pub fn to_datetime(&self) -> Option<chrono::DateTime<Utc>> {
         match self {
-            AttributeValue::Number(millis) => {
+            AttributeValue::Int(millis) => Some(Utc.timestamp_millis(*millis)),
+            AttributeValue::Float(millis) => {
                 // TODO this has undefined behaviour for huge floats: https://stackoverflow.com/a/41139453
                 Some(Utc.timestamp_nanos((millis * 1e6).round() as i64))
             }
@@ -130,7 +133,10 @@ impl AttributeValue {
         P: Fn(&AttributeValue) -> bool,
     {
         match self {
-            AttributeValue::String(_) | AttributeValue::Number(_) | AttributeValue::Bool(_) => {
+            AttributeValue::String(_)
+            | AttributeValue::Int(_)
+            | AttributeValue::Float(_)
+            | AttributeValue::Bool(_) => {
                 if p(self) {
                     Some(&self)
                 } else {
@@ -149,7 +155,7 @@ impl AttributeValue {
     fn as_bucketable(&self) -> Option<String> {
         match self {
             AttributeValue::String(s) => Some(s.clone()),
-            AttributeValue::Number(n) => Some(format!("{}", n)),
+            AttributeValue::Int(i) => Some(i.to_string()),
             _ => None,
         }
     }

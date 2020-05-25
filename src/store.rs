@@ -777,8 +777,8 @@ mod tests {
     fn astring(s: &str) -> AttributeValue {
         AttributeValue::String(s.into())
     }
-    fn anum(f: f64) -> AttributeValue {
-        AttributeValue::Number(f)
+    fn afloat(f: f64) -> AttributeValue {
+        AttributeValue::Float(f)
     }
 
     #[test]
@@ -793,9 +793,9 @@ mod tests {
         );
 
         // numbers
-        assert!(Op::In.matches(&anum(42.0), &anum(42.0)));
-        assert!(!Op::In.matches(&anum(42.0), &anum(3.0)));
-        assert!(Op::In.matches(&anum(0.0), &anum(-0.0)));
+        assert!(Op::In.matches(&afloat(42.0), &afloat(42.0)));
+        assert!(!Op::In.matches(&afloat(42.0), &afloat(3.0)));
+        assert!(Op::In.matches(&afloat(0.0), &afloat(-0.0)));
     }
 
     #[test]
@@ -878,34 +878,34 @@ mod tests {
     #[test]
     fn test_ops_numeric() {
         // basic numeric comparisons
-        assert!(Op::LessThan.matches(&anum(0.0), &anum(1.0)));
-        assert!(!Op::LessThan.matches(&anum(0.0), &anum(0.0)));
-        assert!(!Op::LessThan.matches(&anum(1.0), &anum(0.0)));
+        assert!(Op::LessThan.matches(&afloat(0.0), &afloat(1.0)));
+        assert!(!Op::LessThan.matches(&afloat(0.0), &afloat(0.0)));
+        assert!(!Op::LessThan.matches(&afloat(1.0), &afloat(0.0)));
 
-        assert!(Op::GreaterThan.matches(&anum(1.0), &anum(0.0)));
-        assert!(!Op::GreaterThan.matches(&anum(0.0), &anum(0.0)));
-        assert!(!Op::GreaterThan.matches(&anum(0.0), &anum(1.0)));
+        assert!(Op::GreaterThan.matches(&afloat(1.0), &afloat(0.0)));
+        assert!(!Op::GreaterThan.matches(&afloat(0.0), &afloat(0.0)));
+        assert!(!Op::GreaterThan.matches(&afloat(0.0), &afloat(1.0)));
 
-        assert!(Op::LessThanOrEqual.matches(&anum(0.0), &anum(1.0)));
-        assert!(Op::LessThanOrEqual.matches(&anum(0.0), &anum(0.0)));
-        assert!(!Op::LessThanOrEqual.matches(&anum(1.0), &anum(0.0)));
+        assert!(Op::LessThanOrEqual.matches(&afloat(0.0), &afloat(1.0)));
+        assert!(Op::LessThanOrEqual.matches(&afloat(0.0), &afloat(0.0)));
+        assert!(!Op::LessThanOrEqual.matches(&afloat(1.0), &afloat(0.0)));
 
-        assert!(Op::GreaterThanOrEqual.matches(&anum(1.0), &anum(0.0)));
-        assert!(Op::GreaterThanOrEqual.matches(&anum(0.0), &anum(0.0)));
-        assert!(!Op::GreaterThanOrEqual.matches(&anum(0.0), &anum(1.0)));
+        assert!(Op::GreaterThanOrEqual.matches(&afloat(1.0), &afloat(0.0)));
+        assert!(Op::GreaterThanOrEqual.matches(&afloat(0.0), &afloat(0.0)));
+        assert!(!Op::GreaterThanOrEqual.matches(&afloat(0.0), &afloat(1.0)));
 
         // conversions
         assert!(
-            Op::LessThan.matches(&astring("0"), &anum(1.0)),
+            Op::LessThan.matches(&astring("0"), &afloat(1.0)),
             "should convert numeric string on LHS"
         );
         assert!(
-            Op::LessThan.matches(&anum(0.0), &astring("1")),
+            Op::LessThan.matches(&afloat(0.0), &astring("1")),
             "should convert numeric string on RHS"
         );
 
         assert!(
-            !Op::LessThan.matches(&astring("Tuesday"), &anum(7.0)),
+            !Op::LessThan.matches(&astring("Tuesday"), &afloat(7.0)),
             "non-numeric strings don't match"
         );
     }
@@ -920,36 +920,42 @@ mod tests {
         let yesterday_millis = today_millis - 86_400_000 as f64;
 
         // basic UNIX timestamp comparisons
-        assert!(Op::Before.matches(&anum(yesterday_millis), &anum(today_millis)));
-        assert!(!Op::Before.matches(&anum(today_millis), &anum(yesterday_millis)));
-        assert!(!Op::Before.matches(&anum(today_millis), &anum(today_millis)));
+        assert!(Op::Before.matches(&afloat(yesterday_millis), &afloat(today_millis)));
+        assert!(!Op::Before.matches(&afloat(today_millis), &afloat(yesterday_millis)));
+        assert!(!Op::Before.matches(&afloat(today_millis), &afloat(today_millis)));
 
-        assert!(Op::After.matches(&anum(today_millis), &anum(yesterday_millis)));
-        assert!(!Op::After.matches(&anum(yesterday_millis), &anum(today_millis)));
-        assert!(!Op::After.matches(&anum(today_millis), &anum(today_millis)));
+        assert!(Op::After.matches(&afloat(today_millis), &afloat(yesterday_millis)));
+        assert!(!Op::After.matches(&afloat(yesterday_millis), &afloat(today_millis)));
+        assert!(!Op::After.matches(&afloat(today_millis), &afloat(today_millis)));
 
         // numeric strings get converted as millis
-        assert!(Op::Before.matches(&astring(&yesterday_millis.to_string()), &anum(today_millis)));
-        assert!(Op::After.matches(&anum(today_millis), &astring(&yesterday_millis.to_string())));
+        assert!(Op::Before.matches(
+            &astring(&yesterday_millis.to_string()),
+            &afloat(today_millis)
+        ));
+        assert!(Op::After.matches(
+            &afloat(today_millis),
+            &astring(&yesterday_millis.to_string())
+        ));
 
         // date-formatted strings get parsed
         assert!(Op::Before.matches(
             &astring("2019-11-19T17:29:00.000000-07:00"),
-            &anum(today_millis)
+            &afloat(today_millis)
         ));
         assert!(
-            Op::Before.matches(&astring("2019-11-19T17:29:00-07:00"), &anum(today_millis)),
+            Op::Before.matches(&astring("2019-11-19T17:29:00-07:00"), &afloat(today_millis)),
             "fractional seconds part is optional"
         );
 
         assert!(Op::After.matches(
-            &anum(today_millis),
+            &afloat(today_millis),
             &astring("2019-11-19T17:29:00.000000-07:00")
         ));
 
         // nonsense strings don't match
-        assert!(!Op::Before.matches(&astring("fish"), &anum(today_millis)));
-        assert!(!Op::After.matches(&anum(today_millis), &astring("fish")));
+        assert!(!Op::Before.matches(&astring("fish"), &afloat(today_millis)));
+        assert!(!Op::After.matches(&afloat(today_millis), &astring("fish")));
     }
 
     #[test]
