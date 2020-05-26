@@ -8,6 +8,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const FLAGS_PREFIX: &str = "/flags/";
+const SEGMENTS_PREFIX: &str = "/segments/";
+
+type Error = String; // TODO
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -132,8 +135,8 @@ enum Op {
     GreaterThanOrEqual,
     Before,
     After,
-    // TODO actually implement these
     SegmentMatch,
+    // TODO actually implement these
     SemVerEqual,
     SemVerGreaterThan,
     SemVerLessThan,
@@ -165,7 +168,13 @@ impl Op {
 
             Op::Before => time_op(lhs, rhs, |l, r| l < r),
             Op::After => time_op(lhs, rhs, |l, r| l > r),
-            Op::SegmentMatch | Op::SemVerEqual | Op::SemVerGreaterThan | Op::SemVerLessThan => {
+
+            Op::SegmentMatch => {
+                error!("segmentMatch operator should be special-cased, shouldn't get here");
+                false
+            }
+
+            Op::SemVerEqual | Op::SemVerGreaterThan | Op::SemVerLessThan => {
                 error!("Encountered unimplemented flag rule operation {:?}", self);
                 false
             }
@@ -211,7 +220,34 @@ struct Clause {
 }
 
 impl Clause {
-    fn matches(&self, user: &User) -> bool {
+    fn matches(&self, user: &User, store: &FeatureStore) -> bool {
+        if let Op::SegmentMatch = self.op {
+            self.matches_segment(user, store)
+        } else {
+            self.matches_non_segment(user)
+        }
+    }
+
+    fn maybe_negate(&self, v: bool) -> bool {
+        if self.negate {
+            !v
+        } else {
+            v
+        }
+    }
+
+    fn matches_segment(&self, user: &User, store: &FeatureStore) -> bool {
+        let any_match = self.values.iter().find(|value| {
+            value
+                .as_str()
+                .and_then(|segment_key| store.segment(segment_key))
+                .map(|segment| segment.contains(user))
+                .unwrap_or(false)
+        });
+        self.maybe_negate(any_match.is_some())
+    }
+
+    fn matches_non_segment(&self, user: &User) -> bool {
         let user_val = match user.value_of(&self.attribute) {
             Some(v) => v,
             None => return false,
@@ -225,26 +261,22 @@ impl Clause {
             any_match_for_v.is_some()
         });
 
-        if self.negate {
-            any_match.is_none()
-        } else {
-            any_match.is_some()
-        }
+        self.maybe_negate(any_match.is_some())
     }
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct Rule {
+struct FlagRule {
     clauses: Vec<Clause>,
     #[serde(flatten)]
     variation_or_rollout: VariationOrRollout,
 }
 
-impl Rule {
-    fn matches(&self, user: &User) -> bool {
+impl FlagRule {
+    fn matches(&self, user: &User, store: &FeatureStore) -> bool {
         // rules match if _all_ of their clauses do
         for clause in &self.clauses {
-            if !clause.matches(user) {
+            if !clause.matches(user, store) {
                 return false;
             }
         }
@@ -280,7 +312,7 @@ impl From<VariationOrRollout> for VariationOrRolloutOrMalformed {
 #[serde(untagged)]
 pub enum PatchTarget {
     Flag(FeatureFlag),
-    // TODO support segments too
+    Segment(Segment),
     Other(serde_json::Value),
 }
 
@@ -339,7 +371,7 @@ pub struct FeatureFlag {
     on: bool,
 
     targets: Vec<Target>,
-    rules: Vec<Rule>,
+    rules: Vec<FlagRule>,
     prerequisites: Vec<Prereq>,
 
     fallthrough: VariationOrRolloutOrMalformed,
@@ -403,7 +435,7 @@ impl FeatureFlag {
         }
 
         for rule in &self.rules {
-            if rule.matches(&user) {
+            if rule.matches(&user, store) {
                 return self.value_for_variation_or_rollout(
                     &rule.variation_or_rollout,
                     &user,
@@ -451,7 +483,61 @@ impl FeatureFlag {
     }
 }
 
-pub type Segment = serde_json::Value; // TODO
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Segment {
+    pub key: String,
+
+    included: Vec<String>,
+    excluded: Vec<String>,
+    rules: Vec<SegmentRule>,
+    salt: String,
+}
+
+impl Segment {
+    // TODO segment explanations
+    fn contains(&self, user: &User) -> bool {
+        let user_key = match user.key() {
+            Some(key) => key,
+            None => return false,
+        };
+
+        if self.included.contains(user_key) {
+            return true;
+        }
+        if self.excluded.contains(user_key) {
+            return false;
+        }
+
+        for rule in &self.rules {
+            if rule.matches(user) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SegmentRule {
+    clauses: Vec<Clause>,
+    // TODO segment rollout
+    // weight: Option<VariationWeight>
+    // bucket_by: Option<String>,
+}
+
+impl SegmentRule {
+    fn matches(&self, user: &User) -> bool {
+        // rules match if _all_ of their clauses do
+        for clause in &self.clauses {
+            if !clause.matches_non_segment(user) {
+                return false;
+            }
+        }
+        true
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct AllData {
@@ -478,39 +564,64 @@ impl FeatureStore {
         self.data = new_data;
     }
 
-    pub fn flag(&self, flag_name: &str) -> Option<&FeatureFlag> {
-        self.data.flags.get(flag_name)
+    pub fn flag(&self, flag_key: &str) -> Option<&FeatureFlag> {
+        self.data.flags.get(flag_key)
+    }
+
+    pub fn segment(&self, segment_key: &str) -> Option<&Segment> {
+        self.data.segments.get(segment_key)
     }
 
     pub fn all_flags(&self) -> &HashMap<String, FeatureFlag> {
         &self.data.flags
     }
 
-    pub fn patch(&mut self, path: &str, data: PatchTarget) {
-        if !path.starts_with(FLAGS_PREFIX) {
-            error!("Ignoring patch for {}, can only patch flags atm", path);
-            return;
+    pub fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error> {
+        if path.starts_with(FLAGS_PREFIX) {
+            let flag_key = &path[FLAGS_PREFIX.len()..];
+            self.patch_flag(flag_key, data)
+        } else if path.starts_with(SEGMENTS_PREFIX) {
+            let segment_key = &path[SEGMENTS_PREFIX.len()..];
+            self.patch_segment(segment_key, data)
+        } else {
+            Err(format!("can't patch {}", path))
         }
-        let flag = match data {
-            PatchTarget::Flag(f) => f,
-            PatchTarget::Other(json) => {
-                error!("Couldn't parse JSON as a flag to patch {}: {}", path, json);
-                return;
-            }
-        };
-
-        let flag_name = &path[FLAGS_PREFIX.len()..];
-        self.data.flags.insert(flag_name.to_string(), flag);
     }
 
-    pub fn delete(&mut self, path: &str) {
-        if !path.starts_with(FLAGS_PREFIX) {
-            error!("Ignoring delete for {}, can only delete flags atm", path);
-            return;
+    fn patch_flag(&mut self, flag_key: &str, data: PatchTarget) -> Result<(), Error> {
+        let flag = match data {
+            PatchTarget::Flag(f) => Ok(f),
+            PatchTarget::Segment(_) => Err("expected a flag, got a segment".to_string()),
+            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a flag: {}", json)),
+        }?;
+
+        self.data.flags.insert(flag_key.to_string(), flag);
+        Ok(())
+    }
+
+    fn patch_segment(&mut self, segment_key: &str, data: PatchTarget) -> Result<(), Error> {
+        let segment = match data {
+            PatchTarget::Segment(s) => Ok(s),
+            PatchTarget::Flag(_) => Err("expected a segment, got a flag".to_string()),
+            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a segment: {}", json)),
+        }?;
+
+        self.data.segments.insert(segment_key.to_string(), segment);
+        Ok(())
+    }
+
+    pub fn delete(&mut self, path: &str) -> Result<(), Error> {
+        if path.starts_with(FLAGS_PREFIX) {
+            let flag_key = &path[FLAGS_PREFIX.len()..];
+            self.data.flags.remove(flag_key);
+        } else if path.starts_with(SEGMENTS_PREFIX) {
+            let segment_key = &path[SEGMENTS_PREFIX.len()..];
+            self.data.segments.remove(segment_key);
+        } else {
+            return Err(format!("can't delete {}", path));
         }
 
-        let flag_name = &path[FLAGS_PREFIX.len()..];
-        self.data.flags.remove(flag_name);
+        Ok(())
     }
 }
 
@@ -595,6 +706,16 @@ mod tests {
         "variations": [true, false]
     }"#;
 
+    const TEST_SEGMENT_JSON: &str = r#"{
+        "deleted": false,
+        "excluded": ["bob"],
+        "included": ["alice"],
+        "key": "awesome-people",
+        "rules": [],
+        "salt": "kosher",
+        "version": 1
+    }"#;
+
     #[test]
     fn test_parse_flag() {
         let flags = btreemap! {
@@ -607,6 +728,21 @@ mod tests {
             assert_eq!(f.key, key);
             assert!(!f.on);
             assert_eq!(f.off_variation, Some(1));
+        }
+    }
+
+    #[test]
+    fn test_parse_segment() {
+        let segments = btreemap! {
+            "test-segment" => TEST_SEGMENT_JSON,
+        };
+        for (key, json) in segments {
+            let s: Segment = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("should parse segment {}: {}", key, e));
+            assert_that!(s.key).is_equal_to("awesome-people".to_string());
+            assert_that!(s.included).is_equal_to(vec!["alice".into()]);
+            assert_that!(s.excluded).is_equal_to(vec!["bob".into()]);
+            assert_that!(s.salt).is_equal_to("kosher".to_string());
         }
     }
 
@@ -726,7 +862,9 @@ mod tests {
             key: "prereq".to_string(),
             variation: 1,
         });
-        store.patch("/flags/flag", PatchTarget::Flag(flag.clone()));
+        store
+            .patch("/flags/flag", PatchTarget::Flag(flag.clone()))
+            .expect("patch should succeed");
 
         let alice = User::with_key("alice").build();
         let bob = User::with_key("bob").build();
@@ -746,7 +884,9 @@ mod tests {
             values: vec!["bob".into()],
             variation: 0,
         });
-        store.patch("/flags/prereq", PatchTarget::Flag(prereq.clone()));
+        store
+            .patch("/flags/prereq", PatchTarget::Flag(prereq.clone()))
+            .expect("patch should succeed");
 
         // prerequisite on
         let detail = flag.evaluate(&alice, &store);
@@ -762,7 +902,9 @@ mod tests {
         });
 
         prereq.on = false;
-        store.patch("/flags/prereq", PatchTarget::Flag(prereq.clone()));
+        store
+            .patch("/flags/prereq", PatchTarget::Flag(prereq.clone()))
+            .expect("patch should succeed");
 
         // prerequisite off
         for user in vec![&alice, &bob] {
@@ -772,6 +914,47 @@ mod tests {
                 prerequisite_key: "prereq".to_string(),
             });
         }
+    }
+
+    #[test]
+    fn test_eval_flag_segments() {
+        let mut store = FeatureStore::new();
+
+        let mut segment = Segment::default();
+        segment.key = "segment".to_string();
+        segment.included.push("alice".to_string());
+        store
+            .patch_segment("segment", PatchTarget::Segment(segment))
+            .expect("patch should succeed");
+
+        let mut flag = FeatureFlag::basic_flag("flag");
+        flag.on = true;
+        flag.rules.push(FlagRule {
+            clauses: vec![Clause {
+                attribute: "segmentMatch".to_string(),
+                op: Op::SegmentMatch,
+                values: vec!["segment".into()],
+                negate: false,
+            }],
+            variation_or_rollout: VariationOrRollout::Variation(0),
+        });
+        store
+            .patch("/flags/flag", PatchTarget::Flag(flag.clone()))
+            .expect("patch should succeed");
+
+        let alice = User::with_key("alice").build();
+        let bob = User::with_key("bob").build();
+
+        let detail = flag.evaluate(&alice, &store);
+        asserting!("alice is in segment, should see false with RuleMatch")
+            .that(&detail.value)
+            .contains_value(&Bool(false));
+        assert_that!(detail.reason).is_equal_to(Reason::RuleMatch);
+        let detail = flag.evaluate(&bob, &store);
+        asserting!("bob is not in segment and should see fallthrough")
+            .that(&detail.value)
+            .contains_value(&Bool(true));
+        assert_that!(detail.reason).is_equal_to(Reason::Fallthrough);
     }
 
     fn astring(s: &str) -> AttributeValue {
@@ -999,39 +1182,42 @@ mod tests {
             .build();
         let user_without_attr = User::with_key("uwa").build();
 
-        assert!(one_val_clause.matches(&matching_user));
-        assert!(!one_val_clause.matches(&non_matching_user));
-        assert!(!one_val_clause.matches(&user_without_attr));
+        assert!(one_val_clause.matches(&matching_user, &FeatureStore::new()));
+        assert!(!one_val_clause.matches(&non_matching_user, &FeatureStore::new()));
+        assert!(!one_val_clause.matches(&user_without_attr, &FeatureStore::new()));
 
-        assert!(!negated_clause.matches(&matching_user));
-        assert!(negated_clause.matches(&non_matching_user));
+        assert!(!negated_clause.matches(&matching_user, &FeatureStore::new()));
+        assert!(negated_clause.matches(&non_matching_user, &FeatureStore::new()));
 
         assert!(
-            !negated_clause.matches(&user_without_attr),
+            !negated_clause.matches(&user_without_attr, &FeatureStore::new()),
             "targeting missing attribute does not match even when negated"
         );
 
         assert!(
-            many_val_clause.matches(&matching_user),
+            many_val_clause.matches(&matching_user, &FeatureStore::new()),
             "requires only one of the values"
         );
-        assert!(!many_val_clause.matches(&non_matching_user));
-        assert!(!many_val_clause.matches(&user_without_attr));
+        assert!(!many_val_clause.matches(&non_matching_user, &FeatureStore::new()));
+        assert!(!many_val_clause.matches(&user_without_attr, &FeatureStore::new()));
 
         assert!(
-            !negated_many_val_clause.matches(&matching_user),
+            !negated_many_val_clause.matches(&matching_user, &FeatureStore::new()),
             "requires all values are missing"
         );
-        assert!(negated_many_val_clause.matches(&non_matching_user));
+        assert!(negated_many_val_clause.matches(&non_matching_user, &FeatureStore::new()));
 
         assert!(
-            !negated_many_val_clause.matches(&user_without_attr),
+            !negated_many_val_clause.matches(&user_without_attr, &FeatureStore::new()),
             "targeting missing attribute does not match even when negated"
         );
 
-        assert!(key_clause.matches(&matching_user), "should match key");
         assert!(
-            !key_clause.matches(&non_matching_user),
+            key_clause.matches(&matching_user, &FeatureStore::new()),
+            "should match key"
+        );
+        assert!(
+            !key_clause.matches(&non_matching_user, &FeatureStore::new()),
             "should not match non-matching key"
         );
 
@@ -1039,11 +1225,11 @@ mod tests {
             .custom(hashmap! {"a".into() => vec!["foo", "bar", "lol"].into()})
             .build();
 
-        assert!(one_val_clause.matches(&user_with_many));
-        assert!(many_val_clause.matches(&user_with_many));
+        assert!(one_val_clause.matches(&user_with_many, &FeatureStore::new()));
+        assert!(many_val_clause.matches(&user_with_many, &FeatureStore::new()));
 
-        assert!(!negated_clause.matches(&user_with_many));
-        assert!(!negated_many_val_clause.matches(&user_with_many));
+        assert!(!negated_clause.matches(&user_with_many, &FeatureStore::new()));
+        assert!(!negated_many_val_clause.matches(&user_with_many, &FeatureStore::new()));
     }
 
     struct AttributeTestCase {
@@ -1111,17 +1297,17 @@ mod tests {
             };
 
             assert!(
-                clause.matches(&test_case.matching_user),
+                clause.matches(&test_case.matching_user, &FeatureStore::new()),
                 "should match {}",
                 attr
             );
             assert!(
-                !clause.matches(&test_case.non_matching_user),
+                !clause.matches(&test_case.non_matching_user, &FeatureStore::new()),
                 "should not match non-matching {}",
                 attr
             );
             assert!(
-                !clause.matches(&test_case.user_without_attr),
+                !clause.matches(&test_case.user_without_attr, &FeatureStore::new()),
                 "should not match user with null {}",
                 attr
             );
@@ -1141,9 +1327,9 @@ mod tests {
         let non_anon_user = User::with_key("nonanon").anonymous(false).build();
         let implicitly_non_anon_user = User::with_key("implicit").build();
 
-        assert!(clause.matches(&anon_user));
-        assert!(!clause.matches(&non_anon_user));
-        assert!(!clause.matches(&implicitly_non_anon_user));
+        assert!(clause.matches(&anon_user, &FeatureStore::new()));
+        assert!(!clause.matches(&non_anon_user, &FeatureStore::new()));
+        assert!(!clause.matches(&implicitly_non_anon_user, &FeatureStore::new()));
     }
 
     #[test]
@@ -1169,14 +1355,18 @@ mod tests {
                 .custom(hashmap! {attr.into() => AttributeValue::Null})
                 .build();
 
-            assert!(clause.matches(&matching_user), "should match {}", attr);
             assert!(
-                !clause.matches(&non_matching_user),
+                clause.matches(&matching_user, &FeatureStore::new()),
+                "should match {}",
+                attr
+            );
+            assert!(
+                !clause.matches(&non_matching_user, &FeatureStore::new()),
                 "should not match non-matching {}",
                 attr
             );
             assert!(
-                !clause.matches(&user_without_attr),
+                !clause.matches(&user_without_attr, &FeatureStore::new()),
                 "should not match user with null {}",
                 attr
             );

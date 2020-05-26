@@ -11,7 +11,8 @@ use super::store::{AllData, FeatureStore, PatchTarget};
 pub enum Error {
     EventSource(es::Error),
     InvalidEventData(String, Box<dyn std::error::Error + Send>),
-    InvalidEventPath(String, String),
+    InvalidPutPath(String),
+    InvalidUpdate(String),
     InvalidEventType(String),
     MissingEventField(String, String),
 }
@@ -92,13 +93,13 @@ impl MockUpdateProcessor {
     }
 
     pub fn patch(&self, patch: PatchData) -> Result<()> {
-        Ok(self
-            .store
+        self.store
             .as_ref()
             .expect("not subscribed")
             .lock()
             .unwrap()
-            .patch(&patch.path, patch.data))
+            .patch(&patch.path, patch.data)
+            .map_err(Error::InvalidUpdate)
     }
 }
 
@@ -127,21 +128,18 @@ fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
         store.init(put.data);
         Ok(())
     } else {
-        Err(Error::InvalidEventPath(
-            event.event_type,
-            put.path.to_string(),
-        ))
+        Err(Error::InvalidPutPath(put.path.to_string()))
     }
 }
 
 fn process_patch(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
-    store.patch(&patch.path, patch.data);
-    Ok(())
+    store
+        .patch(&patch.path, patch.data)
+        .map_err(Error::InvalidUpdate)
 }
 
 fn process_delete(store: &mut FeatureStore, event: es::Event) -> Result<()> {
     let delete: DeleteData = parse_event_data(&event)?;
-    store.delete(&delete.path);
-    Ok(())
+    store.delete(&delete.path).map_err(Error::InvalidUpdate)
 }

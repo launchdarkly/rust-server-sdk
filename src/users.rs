@@ -244,17 +244,17 @@ impl User {
         self.custom.insert(key.to_string(), value.into());
     }
 
-    pub fn bucket(&self, flag_key: &str, by_attr: Option<&str>, salt: &str) -> f32 {
+    pub fn bucket(&self, bucketing_key: &str, by_attr: Option<&str>, salt: &str) -> f32 {
         let attr_value = match by_attr {
             Some(attr) => self.value_of(attr),
             None => self._key.as_ref(),
         };
-        self._bucket(flag_key, attr_value, salt).unwrap_or(0.0)
+        self._bucket(bucketing_key, attr_value, salt).unwrap_or(0.0)
     }
 
     fn _bucket(
         &self,
-        flag_key: &str,
+        bucketing_key: &str,
         attr_value: Option<&AttributeValue>,
         salt: &str,
     ) -> Option<f32> {
@@ -266,7 +266,7 @@ impl User {
         }
 
         let mut hash = Sha1::new();
-        hash.update(flag_key.as_bytes());
+        hash.update(bucketing_key.as_bytes());
         hash.update(b".");
         hash.update(salt.as_bytes());
         hash.update(b".");
