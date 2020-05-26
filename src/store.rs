@@ -319,6 +319,7 @@ impl From<VariationOrRollout> for VariationOrRolloutOrMalformed {
 
 #[derive(Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum PatchTarget {
     Flag(FeatureFlag),
     Segment(Segment),

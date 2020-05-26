@@ -114,9 +114,10 @@ impl Event {
         // TODO that is ugly, use the type system to fix it
         let value = detail.value.unwrap();
 
-        let reason = match send_reason {
-            false => None,
-            true => Some(detail.reason),
+        let reason = if send_reason {
+            Some(detail.reason)
+        } else {
+            None
         };
 
         Event::FeatureRequest {
@@ -169,6 +170,12 @@ pub struct EventSummary {
     pub features: HashMap<VariationKey, VariationSummary>,
 }
 
+impl Default for EventSummary {
+    fn default() -> Self {
+        EventSummary::new()
+    }
+}
+
 impl EventSummary {
     pub fn new() -> Self {
         EventSummary {
@@ -183,35 +190,33 @@ impl EventSummary {
     }
 
     pub fn add(&mut self, event: &Event) {
-        match event {
-            Event::FeatureRequest {
-                base: BaseEvent { creation_date, .. },
-                key,
-                value,
-                version,
-                variation,
-                default,
-                ..
-            } => {
-                self.start_date = min(self.start_date, *creation_date);
-                self.end_date = max(self.end_date, *creation_date);
+        if let Event::FeatureRequest {
+            base: BaseEvent { creation_date, .. },
+            key,
+            value,
+            version,
+            variation,
+            default,
+            ..
+        } = event
+        {
+            self.start_date = min(self.start_date, *creation_date);
+            self.end_date = max(self.end_date, *creation_date);
 
-                let variation_key = VariationKey {
-                    flag_key: key.clone(),
-                    version: *version,
-                    variation: *variation,
-                };
-                match self.features.get_mut(&variation_key) {
-                    Some(summary) => summary.count_request(value, default),
-                    None => {
-                        self.features.insert(
-                            variation_key,
-                            VariationSummary::new(value.clone(), default.clone()),
-                        );
-                    }
+            let variation_key = VariationKey {
+                flag_key: key.clone(),
+                version: *version,
+                variation: *variation,
+            };
+            match self.features.get_mut(&variation_key) {
+                Some(summary) => summary.count_request(value, default),
+                None => {
+                    self.features.insert(
+                        variation_key,
+                        VariationSummary::new(value.clone(), default.clone()),
+                    );
                 }
             }
-            _ => (),
         }
     }
 }

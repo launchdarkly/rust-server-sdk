@@ -268,7 +268,7 @@ impl User {
     ) -> Option<f32> {
         let mut id = attr_value?.as_bucketable()?;
 
-        for secondary in self.secondary() {
+        if let Some(secondary) = self.secondary() {
             id.push('.');
             id.push_str(secondary);
         }
