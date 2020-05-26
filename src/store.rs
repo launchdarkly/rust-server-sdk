@@ -388,7 +388,6 @@ pub struct FeatureFlag {
     variations: Vec<FlagValue>,
 
     salt: String,
-
     // TODO implement more flag fields
 }
 

@@ -15,11 +15,11 @@ jobs:
           name: Install rustfmt
           command: rustup component add rustfmt
 
+      - run: cargo build
+      - run: cargo test
       - run:
           name: Check consistent formatting
           command: cargo fmt && git diff --exit-code
-      - run: cargo build
-      - run: cargo test
       - run: cargo doc --no-deps
       - run: cargo clippy -- -D warnings
 
