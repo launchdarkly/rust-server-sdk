@@ -60,7 +60,7 @@ impl EventBatcher {
 
         let _worker_handle = thread::Builder::new()
             // TODO make this an object with methods, this is confusing
-            .spawn(move || 'batch: loop {
+            .spawn(move || loop {
                 debug!("waiting for a batch to send");
 
                 let batch_deadline: Instant = Instant::now() + batch_timeout;

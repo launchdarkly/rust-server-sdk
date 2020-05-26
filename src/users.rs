@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 
 const USER_CUSTOM_STARTING_CAPACITY: usize = 10;
-const BUCKET_SCALE_INT: i64 = 0xFFFFFFFFFFFFFFF;
+const BUCKET_SCALE_INT: i64 = 0x0FFF_FFFF_FFFF_FFFF;
 const BUCKET_SCALE: f32 = BUCKET_SCALE_INT as f32;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

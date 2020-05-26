@@ -523,7 +523,7 @@ impl Segment {
             }
         }
 
-        return false;
+        false
     }
 }
 
