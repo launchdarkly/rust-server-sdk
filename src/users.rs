@@ -128,6 +128,14 @@ impl AttributeValue {
         }
     }
 
+    /// as_semver will attempt to parse a string attribute into a semver version.
+    /// It will return None if it cannot parse it, or for non-string attributes.
+    pub fn as_semver(&self) -> Option<semver::Version> {
+        let version_str = self.as_str()?.as_str();
+        semver::Version::parse(version_str).ok()
+        // TODO implement LD-specific semver extensions
+    }
+
     pub fn find<P>(&self, p: P) -> Option<&AttributeValue>
     where
         P: Fn(&AttributeValue) -> bool,

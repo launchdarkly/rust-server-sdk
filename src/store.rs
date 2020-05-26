@@ -136,11 +136,9 @@ enum Op {
     Before,
     After,
     SegmentMatch,
-    // TODO actually implement these
     SemVerEqual,
     SemVerGreaterThan,
     SemVerLessThan,
-    // TODO implement other matching operations
 }
 
 impl Op {
@@ -174,10 +172,10 @@ impl Op {
                 false
             }
 
-            Op::SemVerEqual | Op::SemVerGreaterThan | Op::SemVerLessThan => {
-                error!("Encountered unimplemented flag rule operation {:?}", self);
-                false
-            }
+            // TODO test semver ops
+            Op::SemVerEqual => semver_op(lhs, rhs, |l, r| l == r),
+            Op::SemVerLessThan => semver_op(lhs, rhs, |l, r| l < r),
+            Op::SemVerGreaterThan => semver_op(lhs, rhs, |l, r| l > r),
         }
     }
 }
@@ -206,6 +204,17 @@ fn time_op<F: Fn(chrono::DateTime<Utc>, chrono::DateTime<Utc>) -> bool>(
     f: F,
 ) -> bool {
     match (lhs.to_datetime(), rhs.to_datetime()) {
+        (Some(l), Some(r)) => f(l, r),
+        _ => false,
+    }
+}
+
+fn semver_op<F: Fn(semver::Version, semver::Version) -> bool>(
+    lhs: &AttributeValue,
+    rhs: &AttributeValue,
+    f: F,
+) -> bool {
+    match (lhs.as_semver(), rhs.as_semver()) {
         (Some(l), Some(r)) => f(l, r),
         _ => false,
     }
