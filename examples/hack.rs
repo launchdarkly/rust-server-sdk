@@ -54,12 +54,12 @@ fn main() {
     let bob = User::with_key("bob").build();
 
     let mut client_builder = Client::configure();
-    let _ = stream_url_opt.map(|url| {
+    if let Ok(url) = stream_url_opt {
         client_builder.stream_base_url(&url);
-    });
-    let _ = events_url_opt.map(|url| {
+    }
+    if let Ok(url) = events_url_opt {
         client_builder.events_base_url(&url);
-    });
+    }
     let mut client = client_builder.build(&sdk_key).unwrap();
 
     tokio::run(lazy(move || {

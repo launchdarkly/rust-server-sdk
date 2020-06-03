@@ -30,12 +30,12 @@ fn main() {
     let user = User::with_key(flags[0].clone()).build();
 
     let mut client_builder = Client::configure();
-    let _ = stream_url_opt.map(|url| {
+    if let Ok(url) = stream_url_opt {
         client_builder.stream_base_url(&url);
-    });
-    let _ = events_url_opt.map(|url| {
+    }
+    if let Ok(url) = events_url_opt {
         client_builder.events_base_url(&url);
-    });
+    }
     let client = client_builder
         .build(&sdk_key)
         .expect("failed to configure client")
