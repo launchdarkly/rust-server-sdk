@@ -33,7 +33,6 @@ fn main() {
     let ld_w = ld.clone();
 
     let mut rt = tokio::runtime::Runtime::new().expect("failed to get runtime");
-    let executor = rt.executor();
 
     // TODO move this into a Client method
     thread::spawn(|| {
@@ -56,7 +55,7 @@ fn main() {
 
     let progress = ProgressBar::new()
         .with_task(move |counter| {
-            fake_load(executor, ld, user, counter);
+            fake_load(ld, user, counter);
 
             cb.send(Box::new(display_done)).unwrap();
         })
@@ -68,35 +67,26 @@ fn main() {
     cursive.run();
 }
 
-fn fake_load(
-    mut executor: impl tokio_executor::Executor,
-    ld: Arc<RwLock<Client>>,
-    mut user: User,
-    counter: Counter,
-) {
-    let mut entered = tokio_executor::enter().expect("enter");
+fn fake_load(ld: Arc<RwLock<Client>>, mut user: User, counter: Counter) {
+    let ld = ld.read().unwrap();
 
-    tokio_executor::with_default(&mut executor, &mut entered, |_| {
-        let ld = ld.read().unwrap();
+    while counter.get() < 20 {
+        thread::sleep(Duration::from_millis(20));
+        counter.tick(1);
+    }
 
-        while counter.get() < 20 {
-            thread::sleep(Duration::from_millis(20));
+    while counter.get() < 100 {
+        user.attribute("progress", counter.get() as i64);
+
+        let millis = ld.int_variation_detail(&user, "progress-delay", 100);
+        thread::sleep(Duration::from_millis(millis.value.unwrap() as u64));
+
+        let increase = ld.bool_variation_detail(&user, "make-progress", false);
+
+        if increase.value.unwrap() {
             counter.tick(1);
         }
-
-        while counter.get() < 100 {
-            user.attribute("progress", counter.get() as i64);
-
-            let millis = ld.int_variation_detail(&user, "progress-delay", 100);
-            thread::sleep(Duration::from_millis(millis.value.unwrap() as u64));
-
-            let increase = ld.bool_variation_detail(&user, "make-progress", false);
-
-            if increase.value.unwrap() {
-                counter.tick(1);
-            }
-        }
-    });
+    }
 }
 
 fn display_done(cursive: &mut Cursive) {
