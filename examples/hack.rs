@@ -60,10 +60,11 @@ fn main() {
     if let Ok(url) = events_url_opt {
         client_builder.events_base_url(&url);
     }
-    let mut client = client_builder.build(&sdk_key).unwrap();
 
     tokio::run(lazy(move || {
-        client.start_with_default_executor();
+        let client = client_builder
+            .start_with_default_executor(&sdk_key)
+            .expect("failed to start client");
 
         Interval::new_interval(Duration::from_secs(5))
             .map_err(|_| ())

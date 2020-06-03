@@ -90,7 +90,36 @@ impl ClientBuilder {
         self
     }
 
-    pub fn build(&self, sdk_key: &str) -> Result<Client> {
+    /// Starts a client in the current thread, which must have a default tokio runtime.
+    pub fn start_with_default_executor(&self, sdk_key: &str) -> Result<Client> {
+        let mut client = self.build(sdk_key)?;
+        client.start_with_default_executor();
+        Ok(client)
+    }
+
+    /// Starts a client in a background thread, with its own tokio runtime.
+    pub fn start(&self, sdk_key: &str) -> Result<Arc<RwLock<Client>>> {
+        let client = self.build(sdk_key)?;
+
+        let rw = Arc::new(RwLock::new(client));
+
+        let mut runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
+
+        let w = rw.clone();
+
+        thread::spawn(move || {
+            runtime.spawn(future::lazy(move || {
+                let mut client = w.write().unwrap();
+                future::ok(client.start_with_default_executor())
+            }));
+
+            runtime.shutdown_on_idle()
+        });
+
+        Ok(rw)
+    }
+
+    fn build(&self, sdk_key: &str) -> Result<Client> {
         let store = FeatureStore::new();
         let event_processor = match &self.event_sink {
             None => reqwest::Url::parse(&self.events_base_url)
@@ -136,33 +165,11 @@ impl Client {
         }
     }
 
-    // TODO this makes it possible to start a client twice. Make this a consuming method on an
-    // UnstartedClient type instead?
-    pub fn start_with_default_executor(&mut self) {
+    fn start_with_default_executor(&mut self) {
         self.update_processor
             .lock()
             .unwrap()
             .subscribe(self.store.clone())
-    }
-
-    /// Starts this client in a background thread, with its own tokio runtime.
-    pub fn start(self) -> Result<Arc<RwLock<Self>>> {
-        let rw = Arc::new(RwLock::new(self));
-
-        let mut runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
-
-        let w = rw.clone();
-
-        thread::spawn(move || {
-            runtime.spawn(future::lazy(move || {
-                let mut client = w.write().unwrap();
-                future::ok(client.start_with_default_executor())
-            }));
-
-            runtime.shutdown_on_idle()
-        });
-
-        Ok(rw)
     }
 
     pub fn flush(&self) -> Result<()> {

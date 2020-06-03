@@ -37,9 +37,7 @@ fn main() {
         client_builder.events_base_url(&url);
     }
     let client = client_builder
-        .build(&sdk_key)
-        .expect("failed to configure client")
-        .start()
+        .start(&sdk_key)
         .expect("failed to start client");
 
     let mut cursive = Cursive::default();
