@@ -19,6 +19,8 @@ fn main() {
     env_logger::init();
 
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
+    let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
+    let events_url_opt = env::var("LAUNCHDARKLY_EVENTS_URL");
 
     let flags: Vec<String> = env::args().skip(1).collect();
     if flags.len() != 1 {
@@ -27,7 +29,16 @@ fn main() {
     }
     let user = User::with_key(flags[0].clone()).build();
 
-    let client = Client::new(&sdk_key)
+    let mut client_builder = Client::configure();
+    let _ = stream_url_opt.map(|url| {
+        client_builder.stream_base_url(&url);
+    });
+    let _ = events_url_opt.map(|url| {
+        client_builder.events_base_url(&url);
+    });
+    let client = client_builder
+        .build(&sdk_key)
+        .expect("failed to configure client")
         .start()
         .expect("failed to start client");
 
