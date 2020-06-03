@@ -110,7 +110,8 @@ impl ClientBuilder {
         thread::spawn(move || {
             runtime.spawn(future::lazy(move || {
                 let mut client = w.write().unwrap();
-                future::ok(client.start_with_default_executor())
+                client.start_with_default_executor();
+                future::ok(())
             }));
 
             runtime.shutdown_on_idle()
