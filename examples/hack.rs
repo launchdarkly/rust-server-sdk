@@ -63,7 +63,7 @@ fn main() {
     let mut client = client_builder.build(&sdk_key).unwrap();
 
     tokio::run(lazy(move || {
-        client.start();
+        client.start_with_default_executor();
 
         Interval::new_interval(Duration::from_secs(5))
             .map_err(|_| ())

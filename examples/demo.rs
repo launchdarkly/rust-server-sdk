@@ -14,7 +14,6 @@ use cursive::traits::Boxable;
 use cursive::utils::Counter;
 use cursive::views::{Dialog, ProgressBar};
 use cursive::Cursive;
-use futures::future::lazy;
 
 fn main() {
     env_logger::init();
@@ -28,24 +27,9 @@ fn main() {
     }
     let user = User::with_key(flags[0].clone()).build();
 
-    // TODO move this wrapper into Client type
-    let ld = Arc::new(RwLock::new(Client::new(&sdk_key)));
-    let ld_w = ld.clone();
-
-    let mut rt = tokio::runtime::Runtime::new().expect("failed to get runtime");
-
-    // TODO move this into a Client method
-    thread::spawn(|| {
-        rt.spawn(lazy(move || {
-            {
-                ld_w.write().unwrap().start();
-            }
-
-            futures::future::ok(())
-        }));
-
-        rt.shutdown_on_idle()
-    });
+    let client = Client::new(&sdk_key)
+        .start()
+        .expect("failed to start client");
 
     let mut cursive = Cursive::default();
 
@@ -55,7 +39,7 @@ fn main() {
 
     let progress = ProgressBar::new()
         .with_task(move |counter| {
-            fake_load(ld, user, counter);
+            fake_load(client, user, counter);
 
             cb.send(Box::new(display_done)).unwrap();
         })

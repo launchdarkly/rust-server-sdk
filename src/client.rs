@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::io;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 
 use super::eval::{self, Detail};
 use super::event_processor::EventProcessor;
@@ -8,6 +10,8 @@ use super::events::{Event, MaybeInlinedUser};
 use super::store::{FeatureFlag, FeatureStore, FlagValue};
 use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
 use super::users::User;
+
+use futures::future;
 
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
@@ -20,6 +24,7 @@ pub enum Error {
     EvaluationError(eval::Error),
     NoSuchFlag(String),
     FlushFailed(String),
+    SpawnFailed(io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -131,11 +136,33 @@ impl Client {
         }
     }
 
-    pub fn start(&mut self) {
+    // TODO this makes it possible to start a client twice. Make this a consuming method on an
+    // UnstartedClient type instead?
+    pub fn start_with_default_executor(&mut self) {
         self.update_processor
             .lock()
             .unwrap()
             .subscribe(self.store.clone())
+    }
+
+    /// Starts this client in a background thread, with its own tokio runtime.
+    pub fn start(self) -> Result<Arc<RwLock<Self>>> {
+        let rw = Arc::new(RwLock::new(self));
+
+        let mut runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
+
+        let w = rw.clone();
+
+        thread::spawn(move || {
+            runtime.spawn(future::lazy(move || {
+                let mut client = w.write().unwrap();
+                future::ok(client.start_with_default_executor())
+            }));
+
+            runtime.shutdown_on_idle()
+        });
+
+        Ok(rw)
     }
 
     pub fn flush(&self) -> Result<()> {
@@ -298,7 +325,7 @@ mod tests {
 
         assert_that!(result.value).contains_value(false);
 
-        client.start();
+        client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
 
@@ -320,7 +347,7 @@ mod tests {
         let user = crate::users::UserBuilder::new_with_optional_key(None).build();
 
         let (mut client, updates, events) = make_mocked_client();
-        client.start();
+        client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
 
