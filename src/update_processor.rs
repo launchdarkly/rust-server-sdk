@@ -46,9 +46,12 @@ pub struct StreamingUpdateProcessor {
 }
 
 impl StreamingUpdateProcessor {
-    pub fn new(base_url: &str, sdk_key: &str) -> Result<StreamingUpdateProcessor> {
+    pub fn new(
+        base_url: &str,
+        sdk_key: &str,
+    ) -> std::result::Result<StreamingUpdateProcessor, es::Error> {
         let stream_url = format!("{}/all", base_url);
-        let client_builder = es::Client::for_url(&stream_url).map_err(Error::EventSource)?;
+        let client_builder = es::Client::for_url(&stream_url)?;
         let es_client = client_builder
             .header("Authorization", sdk_key)
             .unwrap()

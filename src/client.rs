@@ -12,19 +12,21 @@ use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
 use super::users::User;
 
 use futures::future;
+use thiserror::Error;
 
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
-#[derive(Debug)]
-// TODO redo (confused with eval::Error)
+#[derive(Debug, Error)]
 pub enum Error {
-    FlagWrongType(String, String),
-    InvalidConfig(Box<dyn std::fmt::Debug>),
-    EvaluationError(eval::Error),
-    NoSuchFlag(String),
-    FlushFailed(String),
+    #[error("invalid client config: {0}")]
+    InvalidConfig(String),
+    #[error("couldn't spawn background thread for client: {0}")]
     SpawnFailed(io::Error),
+    #[error("failed to flush events: {0}")]
+    FlushFailed(String),
+    #[error("unexpected internal error: {0}")]
+    Internal(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -124,21 +126,22 @@ impl ClientBuilder {
         let store = FeatureStore::new();
         let event_processor = match &self.event_sink {
             None => reqwest::Url::parse(&self.events_base_url)
-                .map_err(|e| Error::InvalidConfig(Box::new(e)))
+                .map_err(|e| Error::InvalidConfig(format!("couldn't parse events_base_url: {}", e)))
                 .and_then(|base_url| {
-                    EventProcessor::new(base_url, sdk_key)
-                        .map_err(|e| Error::InvalidConfig(Box::new(e)))
+                    EventProcessor::new(base_url, sdk_key).map_err(|e| {
+                        Error::InvalidConfig(format!("invalid events_base_url: {}", e))
+                    })
                 })?,
             Some(sink) => {
-                // clone sink Arc so we don't have to consume builder
-                EventProcessor::new_with_sink(sink.clone())
-                    .map_err(|e| Error::InvalidConfig(Box::new(e)))?
+                let sink = sink.clone(); // so we don't have to consume builder
+                EventProcessor::new_with_sink(sink).map_err(Error::Internal)?
             }
         };
         let update_processor = match &self.update_processor {
             None => Arc::new(Mutex::new(
-                StreamingUpdateProcessor::new(&self.stream_base_url, sdk_key)
-                    .map_err(|e| Error::InvalidConfig(Box::new(e)))?,
+                StreamingUpdateProcessor::new(&self.stream_base_url, sdk_key).map_err(|e| {
+                    Error::InvalidConfig(format!("invalid stream_base_url: {:?}", e))
+                })?,
             )),
             Some(update_processor) => update_processor.clone(),
         };
