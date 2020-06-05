@@ -131,7 +131,7 @@ fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
         store.init(put.data);
         Ok(())
     } else {
-        Err(Error::InvalidPutPath(put.path.to_string()))
+        Err(Error::InvalidPutPath(put.path))
     }
 }
 
