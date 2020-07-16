@@ -18,8 +18,8 @@ pub enum FlagValue {
     Bool(bool),
     Str(String),
     Float(f64),
-    // TODO implement other variation types
-    NotYetImplemented(serde_json::Value),
+    Int(i64),
+    Json(serde_json::Value),
 }
 
 impl From<bool> for FlagValue {
@@ -42,7 +42,7 @@ impl From<f64> for FlagValue {
 
 impl From<i64> for FlagValue {
     fn from(i: i64) -> FlagValue {
-        FlagValue::Float(i as f64)
+        FlagValue::Int(i)
     }
 }
 
@@ -51,12 +51,18 @@ impl From<serde_json::Value> for FlagValue {
         use serde_json::Value;
         match v {
             Value::Bool(b) => b.into(),
-            Value::Number(n) => match n.as_f64() {
-                None => FlagValue::NotYetImplemented(format!("{}", n).into()),
-                Some(f) => f.into(),
-            },
+            Value::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    f.into()
+                } else if let Some(i) = n.as_i64() {
+                    i.into()
+                } else {
+                    warn!("unrepresentable number {}, converting to string", n);
+                    FlagValue::Json(format!("{}", n).into())
+                }
+            }
             Value::String(s) => s.into(),
-            Value::Null | Value::Object(_) | Value::Array(_) => FlagValue::NotYetImplemented(v),
+            Value::Null | Value::Object(_) | Value::Array(_) => FlagValue::Json(v),
         }
     }
 }
@@ -95,22 +101,23 @@ impl FlagValue {
     }
 
     pub fn as_int(&self) -> Option<i64> {
-        // TODO this has undefined behaviour for huge floats: https://stackoverflow.com/a/41139453
-        self.as_float().map(|f| f.round() as i64)
+        match self {
+            FlagValue::Int(i) => Some(*i),
+            _ => {
+                // TODO this has undefined behaviour for huge floats: https://stackoverflow.com/a/41139453
+                self.as_float().map(|f| f.round() as i64)
+            }
+        }
     }
 
-    pub fn as_json(&self) -> serde_json::Value {
+    pub fn as_json(&self) -> Option<serde_json::Value> {
         use serde_json::{Number, Value};
         match self {
-            FlagValue::Bool(b) => Value::Bool(*b),
-            FlagValue::Str(s) => Value::String(s.clone()),
-            FlagValue::Float(f) => Number::from_f64(*f)
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
-            FlagValue::NotYetImplemented(v) => {
-                warn!("variation type not yet implemented: {:?}", self);
-                v.clone()
-            }
+            FlagValue::Bool(b) => Some(Value::Bool(*b)),
+            FlagValue::Str(s) => Some(Value::String(s.clone())),
+            FlagValue::Float(f) => Number::from_f64(*f).map(Value::Number),
+            FlagValue::Int(i) => Number::from_f64(*i as f64).map(Value::Number),
+            FlagValue::Json(v) => Some(v.clone()),
         }
     }
 }
@@ -407,6 +414,44 @@ impl FeatureFlag {
             ),
             off_variation: Some(0),
             variations: vec![false.into(), true.into()],
+            salt: "kosher".to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn basic_int_flag(key: &str) -> FeatureFlag {
+        FeatureFlag {
+            key: key.to_string(),
+            version: 42,
+            on: true,
+            targets: vec![],
+            rules: vec![],
+            prerequisites: vec![],
+            fallthrough: VariationOrRolloutOrMalformed::VariationOrRollout(
+                VariationOrRollout::Variation(1),
+            ),
+            off_variation: Some(0),
+            variations: vec![0.into(), std::i64::MAX.into()],
+            salt: "kosher".to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn basic_json_flag(key: &str) -> FeatureFlag {
+        use serde_json::Value;
+
+        FeatureFlag {
+            key: key.to_string(),
+            version: 42,
+            on: true,
+            targets: vec![],
+            rules: vec![],
+            prerequisites: vec![],
+            fallthrough: VariationOrRolloutOrMalformed::VariationOrRollout(
+                VariationOrRollout::Variation(1),
+            ),
+            off_variation: Some(0),
+            variations: vec![Value::Null.into(), json!({ "foo": "bar" }).into()],
             salt: "kosher".to_string(),
         }
     }

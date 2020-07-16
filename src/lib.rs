@@ -8,6 +8,10 @@ extern crate maplit;
 #[cfg(test)]
 extern crate spectral;
 
+#[cfg(test)]
+#[macro_use]
+extern crate serde_json;
+
 pub mod client;
 pub mod eval;
 mod event_processor;

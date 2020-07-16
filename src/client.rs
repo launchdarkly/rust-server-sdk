@@ -210,6 +210,16 @@ impl Client {
             .try_map(|val| val.as_int(), eval::Error::Exception)
     }
 
+    pub fn json_variation_detail(
+        &self,
+        user: &User,
+        flag_key: &str,
+        default: serde_json::Value,
+    ) -> Detail<serde_json::Value> {
+        self.evaluate_detail(user, flag_key, default.into())
+            .try_map(|val| val.as_json(), eval::Error::Exception)
+    }
+
     pub fn all_flags_detail(&self, user: &User) -> HashMap<String, Detail<FlagValue>> {
         let store = self.store.lock().unwrap();
         let flags = store.all_flags();
@@ -350,6 +360,69 @@ mod tests {
         let result = client.bool_variation_detail(&user, "myFlag", false);
 
         assert_that!(result.value).contains_value(true);
+        assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
+    }
+
+    #[test]
+    // TODO This test is copy-pasta
+    fn client_receives_updates_evals_flags_and_sends_events_int() {
+        let user = User::with_key("foo".to_string()).build();
+
+        let (mut client, updates, _events) = make_mocked_client();
+
+        let result = client.int_variation_detail(&user, "someFlag", 0);
+
+        assert_that!(result.value).contains_value(0);
+
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+
+        let flag = FeatureFlag::basic_int_flag("myFlag");
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(flag),
+            })
+            .expect("patch should apply");
+
+        let result = client.int_variation_detail(&user, "myFlag", 0);
+
+        assert_that!(result.value).contains_value(std::i64::MAX);
+        assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
+    }
+
+    #[test]
+    // TODO This test is copy-pasta
+    fn client_receives_updates_evals_flags_and_sends_events_json() {
+        use serde_json::Value;
+
+        let user = User::with_key("foo".to_string()).build();
+
+        let (mut client, updates, _events) = make_mocked_client();
+
+        let result = client.json_variation_detail(&user, "someFlag", Value::Null);
+
+        assert_that!(result.value).contains_value(Value::Null);
+
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+
+        let flag = FeatureFlag::basic_json_flag("myFlag");
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(flag),
+            })
+            .expect("patch should apply");
+
+        let result = client.json_variation_detail(&user, "myFlag", Value::Null);
+
+        let value = result.value.expect("value should not be None");
+        assert!(value.is_object());
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
     }
 
