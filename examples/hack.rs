@@ -80,7 +80,8 @@ fn main() {
                         );
                     }
                     for flag_key in &str_flags {
-                        let flag_detail = client.str_variation_detail(user, flag_key, "default");
+                        let flag_detail =
+                            client.str_variation_detail(user, flag_key, "default".to_string());
                         info!(
                             "user {:?}, flag {}: {:?}",
                             user.key(),

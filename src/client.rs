@@ -194,9 +194,9 @@ impl Client {
         &self,
         user: &User,
         flag_key: &str,
-        default: &str,
+        default: String,
     ) -> Detail<String> {
-        self.evaluate_detail(user, flag_key, default.to_string().into())
+        self.evaluate_detail(user, flag_key, default.into())
             .try_map(|val| val.as_string(), eval::Error::Exception)
     }
 
