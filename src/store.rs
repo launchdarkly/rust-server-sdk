@@ -111,12 +111,12 @@ impl FlagValue {
     }
 
     pub fn as_json(&self) -> Option<serde_json::Value> {
-        use serde_json::{Number, Value};
+        use serde_json::Value;
         match self {
-            FlagValue::Bool(b) => Some(Value::Bool(*b)),
-            FlagValue::Str(s) => Some(Value::String(s.clone())),
-            FlagValue::Float(f) => Number::from_f64(*f).map(Value::Number),
-            FlagValue::Int(i) => Number::from_f64(*i as f64).map(Value::Number),
+            FlagValue::Bool(b) => Some(Value::from(*b)),
+            FlagValue::Str(s) => Some(Value::from(s.as_str())),
+            FlagValue::Float(f) => Some(Value::from(*f)),
+            FlagValue::Int(i) => Some(Value::from(*i)),
             FlagValue::Json(v) => Some(v.clone()),
         }
     }
