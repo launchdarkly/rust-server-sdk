@@ -180,6 +180,69 @@ impl Client {
         self.event_processor.flush().map_err(Error::FlushFailed)
     }
 
+    pub fn bool_variation(&self, user: &User, flag_key: &str, default: bool) -> bool {
+        let val = self.evaluate(user, flag_key, default.into());
+        if let Some(b) = val.as_bool() {
+            b
+        } else {
+            warn!(
+                "bool_variation called for a non-bool flag {:?} (got {:?})",
+                flag_key, val
+            );
+            default
+        }
+    }
+
+    pub fn str_variation(&self, user: &User, flag_key: &str, default: String) -> String {
+        let val = self.evaluate(user, flag_key, default.clone().into());
+        if let Some(s) = val.as_string() {
+            s
+        } else {
+            warn!(
+                "str_variation called for a non-string flag {:?} (got {:?})",
+                flag_key, val
+            );
+            default
+        }
+    }
+
+    pub fn float_variation(&self, user: &User, flag_key: &str, default: f64) -> f64 {
+        let val = self.evaluate(user, flag_key, default.into());
+        if let Some(f) = val.as_float() {
+            f
+        } else {
+            warn!(
+                "float_variation called for a non-float flag {:?} (got {:?})",
+                flag_key, val
+            );
+            default
+        }
+    }
+
+    pub fn int_variation(&self, user: &User, flag_key: &str, default: i64) -> i64 {
+        let val = self.evaluate(user, flag_key, default.into());
+        if let Some(f) = val.as_int() {
+            f
+        } else {
+            warn!(
+                "int_variation called for a non-int flag {:?} (got {:?})",
+                flag_key, val
+            );
+            default
+        }
+    }
+
+    pub fn json_variation(
+        &self,
+        user: &User,
+        flag_key: &str,
+        default: serde_json::Value,
+    ) -> serde_json::Value {
+        self.evaluate(user, flag_key, default.clone().into())
+            .as_json()
+            .unwrap_or_else(|| default.clone())
+    }
+
     pub fn bool_variation_detail(
         &self,
         user: &User,
