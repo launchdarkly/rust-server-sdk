@@ -20,11 +20,3 @@ pub mod events;
 pub mod store; // TODO no, move flagvalue into types or something instead
 mod update_processor;
 pub mod users;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
