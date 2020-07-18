@@ -50,7 +50,7 @@ impl MaybeInlinedUser {
         }
     }
 
-    fn key(&self) -> Option<&String> {
+    pub fn key(&self) -> Option<&String> {
         self.user().key()
     }
 }
@@ -62,6 +62,8 @@ pub struct BaseEvent {
     #[serde(skip_serializing_if = "MaybeInlinedUser::not_inlined")]
     pub user: MaybeInlinedUser,
 }
+
+pub type IndexEvent = BaseEvent;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind")]
@@ -83,10 +85,7 @@ pub enum Event {
         prereq_of: Option<String>,
     },
     #[serde(rename = "index", rename_all = "camelCase")]
-    Index {
-        #[serde(flatten)]
-        base: BaseEvent,
-    },
+    Index(IndexEvent),
     #[serde(rename = "summary", rename_all = "camelCase")]
     Summary(EventSummary),
 }
@@ -139,14 +138,14 @@ impl Event {
         }
     }
 
-    pub fn to_index_event(&self) -> Option<Event> {
+    pub fn to_index_event(&self) -> Option<IndexEvent> {
         match self {
             Event::FeatureRequest { base, .. } => {
                 // difficult to avoid clone here because we can't express that we're not "really"
                 // borrowing base.clone().user
                 let mut base = base.clone();
                 base.user = base.user.force_inlined();
-                Some(Event::Index { base })
+                Some(base)
             }
             Event::Index { .. } | Event::Summary { .. } => None,
         }
@@ -381,7 +380,12 @@ mod tests {
             true,
         );
 
-        summary.add(&fallthrough_request.to_index_event().unwrap());
+        summary.add(
+            &fallthrough_request
+                .to_index_event()
+                .map(Event::Index)
+                .unwrap(),
+        );
 
         asserting!("ignores index events")
             .that(&summary.is_empty())
