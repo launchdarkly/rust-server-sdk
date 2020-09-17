@@ -6,7 +6,6 @@ use futures::stream::Stream;
 use serde::Deserialize;
 
 use super::store::{AllData, FeatureStore, PatchTarget};
-use crate::built_info;
 
 #[derive(Debug)]
 pub enum Error {

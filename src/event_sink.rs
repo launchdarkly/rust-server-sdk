@@ -1,7 +1,6 @@
 use reqwest as r;
 
 use super::events::Event;
-use crate::built_info;
 
 type Error = String; // TODO
 
