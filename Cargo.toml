@@ -9,6 +9,7 @@ chrono = "0.4.9"
 eventsource-client = "0.3.1"
 futures = "0.1.25"
 http = ">= 0.1.18"
+lazy_static = "1.4.0"
 log = "0.4.6"
 lru = { version = "0.5.3", default_features = false }
 regex = "1"
