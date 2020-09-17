@@ -323,39 +323,39 @@ impl UserBuilder {
         }
     }
 
-    pub fn secondary(&mut self, secondary: String) -> &Self {
-        self.secondary = Some(secondary);
+    pub fn secondary(&mut self, secondary: impl Into<String>) -> &Self {
+        self.secondary = Some(secondary.into());
         self
     }
-    pub fn ip(&mut self, ip: String) -> &Self {
-        self.ip = Some(ip);
+    pub fn ip(&mut self, ip: impl Into<String>) -> &Self {
+        self.ip = Some(ip.into());
         self
     }
-    pub fn country(&mut self, country: String) -> &Self {
-        self.country = Some(country);
-        self
-    }
-
-    pub fn email(&mut self, email: String) -> &Self {
-        self.email = Some(email);
+    pub fn country(&mut self, country: impl Into<String>) -> &Self {
+        self.country = Some(country.into());
         self
     }
 
-    pub fn first_name(&mut self, first_name: String) -> &Self {
-        self.first_name = Some(first_name);
-        self
-    }
-    pub fn last_name(&mut self, last_name: String) -> &Self {
-        self.last_name = Some(last_name);
-        self
-    }
-    pub fn avatar(&mut self, avatar: String) -> &Self {
-        self.avatar = Some(avatar);
+    pub fn email(&mut self, email: impl Into<String>) -> &Self {
+        self.email = Some(email.into());
         self
     }
 
-    pub fn name(&mut self, name: String) -> &Self {
-        self.name = Some(name);
+    pub fn first_name(&mut self, first_name: impl Into<String>) -> &Self {
+        self.first_name = Some(first_name.into());
+        self
+    }
+    pub fn last_name(&mut self, last_name: impl Into<String>) -> &Self {
+        self.last_name = Some(last_name.into());
+        self
+    }
+    pub fn avatar(&mut self, avatar: impl Into<String>) -> &Self {
+        self.avatar = Some(avatar.into());
+        self
+    }
+
+    pub fn name(&mut self, name: impl Into<String>) -> &Self {
+        self.name = Some(name.into());
         self
     }
 
