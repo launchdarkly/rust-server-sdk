@@ -55,6 +55,8 @@ impl StreamingUpdateProcessor {
         let es_client = client_builder
             .header("Authorization", sdk_key)
             .unwrap()
+            .header("User-Agent", &*crate::USER_AGENT)
+            .unwrap()
             .build();
         Ok(StreamingUpdateProcessor { es_client })
     }
