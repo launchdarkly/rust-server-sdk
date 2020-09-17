@@ -25,3 +25,6 @@ env_logger = "0.7.1"
 spectral = "0.6.0"
 cursive = "0.11"
 tokio-executor = "0.1.6"
+
+[build-dependencies]
+built = "0.4"

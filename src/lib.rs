@@ -20,3 +20,8 @@ pub mod events;
 pub mod store; // TODO no, move flagvalue into types or something instead
 mod update_processor;
 pub mod users;
+
+#[allow(dead_code)]
+mod built_info {
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}

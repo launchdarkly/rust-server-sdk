@@ -5,6 +5,7 @@ use futures::future::{lazy, Future};
 use futures::stream::Stream;
 use serde::Deserialize;
 
+use crate::built_info;
 use super::store::{AllData, FeatureStore, PatchTarget};
 
 #[derive(Debug)]
@@ -54,6 +55,8 @@ impl StreamingUpdateProcessor {
         let client_builder = es::Client::for_url(&stream_url)?;
         let es_client = client_builder
             .header("Authorization", sdk_key)
+            .unwrap()
+            .header("User-Agent", &("RustServerClient/".to_owned() + built_info::PKG_VERSION))
             .unwrap()
             .build();
         Ok(StreamingUpdateProcessor { es_client })
