@@ -5,8 +5,8 @@ use futures::future::{lazy, Future};
 use futures::stream::Stream;
 use serde::Deserialize;
 
-use crate::built_info;
 use super::store::{AllData, FeatureStore, PatchTarget};
+use crate::built_info;
 
 #[derive(Debug)]
 pub enum Error {
@@ -56,7 +56,10 @@ impl StreamingUpdateProcessor {
         let es_client = client_builder
             .header("Authorization", sdk_key)
             .unwrap()
-            .header("User-Agent", &("RustServerClient/".to_owned() + built_info::PKG_VERSION))
+            .header(
+                "User-Agent",
+                &("RustServerClient/".to_owned() + built_info::PKG_VERSION),
+            )
             .unwrap()
             .build();
         Ok(StreamingUpdateProcessor { es_client })

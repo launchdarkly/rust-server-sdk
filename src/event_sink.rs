@@ -1,7 +1,7 @@
 use reqwest as r;
 
-use crate::built_info;
 use super::events::Event;
+use crate::built_info;
 
 type Error = String; // TODO
 
@@ -45,7 +45,10 @@ impl EventSink for ReqwestSink {
             .post(self.url.clone())
             .header("Content-Type", "application/json")
             .header("Authorization", self.sdk_key.clone())
-            .header("User-Agent", &("RustServerClient/".to_owned() + built_info::PKG_VERSION))
+            .header(
+                "User-Agent",
+                &("RustServerClient/".to_owned() + built_info::PKG_VERSION),
+            )
             .body(json);
 
         let resp = request
