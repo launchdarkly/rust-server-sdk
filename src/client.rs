@@ -12,6 +12,7 @@ use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
 use super::users::User;
 
 use futures::future;
+use serde::Serialize;
 use thiserror::Error;
 
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
@@ -342,6 +343,41 @@ impl Client {
         result.value.unwrap()
     }
 
+    pub fn track_event(&self, user: User, key: impl Into<String>) {
+        let _ = self.track(user, key, None, serde_json::Value::Null);
+    }
+
+    pub fn track_data(
+        &self,
+        user: User,
+        key: impl Into<String>,
+        data: impl Serialize,
+    ) -> serde_json::Result<()> {
+        self.track(user, key, None, data)
+    }
+
+    pub fn track_metric(&self, user: User, key: impl Into<String>, value: f64) {
+        let _ = self.track(user, key, Some(value), serde_json::Value::Null);
+    }
+
+    pub fn track(
+        &self,
+        user: User,
+        key: impl Into<String>,
+        metric_value: Option<f64>,
+        data: impl Serialize,
+    ) -> serde_json::Result<()> {
+        let event = Event::new_custom(
+            MaybeInlinedUser::new(self.config.inline_users_in_events, user),
+            key,
+            metric_value,
+            data,
+        )?;
+
+        self.send_internal(event);
+        Ok(())
+    }
+
     fn evaluate_internal(
         &self,
         user: &User,
@@ -539,6 +575,47 @@ mod tests {
         let events = events.read().unwrap();
         assert_that!(*events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("identify");
+    }
+
+    #[derive(Serialize)]
+    struct MyCustomData {
+        pub answer: u32,
+    }
+
+    #[test]
+    fn track_sends_track_and_index_events() -> serde_json::Result<()> {
+        let (mut client, _updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let user = crate::users::User::with_key("bob").build();
+
+        client.track_event(user.clone(), "event-with-null");
+        client.track_data(user.clone(), "event-with-string", "string-data")?;
+        client.track_data(user.clone(), "event-with-json", json!({"answer": 42}))?;
+        client.track_data(
+            user.clone(),
+            "event-with-struct",
+            MyCustomData { answer: 42 },
+        )?;
+        client.track_metric(user.clone(), "event-with-metric", 42.0);
+
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(6);
+
+        let mut events_by_type: HashMap<&str, usize> = HashMap::new();
+        for event in &*events {
+            if let Some(count) = events_by_type.get_mut(event.kind()) {
+                *count += 1;
+            } else {
+                events_by_type.insert(event.kind(), 1);
+            }
+        }
+        assert_that!(events_by_type.get("index")).contains_value(&1);
+        assert_that!(events_by_type.get("custom")).contains_value(&5);
+
+        Ok(())
     }
 
     fn make_mocked_client() -> (

@@ -96,6 +96,16 @@ pub enum Event {
     Index(IndexEvent),
     #[serde(rename = "identify", rename_all = "camelCase")]
     Identify(IdentifyEvent),
+    #[serde(rename = "custom", rename_all = "camelCase")]
+    Custom {
+        #[serde(flatten)]
+        base: BaseEvent,
+        key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metric_value: Option<f64>,
+        #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+        data: serde_json::Value,
+    },
     #[serde(rename = "summary", rename_all = "camelCase")]
     Summary(EventSummary),
 }
@@ -156,9 +166,29 @@ impl Event {
         })
     }
 
+    pub fn new_custom(
+        user: MaybeInlinedUser,
+        key: impl Into<String>,
+        metric_value: Option<f64>,
+        data: impl Serialize,
+    ) -> serde_json::Result<Self> {
+        let data = serde_json::to_value(data)?;
+
+        Ok(Event::Custom {
+            base: BaseEvent {
+                creation_date: Self::now(),
+                user,
+            },
+            key: key.into(),
+            metric_value,
+            data,
+        })
+    }
+
     pub fn to_index_event(&self) -> Option<IndexEvent> {
         let base = match self {
             Event::FeatureRequest { base, .. } => base,
+            Event::Custom { base, .. } => base,
             Event::Index { .. } | Event::Identify { .. } | Event::Summary { .. } => return None,
         };
 
@@ -182,6 +212,7 @@ impl Event {
             Event::FeatureRequest { .. } => "feature",
             Event::Index { .. } => "index",
             Event::Identify { .. } => "identify",
+            Event::Custom { .. } => "custom",
             Event::Summary { .. } => "summary",
         }
     }
