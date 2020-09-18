@@ -66,6 +66,14 @@ pub struct BaseEvent {
 pub type IndexEvent = BaseEvent;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct IdentifyEvent {
+    #[serde(flatten)]
+    base: BaseEvent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
 pub enum Event {
@@ -86,6 +94,8 @@ pub enum Event {
     },
     #[serde(rename = "index", rename_all = "camelCase")]
     Index(IndexEvent),
+    #[serde(rename = "identify", rename_all = "camelCase")]
+    Identify(IdentifyEvent),
     #[serde(rename = "summary", rename_all = "camelCase")]
     Summary(EventSummary),
 }
@@ -121,10 +131,7 @@ impl Event {
 
         Event::FeatureRequest {
             base: BaseEvent {
-                creation_date: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64,
+                creation_date: Self::now(),
                 user,
             },
             user_key,
@@ -138,17 +145,35 @@ impl Event {
         }
     }
 
+    pub fn new_identify(user: User) -> Self {
+        let key = user.key().cloned();
+        Event::Identify(IdentifyEvent {
+            base: BaseEvent {
+                creation_date: Self::now(),
+                user: MaybeInlinedUser::new(true, user),
+            },
+            key,
+        })
+    }
+
     pub fn to_index_event(&self) -> Option<IndexEvent> {
-        match self {
-            Event::FeatureRequest { base, .. } => {
-                // difficult to avoid clone here because we can't express that we're not "really"
-                // borrowing base.clone().user
-                let mut base = base.clone();
-                base.user = base.user.force_inlined();
-                Some(base)
-            }
-            Event::Index { .. } | Event::Summary { .. } => None,
-        }
+        let base = match self {
+            Event::FeatureRequest { base, .. } => base,
+            Event::Index { .. } | Event::Identify { .. } | Event::Summary { .. } => return None,
+        };
+
+        // difficult to avoid clone here because we can't express that we're not "really"
+        // borrowing base.clone().user
+        let mut base = base.clone();
+        base.user = base.user.force_inlined();
+        Some(base)
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
     }
 
     #[cfg(test)]
@@ -156,6 +181,7 @@ impl Event {
         match self {
             Event::FeatureRequest { .. } => "feature",
             Event::Index { .. } => "index",
+            Event::Identify { .. } => "identify",
             Event::Summary { .. } => "summary",
         }
     }

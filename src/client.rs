@@ -180,6 +180,12 @@ impl Client {
         self.event_processor.flush().map_err(Error::FlushFailed)
     }
 
+    pub fn identify(&self, user: User) {
+        let event = Event::new_identify(user);
+
+        self.send_internal(event);
+    }
+
     pub fn bool_variation(&self, user: &User, flag_key: &str, default: bool) -> bool {
         let val = self.evaluate(user, flag_key, default.into());
         if let Some(b) = val.as_bool() {
@@ -311,10 +317,7 @@ impl Client {
             default_for_event,
             true,
         );
-        let _ = self
-            .event_processor
-            .send(event)
-            .map_err(|e| warn!("failed to send event: {}", e));
+        self.send_internal(event);
 
         result
     }
@@ -332,10 +335,7 @@ impl Client {
             default_for_event,
             false,
         );
-        let _ = self
-            .event_processor
-            .send(event)
-            .map_err(|e| warn!("failed to send event: {}", e));
+        self.send_internal(event);
 
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO that is ugly, use the type system to fix it
@@ -364,6 +364,13 @@ impl Client {
         let result = flag.evaluate(user, &store).map(|v| v.clone()).or(default);
 
         (Some(flag), result)
+    }
+
+    fn send_internal(&self, event: Event) {
+        let _ = self
+            .event_processor
+            .send(event)
+            .map_err(|e| warn!("failed to send event: {}", e));
     }
 }
 
@@ -517,6 +524,21 @@ mod tests {
         let events = events.read().unwrap();
         assert_that!(*events).matching_contains(|event| event.kind() == "feature"); // TODO test this is absent unless trackEvents = true or various other conditions
         assert_that!(*events).matching_contains(|event| event.kind() == "summary")
+    }
+
+    #[test]
+    fn identify_sends_identify_event() {
+        let (mut client, _updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let user = crate::users::User::with_key("bob").build();
+
+        client.identify(user);
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(1);
+        assert_that!(events[0].kind()).is_equal_to("identify");
     }
 
     fn make_mocked_client() -> (
