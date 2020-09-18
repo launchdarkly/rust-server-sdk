@@ -1017,6 +1017,9 @@ mod tests {
     fn afloat(f: f64) -> AttributeValue {
         AttributeValue::Float(f)
     }
+    fn aint(i: i64) -> AttributeValue {
+        AttributeValue::Int(i)
+    }
 
     #[test]
     fn test_op_in() {
@@ -1193,6 +1196,56 @@ mod tests {
         // nonsense strings don't match
         assert!(!Op::Before.matches(&astring("fish"), &afloat(today_millis)));
         assert!(!Op::After.matches(&afloat(today_millis), &astring("fish")));
+    }
+
+    #[test]
+    fn test_semver_ops() {
+        assert!(Op::SemVerEqual.matches(&astring("2.0.0"), &astring("2.0.0")));
+
+        assert!(
+            Op::SemVerEqual.matches(&astring("2.0"), &astring("2.0.0")),
+            "we allow missing components (filled in with zeroes)"
+        );
+        assert!(
+            Op::SemVerEqual.matches(&astring("2"), &astring("2.0.0")),
+            "we allow missing components (filled in with zeroes)"
+        );
+
+        assert!(!Op::SemVerEqual.matches(&astring("2.0.0"), &astring("3.0.0")));
+        assert!(!Op::SemVerEqual.matches(&astring("2.0.0"), &astring("2.1.0")));
+        assert!(!Op::SemVerEqual.matches(&astring("2.0.0"), &astring("2.0.1")));
+
+        assert!(Op::SemVerGreaterThan.matches(&astring("3.0.0"), &astring("2.0.0")));
+        assert!(Op::SemVerGreaterThan.matches(&astring("2.1.0"), &astring("2.0.0")));
+        assert!(Op::SemVerGreaterThan.matches(&astring("2.0.1"), &astring("2.0.0")));
+        assert!(Op::SemVerGreaterThan
+            .matches(&astring("2.0.0-rc.10.green"), &astring("2.0.0-rc.2.green")));
+        assert!(
+            Op::SemVerGreaterThan.matches(&astring("2.0.0-rc.2.red"), &astring("2.0.0-rc.2.green")),
+            "red > green"
+        );
+        assert!(
+            Op::SemVerGreaterThan
+                .matches(&astring("2.0.0-rc.2.green.1"), &astring("2.0.0-rc.2.green")),
+            "adding more version components makes it greater"
+        );
+
+        assert!(!Op::SemVerGreaterThan.matches(&astring("2.0.0"), &astring("2.0.0")));
+        assert!(!Op::SemVerGreaterThan.matches(&astring("1.9.0"), &astring("2.0.0")));
+        assert!(
+            !Op::SemVerGreaterThan.matches(&astring("2.0.0-rc"), &astring("2.0.0")),
+            "prerelease version < released version"
+        );
+        assert!(
+            !Op::SemVerGreaterThan.matches(&astring("2.0.0+build"), &astring("2.0.0")),
+            "build metadata is ignored, these versions are equal"
+        );
+
+        assert!(!Op::SemVerEqual.matches(&astring("2.0.0"), &astring("200")));
+
+        // we don't convert
+        assert!(!Op::SemVerEqual.matches(&astring("2.0.0"), &afloat(2.0)));
+        assert!(!Op::SemVerEqual.matches(&astring("2.0.0"), &aint(2)));
     }
 
     #[test]

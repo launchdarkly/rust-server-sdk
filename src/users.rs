@@ -1,12 +1,19 @@
 use std::collections::HashMap;
 
 use chrono::{self, TimeZone, Utc};
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 
 const USER_CUSTOM_STARTING_CAPACITY: usize = 10;
 const BUCKET_SCALE_INT: i64 = 0x0FFF_FFFF_FFFF_FFFF;
 const BUCKET_SCALE: f32 = BUCKET_SCALE_INT as f32;
+
+lazy_static! {
+    static ref VERSION_NUMERIC_COMPONENTS_REGEX: Regex =
+        Regex::new(r"^\d+(\.\d+)?(\.\d+)?").unwrap();
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -132,8 +139,27 @@ impl AttributeValue {
     /// It will return None if it cannot parse it, or for non-string attributes.
     pub fn as_semver(&self) -> Option<semver::Version> {
         let version_str = self.as_str()?.as_str();
-        semver::Version::parse(version_str).ok()
-        // TODO implement LD-specific semver extensions
+        semver::Version::parse(version_str)
+            .ok()
+            .or_else(|| AttributeValue::parse_semver_loose(version_str))
+    }
+
+    fn parse_semver_loose(version_str: &str) -> Option<semver::Version> {
+        let parts = VERSION_NUMERIC_COMPONENTS_REGEX.captures(version_str)?;
+
+        let numeric_parts = parts.get(0).unwrap();
+        let mut transformed_version_str = numeric_parts.as_str().to_string();
+
+        for i in 1..parts.len() {
+            if let None = parts.get(i) {
+                transformed_version_str.push_str(".0");
+            }
+        }
+
+        let rest = &version_str[numeric_parts.end()..];
+        transformed_version_str.push_str(rest);
+
+        semver::Version::parse(&transformed_version_str).ok()
     }
 
     pub fn find<P>(&self, p: P) -> Option<&AttributeValue>
