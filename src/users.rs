@@ -151,7 +151,7 @@ impl AttributeValue {
         let mut transformed_version_str = numeric_parts.as_str().to_string();
 
         for i in 1..parts.len() {
-            if let None = parts.get(i) {
+            if parts.get(i).is_none() {
                 transformed_version_str.push_str(".0");
             }
         }
