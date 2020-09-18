@@ -467,7 +467,8 @@ impl FeatureFlag {
 
         for prereq in &self.prerequisites {
             if let Some(flag) = store.flag(&prereq.key) {
-                if flag.evaluate(user, store).variation_index != Some(prereq.variation) {
+                if !flag.on || flag.evaluate(user, store).variation_index != Some(prereq.variation)
+                {
                     // TODO capture prereq event
                     return self.off_value(Reason::PrerequisiteFailed {
                         prerequisite_key: prereq.key.to_string(),
