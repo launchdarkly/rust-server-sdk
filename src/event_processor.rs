@@ -183,12 +183,7 @@ fn process_event(
 }
 
 fn notice_user(user_cache: &mut LruCache<String, ()>, user: &MaybeInlinedUser) -> bool {
-    let key = match user.key() {
-        Some(k) => k,
-        None => {
-            return true;
-        }
-    };
+    let key = user.key();
 
     if user_cache.get(key).is_none() {
         trace!("noticing new user {:?}", key);

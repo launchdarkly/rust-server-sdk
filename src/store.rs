@@ -457,10 +457,6 @@ impl FeatureFlag {
     }
 
     pub fn evaluate(&self, user: &User, store: &FeatureStore) -> Detail<&FlagValue> {
-        if user.key().is_none() {
-            return Detail::err(eval::Error::UserNotSpecified);
-        }
-
         if !self.on {
             return self.off_value(Reason::Off);
         }
@@ -483,7 +479,7 @@ impl FeatureFlag {
 
         for target in &self.targets {
             for value in &target.values {
-                if Some(value) == user.key() {
+                if value == user.key() {
                     return self.variation(target.variation, Reason::TargetMatch);
                 }
             }
@@ -552,10 +548,7 @@ pub struct Segment {
 impl Segment {
     // TODO segment explanations
     fn contains(&self, user: &User) -> bool {
-        let user_key = match user.key() {
-            Some(key) => key,
-            None => return false,
-        };
+        let user_key = user.key();
 
         if self.included.contains(user_key) {
             return true;
@@ -696,7 +689,7 @@ mod tests {
     use super::*;
 
     use crate::eval::Reason::*;
-    use crate::users::{User, UserBuilder};
+    use crate::users::User;
 
     #[test]
     fn test_parse_variation_or_rollout() {
@@ -851,29 +844,6 @@ mod tests {
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
         assert_that!(detail.reason).is_equal_to(&TargetMatch);
-    }
-
-    #[test]
-    fn test_eval_flag_missing_user_key() {
-        let nameless = UserBuilder::new_with_optional_key(None).build(); // untargetable
-        let mut flag: FeatureFlag = serde_json::from_str(TEST_FLAG_JSON).unwrap();
-
-        assert!(!flag.on);
-        let detail = flag.evaluate(&nameless, &FeatureStore::new());
-        assert_that!(detail.value).is_none();
-        assert_that!(detail.variation_index).is_none();
-        assert_that!(detail.reason).is_equal_to(&Reason::Error {
-            error: eval::Error::UserNotSpecified,
-        });
-
-        // flip targeting on
-        flag.on = true;
-        let detail = flag.evaluate(&nameless, &FeatureStore::new());
-        assert_that!(detail.value).is_none();
-        assert_that!(detail.variation_index).is_none();
-        assert_that!(detail.reason).is_equal_to(&Reason::Error {
-            error: eval::Error::UserNotSpecified,
-        });
     }
 
     #[test]
@@ -1343,7 +1313,7 @@ mod tests {
     struct AttributeTestCase {
         matching_user: User,
         non_matching_user: User,
-        user_without_attr: User,
+        user_without_attr: Option<User>,
     }
 
     #[test]
@@ -1352,47 +1322,47 @@ mod tests {
             "key" => AttributeTestCase {
                 matching_user: User::with_key("match").build(),
                 non_matching_user: User::with_key("nope").build(),
-                user_without_attr: UserBuilder::new_with_optional_key(None).build(),
+                user_without_attr: None,
             },
             "secondary" => AttributeTestCase {
                 matching_user: User::with_key("mu").secondary("match").build(),
                 non_matching_user: User::with_key("nmu").secondary("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
             "ip" => AttributeTestCase {
                 matching_user: User::with_key("mu").ip("match").build(),
                 non_matching_user: User::with_key("nmu").ip("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
             "country" => AttributeTestCase {
                 matching_user: User::with_key("mu").country("match").build(),
                 non_matching_user: User::with_key("nmu").country("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
             "email" => AttributeTestCase {
                 matching_user: User::with_key("mu").email("match").build(),
                 non_matching_user: User::with_key("nmu").email("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
             "firstName" => AttributeTestCase {
                 matching_user: User::with_key("mu").first_name("match").build(),
                 non_matching_user: User::with_key("nmu").first_name("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
             "lastName" => AttributeTestCase {
                 matching_user: User::with_key("mu").last_name("match").build(),
                 non_matching_user: User::with_key("nmu").last_name("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
             "avatar" => AttributeTestCase {
                 matching_user: User::with_key("mu").avatar("match").build(),
                 non_matching_user: User::with_key("nmu").avatar("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
             "name" => AttributeTestCase {
                 matching_user: User::with_key("mu").name("match").build(),
                 non_matching_user: User::with_key("nmu").name("nope").build(),
-                user_without_attr: User::with_key("uwa").build(),
+                user_without_attr: Some(User::with_key("uwa").build()),
             },
         };
 
@@ -1414,11 +1384,13 @@ mod tests {
                 "should not match non-matching {}",
                 attr
             );
-            assert!(
-                !clause.matches(&test_case.user_without_attr, &FeatureStore::new()),
-                "should not match user with null {}",
-                attr
-            );
+            if let Some(user_without_attr) = test_case.user_without_attr {
+                assert!(
+                    !clause.matches(&user_without_attr, &FeatureStore::new()),
+                    "should not match user with null {}",
+                    attr
+                );
+            }
         }
     }
 

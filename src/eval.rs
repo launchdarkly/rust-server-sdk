@@ -133,9 +133,6 @@ pub enum Error {
     // MalformedFlag indicates that there was an internal inconsistency in the flag data,
     // e.g. a rule specified a nonexistent variation.
     MalformedFlag,
-    // UserNotSpecified indicates that the caller passed a user without a key for the user
-    // parameter.
-    UserNotSpecified,
     // WrongType indicates that the result value was not of the requested type, e.g. you
     // called BoolVariationDetail but the value was an integer.
     WrongType,

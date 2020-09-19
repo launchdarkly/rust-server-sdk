@@ -50,7 +50,7 @@ impl MaybeInlinedUser {
         }
     }
 
-    pub fn key(&self) -> Option<&String> {
+    pub fn key(&self) -> &String {
         self.user().key()
     }
 }
@@ -69,8 +69,7 @@ pub type IndexEvent = BaseEvent;
 pub struct IdentifyEvent {
     #[serde(flatten)]
     base: BaseEvent,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    key: Option<String>,
+    key: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -82,7 +81,7 @@ pub enum Event {
         #[serde(flatten)]
         base: BaseEvent,
         key: String,
-        user_key: Option<String>,
+        user_key: String,
         value: FlagValue,
         variation: Option<VariationIndex>,
         default: FlagValue,
@@ -127,7 +126,7 @@ impl Event {
         default: FlagValue,
         send_reason: bool,
     ) -> Self {
-        let user_key = user.key().cloned();
+        let user_key = user.key().clone();
 
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO that is ugly, use the type system to fix it
@@ -156,7 +155,7 @@ impl Event {
     }
 
     pub fn new_identify(user: User) -> Self {
-        let key = user.key().cloned();
+        let key = user.key().clone();
         Event::Identify(IdentifyEvent {
             base: BaseEvent {
                 creation_date: Self::now(),

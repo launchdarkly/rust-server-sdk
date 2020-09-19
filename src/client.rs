@@ -422,7 +422,7 @@ fn trim_base_url(mut url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::{self, Reason};
+    use crate::eval::Reason;
     use crate::event_sink::MockSink;
     use crate::store::{FeatureFlag, PatchTarget};
     use crate::update_processor::{MockUpdateProcessor, PatchData};
@@ -530,36 +530,6 @@ mod tests {
         let value = result.value.expect("value should not be None");
         assert!(value.is_object());
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
-    }
-
-    #[test]
-    fn user_with_no_key_still_sends_event() {
-        let user = crate::users::UserBuilder::new_with_optional_key(None).build();
-
-        let (mut client, updates, events) = make_mocked_client();
-        client.start_with_default_executor();
-
-        let updates = updates.lock().unwrap();
-
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(FeatureFlag::basic_flag("myFlag")),
-            })
-            .expect("patch should apply");
-
-        let result = client.bool_variation_detail(&user, "myFlag", false);
-
-        assert_that!(result.value).contains_value(false);
-        assert_that!(result.reason).is_equal_to(Reason::Error {
-            error: eval::Error::UserNotSpecified,
-        });
-
-        client.flush().expect("flush should succeed");
-
-        let events = events.read().unwrap();
-        assert_that!(*events).matching_contains(|event| event.kind() == "feature"); // TODO test this is absent unless trackEvents = true or various other conditions
-        assert_that!(*events).matching_contains(|event| event.kind() == "summary")
     }
 
     #[test]
