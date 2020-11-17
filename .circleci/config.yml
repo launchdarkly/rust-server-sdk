@@ -1,0 +1,36 @@
+version: 2
+jobs:
+  build:
+    docker:
+      # TODO test on other versions of Rust
+      - image: circleci/rust:latest
+
+    steps:
+      - checkout
+
+      - run:
+          name: Install clippy
+          command: rustup component add clippy
+      - run:
+          name: Install rustfmt
+          command: rustup component add rustfmt
+
+      - run: cargo build
+      - run: cargo test
+      - run:
+          name: Check consistent formatting
+          command: cargo fmt && git diff --exit-code
+      - run: cargo doc --no-deps
+      - run: cargo clippy -- -D warnings
+
+      - store_artifacts:
+          path: target/doc
+          destination: doc
+
+  # TODO publish crate
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - build
