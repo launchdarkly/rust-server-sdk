@@ -625,11 +625,9 @@ impl FeatureStore {
     }
 
     pub fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error> {
-        if path.starts_with(FLAGS_PREFIX) {
-            let flag_key = &path[FLAGS_PREFIX.len()..];
+        if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
             self.patch_flag(flag_key, data)
-        } else if path.starts_with(SEGMENTS_PREFIX) {
-            let segment_key = &path[SEGMENTS_PREFIX.len()..];
+        } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
             self.patch_segment(segment_key, data)
         } else {
             Err(format!("can't patch {}", path))
@@ -659,11 +657,9 @@ impl FeatureStore {
     }
 
     pub fn delete(&mut self, path: &str) -> Result<(), Error> {
-        if path.starts_with(FLAGS_PREFIX) {
-            let flag_key = &path[FLAGS_PREFIX.len()..];
+        if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
             self.data.flags.remove(flag_key);
-        } else if path.starts_with(SEGMENTS_PREFIX) {
-            let segment_key = &path[SEGMENTS_PREFIX.len()..];
+        } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
             self.data.segments.remove(segment_key);
         } else {
             return Err(format!("can't delete {}", path));
