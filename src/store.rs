@@ -156,7 +156,7 @@ impl Op {
             // string ops
             Op::StartsWith => string_op(lhs, rhs, |l, r| l.starts_with(r)),
             Op::EndsWith => string_op(lhs, rhs, |l, r| l.ends_with(r)),
-            Op::Contains => string_op(lhs, rhs, |l, r| l.find(r).is_some()),
+            Op::Contains => string_op(lhs, rhs, |l, r| l.contains(r)),
             Op::Matches => string_op(lhs, rhs, |l, r| match Regex::new(r) {
                 Ok(re) => re.is_match(l),
                 Err(e) => {
