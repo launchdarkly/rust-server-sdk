@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 chrono = "0.4.9"
-eventsource-client = "0.3.1"
+eventsource-client = "0.5.0"
 futures = "0.1.25"
 http = ">= 0.1.18"
 lazy_static = "1.4.0"
