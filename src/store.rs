@@ -283,6 +283,7 @@ impl Clause {
 
 #[derive(Clone, Debug, Deserialize)]
 struct FlagRule {
+    id: String,
     clauses: Vec<Clause>,
     #[serde(flatten)]
     variation_or_rollout: VariationOrRollout,
@@ -485,12 +486,15 @@ impl FeatureFlag {
             }
         }
 
-        for rule in &self.rules {
+        for (rule_index, rule) in self.rules.iter().enumerate() {
             if rule.matches(&user, store) {
                 return self.value_for_variation_or_rollout(
                     &rule.variation_or_rollout,
                     &user,
-                    Reason::RuleMatch,
+                    Reason::RuleMatch {
+                        rule_index,
+                        rule_id: rule.id.clone(),
+                    },
                 );
             }
         }
@@ -852,6 +856,13 @@ mod tests {
             .build();
 
         let mut flag: FeatureFlag = serde_json::from_str(FLAG_WITH_RULES_JSON).unwrap();
+        let rule_index = 0;
+        let rule_id = flag
+            .rules
+            .get(rule_index)
+            .expect("flag should have a rule")
+            .id
+            .clone();
 
         assert!(!flag.on);
         for user in vec![&alice, &bob] {
@@ -871,7 +882,10 @@ mod tests {
         let detail = flag.evaluate(&bob, &FeatureStore::new());
         assert_that!(detail.value).contains_value(&Bool(false));
         assert_that!(detail.variation_index).contains_value(1);
-        assert_that!(detail.reason).is_equal_to(&RuleMatch);
+        assert_that!(detail.reason).is_equal_to(&RuleMatch {
+            rule_id,
+            rule_index,
+        });
     }
 
     #[test]
@@ -949,8 +963,10 @@ mod tests {
             .expect("patch should succeed");
 
         let mut flag = FeatureFlag::basic_flag("flag");
+        let rule_id = "some-rule".to_string();
         flag.on = true;
         flag.rules.push(FlagRule {
+            id: rule_id.clone(),
             clauses: vec![Clause {
                 attribute: "segmentMatch".to_string(),
                 op: Op::SegmentMatch,
@@ -970,7 +986,10 @@ mod tests {
         asserting!("alice is in segment, should see false with RuleMatch")
             .that(&detail.value)
             .contains_value(&Bool(false));
-        assert_that!(detail.reason).is_equal_to(Reason::RuleMatch);
+        assert_that!(detail.reason).is_equal_to(Reason::RuleMatch {
+            rule_id,
+            rule_index: 0,
+        });
         let detail = flag.evaluate(&bob, &store);
         asserting!("bob is not in segment and should see fallthrough")
             .that(&detail.value)

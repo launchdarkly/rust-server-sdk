@@ -101,12 +101,15 @@ pub enum Reason {
     // TargetMatch indicates that the user key was specifically targeted for this flag.
     TargetMatch,
     // RuleMatch indicates that the user matched one of the flag's rules.
-    // TODO include ruleIndex and ruleId
-    RuleMatch,
+    #[serde(rename_all = "camelCase")]
+    RuleMatch {
+        rule_index: usize,
+        rule_id: String,
+    },
     // PrerequisiteFailed indicates that the flag was considered off because it had at
     // least one prerequisite flag that either was off or did not return the desired variation.
+    #[serde(rename_all = "camelCase")]
     PrerequisiteFailed {
-        #[serde(rename = "prerequisiteKey")]
         prerequisite_key: String,
     },
     // Fallthrough indicates that the flag was on but the user did not match any targets
