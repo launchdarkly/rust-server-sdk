@@ -2,9 +2,9 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
+use rust_server_sdk_evaluation::{Detail, Reason, VariationIndex};
 use serde::Serialize;
 
-use super::eval::{Detail, Reason, VariationIndex};
 use super::store::{FeatureFlag, FlagValue};
 use super::users::User;
 

@@ -3,17 +3,17 @@ use std::io;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
-use super::eval::{self, Detail};
+use futures::future;
+use rust_server_sdk_evaluation::{self as eval, Detail};
+use serde::Serialize;
+use thiserror::Error;
+
 use super::event_processor::EventProcessor;
 use super::event_sink::EventSink;
 use super::events::{Event, MaybeInlinedUser};
 use super::store::{FeatureFlag, FeatureStore, FlagValue};
 use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
 use super::users::User;
-
-use futures::future;
-use serde::Serialize;
-use thiserror::Error;
 
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
@@ -421,13 +421,13 @@ fn trim_base_url(mut url: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use rust_server_sdk_evaluation::Reason;
+    use spectral::prelude::*;
+
     use super::*;
-    use crate::eval::Reason;
     use crate::event_sink::MockSink;
     use crate::store::{FeatureFlag, PatchTarget};
     use crate::update_processor::{MockUpdateProcessor, PatchData};
-
-    use spectral::prelude::*;
 
     #[test]
     fn test_trim_base_url() {

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use super::eval::{self, Detail, Reason, VariationIndex};
-use super::users::{AttributeValue, User};
-
 use chrono::{self, Utc};
 use regex::Regex;
+use rust_server_sdk_evaluation::{self as eval, Detail, Reason, VariationIndex};
 use serde::{Deserialize, Serialize};
+
+use super::users::{AttributeValue, User};
 
 const FLAGS_PREFIX: &str = "/flags/";
 const SEGMENTS_PREFIX: &str = "/segments/";
@@ -683,12 +683,11 @@ impl Default for FeatureStore {
 mod tests {
     use std::time::SystemTime;
 
+    use rust_server_sdk_evaluation::Reason::*;
     use spectral::prelude::*;
 
     use super::FlagValue::*;
     use super::*;
-
-    use crate::eval::Reason::*;
     use crate::users::User;
 
     #[test]

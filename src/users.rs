@@ -411,9 +411,9 @@ impl UserBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use spectral::prelude::*;
+
+    use super::*;
 
     const BUCKET_TOLERANCE: f32 = 0.0000001;
 

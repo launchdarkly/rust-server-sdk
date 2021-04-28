@@ -13,7 +13,6 @@ extern crate spectral;
 extern crate serde_json;
 
 pub mod client;
-pub mod eval;
 mod event_processor;
 mod event_sink;
 pub mod events;

@@ -1,12 +1,12 @@
-use super::event_sink as sink;
-use super::events::{Event, EventSummary, MaybeInlinedUser};
-
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
 use reqwest as r;
+
+use super::event_sink as sink;
+use super::events::{Event, EventSummary, MaybeInlinedUser};
 
 type Error = String; // TODO
 
@@ -197,10 +197,10 @@ fn notice_user(user_cache: &mut LruCache<String, ()>, user: &MaybeInlinedUser) -
 
 #[cfg(test)]
 mod tests {
+    use rust_server_sdk_evaluation::{Detail, Reason};
     use spectral::prelude::*;
 
     use super::*;
-    use crate::eval::{Detail, Reason};
     use crate::store::{FeatureFlag, FlagValue};
     use crate::users::User;
 
