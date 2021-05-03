@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use ldclient::client::Client;
-use ldclient::users::User;
+use ldclient::User;
 
 use cursive::traits::Boxable;
 use cursive::utils::Counter;

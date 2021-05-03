@@ -8,7 +8,7 @@ use std::process::exit;
 use std::time::Duration;
 
 use ldclient::client::Client;
-use ldclient::users::User;
+use ldclient::User;
 
 use env_logger::Env;
 use futures::future::lazy;
