@@ -351,12 +351,13 @@ struct FeatureSummaryOutput {
 
 impl From<(&VariationKey, VariationSummary)> for FeatureSummaryOutput {
     fn from((variation_key, variation_summary): (&VariationKey, VariationSummary)) -> Self {
-        let mut counters = Vec::new();
-        counters.push(VariationCounterOutput::from((
-            variation_key,
-            variation_summary.value,
-            variation_summary.count,
-        )));
+        let counters = vec![
+            VariationCounterOutput::from((
+                variation_key,
+                variation_summary.value,
+                variation_summary.count,
+            ))
+        ];
 
         FeatureSummaryOutput {
             default: variation_summary.default,
