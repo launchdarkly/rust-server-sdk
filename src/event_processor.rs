@@ -1,12 +1,12 @@
-use super::event_sink as sink;
-use super::events::{Event, EventSummary, MaybeInlinedUser};
-
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
 use reqwest as r;
+
+use super::event_sink as sink;
+use super::events::{Event, EventSummary, MaybeInlinedUser};
 
 type Error = String; // TODO
 
@@ -197,12 +197,11 @@ fn notice_user(user_cache: &mut LruCache<String, ()>, user: &MaybeInlinedUser) -
 
 #[cfg(test)]
 mod tests {
+    use rust_server_sdk_evaluation::{Detail, FlagValue, Reason, User};
     use spectral::prelude::*;
 
     use super::*;
-    use crate::eval::{Detail, Reason};
-    use crate::store::{FeatureFlag, FlagValue};
-    use crate::users::User;
+    use crate::test_common::basic_flag;
 
     #[test]
     fn feature_event_emits_index_and_summary() {
@@ -210,7 +209,7 @@ mod tests {
         let ep = EventProcessor::new_with_sink(events.clone())
             .expect("event processor should initialize");
 
-        let flag = FeatureFlag::basic_flag("flag");
+        let flag = basic_flag("flag");
         let user = MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
         let detail = Detail {
             value: Some(FlagValue::from(false)),
@@ -254,7 +253,7 @@ mod tests {
         let ep = EventProcessor::new_with_sink(events.clone())
             .expect("event processor should initialize");
 
-        let flag = FeatureFlag::basic_flag("flag");
+        let flag = basic_flag("flag");
         let user = MaybeInlinedUser::Inlined(User::with_key("bar".to_string()).build());
         let detail = Detail {
             value: Some(FlagValue::from(false)),

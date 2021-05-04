@@ -3,17 +3,16 @@ use std::io;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
-use super::eval::{self, Detail};
+use futures::future;
+use rust_server_sdk_evaluation::{self as eval, Detail, Flag, FlagValue, Store, User};
+use serde::Serialize;
+use thiserror::Error;
+
 use super::event_processor::EventProcessor;
 use super::event_sink::EventSink;
 use super::events::{Event, MaybeInlinedUser};
-use super::store::{FeatureFlag, FeatureStore, FlagValue};
+use super::store::FeatureStore;
 use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
-use super::users::User;
-
-use futures::future;
-use serde::Serialize;
-use thiserror::Error;
 
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
@@ -294,7 +293,7 @@ impl Client {
         let store = self.store.lock().unwrap();
         let flags = store.all_flags();
         let evals = flags.iter().map(|(key, flag)| {
-            let val = flag.evaluate(user, &store).map(|v| v.clone());
+            let val = flag.evaluate(user, &*store).map(|v| v.clone());
             (key.clone(), val)
         });
         evals.collect()
@@ -383,7 +382,7 @@ impl Client {
         user: &User,
         flag_key: &str,
         default: FlagValue,
-    ) -> (Option<FeatureFlag>, Detail<FlagValue>) {
+    ) -> (Option<Flag>, Detail<FlagValue>) {
         let store = self.store.lock().unwrap();
         let flag = match store.flag(flag_key) {
             // TODO eliminate this clone by wrangling lifetimes
@@ -397,7 +396,7 @@ impl Client {
         };
 
         // TODO eliminate this clone by wrangling lifetimes
-        let result = flag.evaluate(user, &store).map(|v| v.clone()).or(default);
+        let result = flag.evaluate(user, &*store).map(|v| v.clone()).or(default);
 
         (Some(flag), result)
     }
@@ -421,13 +420,14 @@ fn trim_base_url(mut url: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::eval::Reason;
-    use crate::event_sink::MockSink;
-    use crate::store::{FeatureFlag, PatchTarget};
-    use crate::update_processor::{MockUpdateProcessor, PatchData};
-
+    use rust_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
+
+    use super::*;
+    use crate::event_sink::MockSink;
+    use crate::store::PatchTarget;
+    use crate::test_common::*;
+    use crate::update_processor::{MockUpdateProcessor, PatchData};
 
     #[test]
     fn test_trim_base_url() {
@@ -459,7 +459,7 @@ mod tests {
         updates
             .patch(PatchData {
                 path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(FeatureFlag::basic_flag("myFlag")),
+                data: PatchTarget::Flag(basic_flag("myFlag")),
             })
             .expect("patch should apply");
 
@@ -484,7 +484,7 @@ mod tests {
 
         let updates = updates.lock().unwrap();
 
-        let flag = FeatureFlag::basic_int_flag("myFlag");
+        let flag = basic_int_flag("myFlag");
 
         updates
             .patch(PatchData {
@@ -516,7 +516,7 @@ mod tests {
 
         let updates = updates.lock().unwrap();
 
-        let flag = FeatureFlag::basic_json_flag("myFlag");
+        let flag = basic_json_flag("myFlag");
 
         updates
             .patch(PatchData {
@@ -537,7 +537,7 @@ mod tests {
         let (mut client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
-        let user = crate::users::User::with_key("bob").build();
+        let user = User::with_key("bob").build();
 
         client.identify(user);
         client.flush().expect("flush should succeed");
@@ -557,7 +557,7 @@ mod tests {
         let (mut client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
-        let user = crate::users::User::with_key("bob").build();
+        let user = User::with_key("bob").build();
 
         client.track_event(user.clone(), "event-with-null");
         client.track_data(user.clone(), "event-with-string", "string-data")?;

@@ -2,11 +2,8 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
+use rust_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User, VariationIndex};
 use serde::Serialize;
-
-use super::eval::{Detail, Reason, VariationIndex};
-use super::store::{FeatureFlag, FlagValue};
-use super::users::User;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -121,7 +118,7 @@ impl Event {
     pub fn new_feature_request(
         flag_key: &str,
         user: MaybeInlinedUser,
-        flag: Option<FeatureFlag>,
+        flag: Option<Flag>,
         detail: Detail<FlagValue>,
         default: FlagValue,
         send_reason: bool,
@@ -354,12 +351,11 @@ struct FeatureSummaryOutput {
 
 impl From<(&VariationKey, VariationSummary)> for FeatureSummaryOutput {
     fn from((variation_key, variation_summary): (&VariationKey, VariationSummary)) -> Self {
-        let mut counters = Vec::new();
-        counters.push(VariationCounterOutput::from((
+        let counters = vec![VariationCounterOutput::from((
             variation_key,
             variation_summary.value,
             variation_summary.count,
-        )));
+        ))];
 
         FeatureSummaryOutput {
             default: variation_summary.default,
@@ -411,6 +407,7 @@ mod tests {
     use spectral::prelude::*;
 
     use super::*;
+    use crate::test_common::basic_flag;
 
     #[test]
     fn summarises_feature_request() {
@@ -418,7 +415,7 @@ mod tests {
         assert_that!(summary.is_empty()).is_true();
         assert_that!(summary.start_date).is_greater_than(summary.end_date);
 
-        let flag = FeatureFlag::basic_flag("flag");
+        let flag = basic_flag("flag");
         let default = FlagValue::from(false);
         let user = MaybeInlinedUser::Inlined(User::with_key("alice".to_string()).build());
         let fallthrough = Detail {
