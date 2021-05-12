@@ -47,7 +47,7 @@ impl MaybeInlinedUser {
         }
     }
 
-    pub fn key(&self) -> &String {
+    pub fn key(&self) -> &str {
         self.user().key()
     }
 }
@@ -123,8 +123,6 @@ impl Event {
         default: FlagValue,
         send_reason: bool,
     ) -> Self {
-        let user_key = user.key().clone();
-
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO that is ugly, use the type system to fix it
         let value = detail.value.unwrap();
@@ -136,11 +134,11 @@ impl Event {
         };
 
         Event::FeatureRequest {
+            user_key: user.key().to_string(),
             base: BaseEvent {
                 creation_date: Self::now(),
                 user,
             },
-            user_key,
             key: flag_key.to_owned(),
             default,
             reason,
@@ -152,13 +150,12 @@ impl Event {
     }
 
     pub fn new_identify(user: User) -> Self {
-        let key = user.key().clone();
         Event::Identify(IdentifyEvent {
+            key: user.key().to_string(),
             base: BaseEvent {
                 creation_date: Self::now(),
                 user: MaybeInlinedUser::new(true, user),
             },
-            key,
         })
     }
 
