@@ -60,6 +60,26 @@ pub struct BaseEvent {
     pub user: MaybeInlinedUser,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureRequestEvent {
+    #[serde(flatten)]
+    base: BaseEvent,
+    key: String,
+    user_key: String,
+    value: FlagValue,
+    variation: Option<VariationIndex>,
+    default: FlagValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<Reason>,
+    version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prereq_of: Option<String>,
+
+    #[serde(skip)]
+    pub(crate) track_events: bool,
+}
+
 pub type IndexEvent = BaseEvent;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -73,24 +93,11 @@ pub struct IdentifyEvent {
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
 pub enum Event {
-    #[serde(rename = "feature", rename_all = "camelCase")]
-    FeatureRequest {
-        #[serde(flatten)]
-        base: BaseEvent,
-        key: String,
-        user_key: String,
-        value: FlagValue,
-        variation: Option<VariationIndex>,
-        default: FlagValue,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason: Option<Reason>,
-        version: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prereq_of: Option<String>,
-    },
-    #[serde(rename = "index", rename_all = "camelCase")]
+    #[serde(rename = "feature")]
+    FeatureRequest(FeatureRequestEvent),
+    #[serde(rename = "index")]
     Index(IndexEvent),
-    #[serde(rename = "identify", rename_all = "camelCase")]
+    #[serde(rename = "identify")]
     Identify(IdentifyEvent),
     #[serde(rename = "custom", rename_all = "camelCase")]
     Custom {
@@ -102,7 +109,7 @@ pub enum Event {
         #[serde(skip_serializing_if = "serde_json::Value::is_null")]
         data: serde_json::Value,
     },
-    #[serde(rename = "summary", rename_all = "camelCase")]
+    #[serde(rename = "summary")]
     Summary(EventSummary),
 }
 
@@ -115,6 +122,7 @@ impl Display for Event {
 }
 
 impl Event {
+    // TODO separate out new_unknown_flag_event so flag doesn't have to be Option
     pub fn new_feature_request(
         flag_key: &str,
         user: MaybeInlinedUser,
@@ -127,13 +135,23 @@ impl Event {
         // TODO that is ugly, use the type system to fix it
         let value = detail.value.unwrap();
 
-        let reason = if send_reason {
+        let flag_track_events;
+        let require_experiment_data;
+        if let Some(f) = flag.as_ref() {
+            flag_track_events = f.track_events;
+            require_experiment_data = f.is_experimentation_enabled(&detail.reason);
+        } else {
+            flag_track_events = false;
+            require_experiment_data = false;
+        }
+
+        let reason = if send_reason || require_experiment_data {
             Some(detail.reason)
         } else {
             None
         };
 
-        Event::FeatureRequest {
+        Event::FeatureRequest(FeatureRequestEvent {
             user_key: user.key().to_string(),
             base: BaseEvent {
                 creation_date: Self::now(),
@@ -146,7 +164,8 @@ impl Event {
             variation: detail.variation_index,
             version: flag.map(|f| f.version),
             prereq_of: None,
-        }
+            track_events: flag_track_events || require_experiment_data,
+        })
     }
 
     pub fn new_identify(user: User) -> Self {
@@ -180,7 +199,7 @@ impl Event {
 
     pub fn to_index_event(&self) -> Option<IndexEvent> {
         let base = match self {
-            Event::FeatureRequest { base, .. } => base,
+            Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
             Event::Custom { base, .. } => base,
             Event::Index { .. } | Event::Identify { .. } | Event::Summary { .. } => return None,
         };
@@ -208,6 +227,17 @@ impl Event {
             Event::Custom { .. } => "custom",
             Event::Summary { .. } => "summary",
         }
+    }
+
+    #[cfg(test)]
+    pub fn base_mut(&mut self) -> Option<&mut BaseEvent> {
+        Some(match self {
+            Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
+            Event::Index(base) => base,
+            Event::Identify(IdentifyEvent { base, .. }) => base,
+            Event::Custom { base, .. } => base,
+            Event::Summary(_) => return None,
+        })
     }
 }
 
@@ -238,8 +268,8 @@ impl EventSummary {
         self.features.is_empty()
     }
 
-    pub fn add(&mut self, event: &Event) {
-        if let Event::FeatureRequest {
+    pub fn add(&mut self, event: &FeatureRequestEvent) {
+        let FeatureRequestEvent {
             base: BaseEvent { creation_date, .. },
             key,
             value,
@@ -247,24 +277,23 @@ impl EventSummary {
             variation,
             default,
             ..
-        } = event
-        {
-            self.start_date = min(self.start_date, *creation_date);
-            self.end_date = max(self.end_date, *creation_date);
+        } = event;
 
-            let variation_key = VariationKey {
-                flag_key: key.clone(),
-                version: *version,
-                variation: *variation,
-            };
-            match self.features.get_mut(&variation_key) {
-                Some(summary) => summary.count_request(value, default),
-                None => {
-                    self.features.insert(
-                        variation_key,
-                        VariationSummary::new(value.clone(), default.clone()),
-                    );
-                }
+        self.start_date = min(self.start_date, *creation_date);
+        self.end_date = max(self.end_date, *creation_date);
+
+        let variation_key = VariationKey {
+            flag_key: key.clone(),
+            version: *version,
+            variation: *variation,
+        };
+        match self.features.get_mut(&variation_key) {
+            Some(summary) => summary.count_request(value, default),
+            None => {
+                self.features.insert(
+                    variation_key,
+                    VariationSummary::new(value.clone(), default.clone()),
+                );
             }
         }
     }
@@ -311,6 +340,7 @@ impl VariationSummary {
 // (See #[serde(into)] annotation on EventSummary.)
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct EventSummaryOutput {
     start_date: u64,
     end_date: u64,
@@ -401,10 +431,94 @@ impl From<(&VariationKey, FlagValue, u64)> for VariationCounterOutput {
 
 #[cfg(test)]
 mod tests {
+    use maplit::hashmap;
     use spectral::prelude::*;
 
     use super::*;
     use crate::test_common::basic_flag;
+
+    #[test]
+    fn serializes_feature_event() {
+        let flag = basic_flag("flag");
+        let default = FlagValue::from(false);
+        let user = MaybeInlinedUser::Inlined(User::with_key("alice".to_string()).build());
+        let fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough,
+        };
+
+        let mut fre = Event::new_feature_request(
+            &flag.key.clone(),
+            user.clone(),
+            Some(flag.clone()),
+            fallthrough.clone(),
+            default.clone(),
+            true,
+        );
+        // fix creation date so JSON is predictable
+        fre.base_mut().unwrap().creation_date = 1234;
+
+        let fre_json = r#"
+{
+  "kind": "feature",
+  "creationDate": 1234,
+  "user": {
+    "key": "alice",
+    "custom": {}
+  },
+  "key": "flag",
+  "userKey": "alice",
+  "value": false,
+  "variation": 1,
+  "default": false,
+  "reason": {
+    "kind": "FALLTHROUGH"
+  },
+  "version": 42
+}
+        "#
+        .trim();
+
+        assert_that!(serde_json::to_string_pretty(&fre)).is_ok_containing(fre_json.to_string());
+    }
+
+    #[test]
+    fn serializes_summary_event() {
+        let summary = EventSummary {
+            start_date: 1234,
+            end_date: 4567,
+            features: hashmap! {
+                VariationKey{flag_key: "f".into(), version: Some(2), variation: Some(1)} => VariationSummary{count: 1, value: true.into(), default: false.into()},
+            },
+        };
+        let summary_event = Event::Summary(summary);
+
+        let summary_json = r#"
+{
+  "kind": "summary",
+  "startDate": 1234,
+  "endDate": 4567,
+  "features": {
+    "f": {
+      "default": false,
+      "counters": [
+        {
+          "value": true,
+          "version": 2,
+          "count": 1,
+          "variation": 1
+        }
+      ]
+    }
+  }
+}
+        "#
+        .trim();
+
+        assert_that!(serde_json::to_string_pretty(&summary_event))
+            .is_ok_containing(summary_json.to_string());
+    }
 
     #[test]
     fn summarises_feature_request() {
@@ -415,40 +529,37 @@ mod tests {
         let flag = basic_flag("flag");
         let default = FlagValue::from(false);
         let user = MaybeInlinedUser::Inlined(User::with_key("alice".to_string()).build());
-        let fallthrough = Detail {
-            value: Some(FlagValue::from(false)),
-            variation_index: Some(1),
-            reason: Reason::Fallthrough,
+
+        let value = FlagValue::from(false);
+        let variation_index = 1;
+        let reason = Reason::Fallthrough;
+        let eval_at = 1234;
+
+        let fallthrough_request = FeatureRequestEvent {
+            base: BaseEvent {
+                user: user.clone(),
+                creation_date: eval_at,
+            },
+            key: flag.key.clone(),
+            user_key: user.key().to_string(),
+            value: value.clone(),
+            variation: Some(variation_index),
+            default: default.clone(),
+            version: Some(flag.version),
+            reason: Some(reason),
+            prereq_of: None,
+            track_events: false,
         };
-
-        let fallthrough_request = Event::new_feature_request(
-            &flag.key.clone(),
-            user.clone(),
-            Some(flag.clone()),
-            fallthrough.clone(),
-            default.clone(),
-            true,
-        );
-
-        summary.add(
-            &fallthrough_request
-                .to_index_event()
-                .map(Event::Index)
-                .unwrap(),
-        );
-
-        asserting!("ignores index events")
-            .that(&summary.is_empty())
-            .is_true();
 
         summary.add(&fallthrough_request);
         assert_that!(summary.is_empty()).is_false();
-        assert_that!(summary.start_date).is_equal_to(summary.end_date);
+        assert_that!(summary.start_date).is_equal_to(eval_at);
+        assert_that!(summary.end_date).is_equal_to(eval_at);
 
         let fallthrough_key = VariationKey {
             flag_key: flag.key,
             version: Some(flag.version),
-            variation: fallthrough.variation_index,
+            variation: Some(variation_index),
         };
 
         let fallthrough_summary = summary.features.get(&fallthrough_key);
@@ -456,7 +567,7 @@ mod tests {
             .that(&fallthrough_summary)
             .contains_value(&VariationSummary {
                 count: 1,
-                value: fallthrough.value.unwrap(),
+                value,
                 default,
             });
 

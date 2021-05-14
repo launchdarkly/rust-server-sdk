@@ -174,8 +174,17 @@ fn process_event(
                 false
             }
         }
+        Event::FeatureRequest(fre) => {
+            summary.add(&fre);
+
+            if fre.track_events {
+                batch.push(Event::FeatureRequest(fre));
+                true
+            } else {
+                false
+            }
+        }
         _ => {
-            summary.add(&event);
             batch.push(event);
             true
         }
@@ -197,14 +206,14 @@ fn notice_user(user_cache: &mut LruCache<String, ()>, user: &MaybeInlinedUser) -
 
 #[cfg(test)]
 mod tests {
-    use rust_server_sdk_evaluation::{Detail, FlagValue, Reason, User};
+    use rust_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User};
     use spectral::prelude::*;
 
     use super::*;
     use crate::test_common::basic_flag;
 
     #[test]
-    fn feature_event_emits_index_and_summary() {
+    fn sending_feature_event_emits_only_index_and_summary() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
         let ep = EventProcessor::new_with_sink(events.clone())
             .expect("event processor should initialize");
@@ -231,16 +240,192 @@ mod tests {
         ep.flush().expect("flush should succeed");
 
         let events = events.read().unwrap();
-        assert_that!(*events).has_length(3);
-
-        // TODO test that it only does this under certain conditions (trackEvents = true, etc)
-        asserting!("emits original feature event")
-            .that(&*events)
-            .matching_contains(|event| event == &feature_request);
+        assert_that!(*events).has_length(2);
 
         asserting!("emits index event")
             .that(&*events)
             .matching_contains(|event| event.kind() == "index");
+
+        asserting!("emits summary event")
+            .that(&*events)
+            .matching_contains(|event| event.kind() == "summary");
+    }
+
+    #[test]
+    fn sending_feature_event_with_track_events_emits_index_and_summary() {
+        let events = Arc::new(RwLock::new(sink::MockSink::new()));
+        let ep = EventProcessor::new_with_sink(events.clone())
+            .expect("event processor should initialize");
+
+        let mut flag = basic_flag("flag");
+        flag.track_events = true;
+        let user = MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
+        let detail = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough,
+        };
+
+        let feature_request = Event::new_feature_request(
+            &flag.key.clone(),
+            user.clone(),
+            Some(flag.clone()),
+            detail.clone(),
+            FlagValue::from(false),
+            true,
+        );
+        ep.send(feature_request.clone())
+            .expect("send should succeed");
+
+        ep.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(3);
+
+        asserting!("emits original feature event")
+            .that(&*events)
+            .contains(&feature_request);
+
+        asserting!("emits index event")
+            .that(&*events)
+            .matching_contains(|event| event.kind() == "index");
+
+        asserting!("emits summary event")
+            .that(&*events)
+            .matching_contains(|event| event.kind() == "summary");
+    }
+
+    #[test]
+    fn sending_feature_event_with_rule_track_events_emits_index_and_summary() {
+        let events = Arc::new(RwLock::new(sink::MockSink::new()));
+        let ep = EventProcessor::new_with_sink(events.clone())
+            .expect("event processor should initialize");
+
+        let flag: Flag = serde_json::from_str(
+            r#"{
+                 "key": "with_rule",
+                 "on": true,
+                 "targets": [],
+                 "prerequisites": [],
+                 "rules": [
+                   {
+                     "id": "rule-0",
+                     "clauses": [{
+                       "attribute": "key",
+                       "negate": false,
+                       "op": "matches",
+                       "values": ["do-track"]
+                     }],
+                     "trackEvents": true,
+                     "variation": 1
+                   },
+                   {
+                     "id": "rule-1",
+                     "clauses": [{
+                       "attribute": "key",
+                       "negate": false,
+                       "op": "matches",
+                       "values": ["no-track"]
+                     }],
+                     "trackEvents": false,
+                     "variation": 1
+                   }
+                 ],
+                 "fallthrough": {"variation": 0},
+                 "trackEventsFallthrough": true,
+                 "offVariation": 0,
+                 "clientSideAvailability": {
+                   "usingMobileKey": false,
+                   "usingEnvironmentId": false
+                 },
+                 "salt": "kosher",
+                 "version": 2,
+                 "variations": [false, true]
+               }"#,
+        )
+        .expect("flag should parse");
+
+        let user_track_rule =
+            MaybeInlinedUser::Inlined(User::with_key("do-track".to_string()).build());
+        let user_notrack_rule =
+            MaybeInlinedUser::Inlined(User::with_key("no-track".to_string()).build());
+        let user_fallthrough = MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
+
+        let detail_track_rule = Detail {
+            value: Some(FlagValue::from(true)),
+            variation_index: Some(1),
+            reason: Reason::RuleMatch {
+                rule_index: 0,
+                rule_id: "rule-0".into(),
+            },
+        };
+        let detail_notrack_rule = Detail {
+            value: Some(FlagValue::from(true)),
+            variation_index: Some(1),
+            reason: Reason::RuleMatch {
+                rule_index: 1,
+                rule_id: "rule-1".into(),
+            },
+        };
+        let detail_fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(0),
+            reason: Reason::Fallthrough,
+        };
+
+        let fre_track_rule = Event::new_feature_request(
+            &flag.key.clone(),
+            user_track_rule,
+            Some(flag.clone()),
+            detail_track_rule,
+            FlagValue::from(false),
+            true,
+        );
+        let fre_notrack_rule = Event::new_feature_request(
+            &flag.key.clone(),
+            user_notrack_rule,
+            Some(flag.clone()),
+            detail_notrack_rule,
+            FlagValue::from(false),
+            true,
+        );
+        let fre_fallthrough = Event::new_feature_request(
+            &flag.key.clone(),
+            user_fallthrough,
+            Some(flag.clone()),
+            detail_fallthrough,
+            FlagValue::from(false),
+            true,
+        );
+
+        for fre in vec![&fre_track_rule, &fre_notrack_rule, &fre_fallthrough] {
+            ep.send(fre.clone()).expect("send should succeed");
+        }
+
+        ep.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+
+        assert_that!(*events).has_length(2 + 3 + 1);
+
+        asserting!("emits tracked rule feature event")
+            .that(&*events)
+            .contains(&fre_track_rule);
+        asserting!("does not emit untracked rule feature event")
+            .that(&*events)
+            .does_not_contain(&fre_notrack_rule);
+        asserting!("emits fallthrough feature event (with trackEventsFallthrough)")
+            .that(&*events)
+            .contains(&fre_fallthrough);
+
+        asserting!("emits an index event for each")
+            .that(
+                &events
+                    .iter()
+                    .filter(|event| event.kind() == "index")
+                    .count(),
+            )
+            .is_equal_to(3);
 
         asserting!("emits summary event")
             .that(&*events)
@@ -281,16 +466,7 @@ mod tests {
         ep.flush().expect("flush should succeed");
 
         let events = events.read().unwrap();
-        assert_that!(*events).has_length(4);
-
-        asserting!("emits feature event each time")
-            .that(
-                &events
-                    .iter()
-                    .filter(|event| event.kind() == "feature")
-                    .count(),
-            )
-            .is_equal_to(2);
+        assert_that!(*events).has_length(2);
 
         asserting!("emits index event only once")
             .that(
