@@ -426,7 +426,7 @@ mod tests {
     use super::*;
     use crate::event_sink::MockSink;
     use crate::store::PatchTarget;
-    use crate::test_common::*;
+    use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
     use crate::update_processor::{MockUpdateProcessor, PatchData};
 
     #[test]
@@ -495,7 +495,7 @@ mod tests {
 
         let result = client.int_variation_detail(&user, "myFlag", 0);
 
-        assert_that!(result.value).contains_value(std::i64::MAX);
+        assert_that!(result.value).contains_value(test_common::FLOAT_TO_INT_MAX);
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
     }
 

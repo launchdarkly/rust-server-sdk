@@ -2,6 +2,8 @@
 
 use rust_server_sdk_evaluation::Flag;
 
+pub const FLOAT_TO_INT_MAX: i64 = 9007199254740991;
+
 pub fn basic_flag(key: &str) -> Flag {
     serde_json::from_str(&format!(
         r#"{{
@@ -36,14 +38,15 @@ pub fn basic_int_flag(key: &str) -> Flag {
             "prerequisites": [],
             "fallthrough": {{"variation": 1}},
             "offVariation": 0,
-            "variations": [0, 9223372036854775807],
+            "variations": [0, {}],
             "clientSideAvailability": {{
                 "usingMobileKey": false,
                 "usingEnvironmentId": false
             }},
             "salt": "kosher"
         }}"#,
-        serde_json::Value::String(key.to_string())
+        serde_json::Value::String(key.to_string()),
+        FLOAT_TO_INT_MAX,
     ))
     .unwrap()
 }
