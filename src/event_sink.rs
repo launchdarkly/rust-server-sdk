@@ -2,7 +2,7 @@ use reqwest as r;
 
 use super::events::Event;
 
-type Error = String; // TODO
+type Error = String; // TODO(ch108607) use an error enum
 
 pub trait EventSink: Send + Sync {
     fn send(&mut self, events: Vec<Event>) -> Result<(), Error>;

@@ -6,7 +6,7 @@ use serde::Deserialize;
 const FLAGS_PREFIX: &str = "/flags/";
 const SEGMENTS_PREFIX: &str = "/segments/";
 
-type Error = String; // TODO
+type Error = String; // TODO(ch108607) use an error enum
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -23,7 +23,7 @@ pub struct AllData {
     segments: HashMap<String, Segment>,
 }
 
-// TODO implement Error::ClientNotReady
+// TODO(ch108602) implement Error::ClientNotReady
 pub struct FeatureStore {
     pub data: AllData,
 }

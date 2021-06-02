@@ -29,12 +29,13 @@ pub(crate) struct PutData {
 pub(crate) struct PatchData {
     pub path: String,
     pub data: PatchTarget,
+    // TODO(ch108603) care about version
 }
 
 #[derive(Deserialize)]
 pub(crate) struct DeleteData {
     path: String,
-    // TODO care about version
+    // TODO(ch108603) care about version
 }
 
 pub trait UpdateProcessor: Send {

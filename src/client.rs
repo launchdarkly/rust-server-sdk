@@ -338,7 +338,7 @@ impl Client {
         self.send_internal(event);
 
         // unwrap is safe here because value should have been replaced with default if it was None.
-        // TODO that is ugly, use the type system to fix it
+        // TODO(ch108604) that is ugly, use the type system to fix it
         result.value.unwrap()
     }
 
@@ -384,21 +384,18 @@ impl Client {
         default: FlagValue,
     ) -> (Option<Flag>, Detail<FlagValue>) {
         let store = self.store.lock().unwrap();
-        let flag = match store.flag(flag_key) {
-            // TODO eliminate this clone by wrangling lifetimes
-            Some(flag) => flag.clone(),
-            None => {
-                return (
-                    None,
-                    Detail::err_default(eval::Error::FlagNotFound, default),
-                )
-            }
+        let flag = if let Some(flag) = store.flag(flag_key) {
+            flag
+        } else {
+            return (
+                None,
+                Detail::err_default(eval::Error::FlagNotFound, default),
+            );
         };
 
-        // TODO eliminate this clone by wrangling lifetimes
         let result = flag.evaluate(user, &*store).map(|v| v.clone()).or(default);
 
-        (Some(flag), result)
+        (Some(flag.clone()), result)
     }
 
     fn send_internal(&self, event: Event) {
@@ -441,8 +438,8 @@ mod tests {
     }
 
     #[test]
-    // TODO split this test up: test update_processor and event_processor separately and just
-    // mutate store to test evals
+    // TODO(ch107017) split this test up: test update_processor and event_processor separately and
+    // just mutate store to test evals
     fn client_receives_updates_evals_flags_and_sends_events() {
         let user = User::with_key("foo".to_string()).build();
 
@@ -470,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    // TODO This test is copy-pasta
+    // TODO(ch107017) This test is copy-pasta
     fn client_receives_updates_evals_flags_and_sends_events_int() {
         let user = User::with_key("foo".to_string()).build();
 
@@ -500,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    // TODO This test is copy-pasta
+    // TODO(ch107017) This test is copy-pasta
     fn client_receives_updates_evals_flags_and_sends_events_json() {
         use serde_json::Value;
 

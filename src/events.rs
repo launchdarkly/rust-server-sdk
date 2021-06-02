@@ -7,7 +7,9 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
-/// a user that may be inlined in the event. TODO have the event processor handle this
+/// a user that may be inlined in the event.
+///
+/// TODO(ch108613) have the event processor handle this
 pub enum MaybeInlinedUser {
     Inlined(User),
     NotInlined(User),
@@ -122,7 +124,7 @@ impl Display for Event {
 }
 
 impl Event {
-    // TODO separate out new_unknown_flag_event so flag doesn't have to be Option
+    // TODO(ch108613) separate out new_unknown_flag_event so flag doesn't have to be Option
     pub fn new_feature_request(
         flag_key: &str,
         user: MaybeInlinedUser,
@@ -132,7 +134,7 @@ impl Event {
         send_reason: bool,
     ) -> Self {
         // unwrap is safe here because value should have been replaced with default if it was None.
-        // TODO that is ugly, use the type system to fix it
+        // TODO(ch108604) that is ugly, use the type system to fix it
         let value = detail.value.unwrap();
 
         let flag_track_events;

@@ -8,11 +8,12 @@ extern crate spectral;
 #[macro_use]
 extern crate serde_json;
 
+// TODO(ch108600) review public exports
 pub mod client;
 mod event_processor;
 mod event_sink;
 pub mod events;
-pub mod store; // TODO no, move flagvalue into types or something instead
+pub mod store;
 mod test_common;
 mod update_processor;
 

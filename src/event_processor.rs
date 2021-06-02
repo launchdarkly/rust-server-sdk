@@ -8,9 +8,9 @@ use reqwest as r;
 use super::event_sink as sink;
 use super::events::{Event, EventSummary, MaybeInlinedUser};
 
-type Error = String; // TODO
+type Error = String; // TODO(ch108607) use an error enum
 
-const FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100); // TODO make this configurable instead of hardcoding
+const FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100); // TODO(ch108609) make this configurable instead of hardcoding
 
 pub struct EventProcessor {
     batcher: EventBatcher,
@@ -23,7 +23,7 @@ impl EventProcessor {
     }
 
     pub fn new_with_sink(sink: Arc<RwLock<dyn sink::EventSink>>) -> Result<Self, Error> {
-        // TODO don't hardcode batcher params
+        // TODO(ch108609) make batcher params configurable
         let batcher = EventBatcher::start(sink, 1000, Duration::from_secs(30))?;
         Ok(EventProcessor { batcher })
     }
@@ -56,12 +56,12 @@ impl EventBatcher {
         batch_size: usize,
         batch_timeout: Duration,
     ) -> Result<Self, Error> {
-        let (sender, receiver) = mpsc::sync_channel(500); // TODO hardcode
+        let (sender, receiver) = mpsc::sync_channel(500); // TODO(ch108609) make event buffer size configurable
 
-        let (flusher, flush_receiver) = mpsc::sync_channel::<mpsc::SyncSender<()>>(10); // TODO hardcode
+        let (flusher, flush_receiver) = mpsc::sync_channel::<mpsc::SyncSender<()>>(10); // TODO(ch108609) make flush buffer size configurable
 
         let _worker_handle = thread::Builder::new()
-            // TODO make this an object with methods, this is confusing
+            // TODO(ch108616) make this an object with methods, this is confusing
             .spawn(move || loop {
                 debug!("waiting for a batch to send");
 
@@ -73,15 +73,15 @@ impl EventBatcher {
 
                 // Dedupe users per batch.
                 // This restricts us to only deduping users within the batch_timeout.
-                // TODO support configuring the deduping period separately (probably after redoing
+                // TODO(ch108616) support configuring the deduping period separately (probably after redoing
                 // this using crossbeam so we can select on multiple channels)
-                let mut user_cache = LruCache::<String, ()>::new(1000); // TODO hardcode
+                let mut user_cache = LruCache::<String, ()>::new(1000); // TODO(ch108609) make user LRU cache size configurable
 
                 'event: loop {
-                    // Rust doesn't have a (stable) select on multiple channels, so we have to
+                    // This was written without access to a (stable) select on multiple channels, so we have to
                     // contort a bit to support flush without blocking flush requesters until the
-                    // batch deadline
-                    // TODO redo this using https://crates.io/crates/crossbeam-channel
+                    // batch deadline.
+                    // TODO(ch108616) redo this using crossbeam-channel, or futures::channel and futures::select
                     let mut batch_ready = match receiver.recv_timeout(FLUSH_POLL_INTERVAL) {
                         Ok(event) => {
                             process_event(event, &mut user_cache, &mut batch, &mut summary);
@@ -91,7 +91,7 @@ impl EventBatcher {
                         Err(mpsc::RecvTimeoutError::Timeout) => Instant::now() >= batch_deadline,
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
                             debug!("batch sender disconnected");
-                            // TODO terminate
+                            // TODO(ch108616) terminate this thread
                             true
                         }
                     };
@@ -458,10 +458,6 @@ mod tests {
             .expect("send should succeed");
         ep.send(feature_request.clone())
             .expect("send should succeed");
-
-        // ensure batcher processes both events before the flush, otherwise
-        // it may (nondeterministically) be a failypants TODO
-        //std::thread::sleep(2 * FLUSH_POLL_INTERVAL);
 
         ep.flush().expect("flush should succeed");
 
