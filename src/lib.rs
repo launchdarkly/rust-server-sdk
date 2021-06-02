@@ -8,12 +8,11 @@ extern crate spectral;
 #[macro_use]
 extern crate serde_json;
 
-// TODO(ch108600) review public exports
-pub mod client;
+mod client;
 mod event_processor;
 mod event_sink;
-pub mod events;
-pub mod store;
+mod events;
+mod store;
 mod test_common;
 mod update_processor;
 
@@ -30,4 +29,9 @@ mod built_info {
 }
 
 // Re-export
-pub use rust_server_sdk_evaluation::User;
+pub use client::Error as ClientError;
+pub use client::{Client, ClientBuilder};
+pub use rust_server_sdk_evaluation::Error as EvalError;
+pub use rust_server_sdk_evaluation::{
+    AttributeValue, Detail, FlagValue, Reason, TypeError, User, UserBuilder,
+};

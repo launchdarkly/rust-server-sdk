@@ -7,8 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use ldclient::client::Client;
-use ldclient::User;
+use launchdarkly_server_sdk::{Client, User};
 
 use cursive::traits::Boxable;
 use cursive::utils::Counter;

@@ -78,7 +78,12 @@ impl ClientBuilder {
         self
     }
 
-    pub fn update_processor(
+    // Currently swapping in a different update processor is only supported in
+    // the tests.
+    //
+    // Later we may support this for client code too.
+    #[cfg(test)]
+    fn update_processor(
         &mut self,
         processor: Arc<Mutex<dyn UpdateProcessor>>,
     ) -> &mut ClientBuilder {

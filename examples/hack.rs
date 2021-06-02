@@ -7,8 +7,7 @@ use std::env;
 use std::process::exit;
 use std::time::Duration;
 
-use ldclient::client::Client;
-use ldclient::User;
+use launchdarkly_server_sdk::{Client, User};
 
 use env_logger::Env;
 use futures::future::lazy;
