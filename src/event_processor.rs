@@ -223,7 +223,9 @@ mod tests {
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
-            reason: Reason::Fallthrough,
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
         };
 
         let feature_request = Event::new_feature_request(
@@ -263,7 +265,9 @@ mod tests {
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
-            reason: Reason::Fallthrough,
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
         };
 
         let feature_request = Event::new_feature_request(
@@ -357,6 +361,7 @@ mod tests {
             reason: Reason::RuleMatch {
                 rule_index: 0,
                 rule_id: "rule-0".into(),
+                in_experiment: false,
             },
         };
         let detail_notrack_rule = Detail {
@@ -365,12 +370,15 @@ mod tests {
             reason: Reason::RuleMatch {
                 rule_index: 1,
                 rule_id: "rule-1".into(),
+                in_experiment: false,
             },
         };
         let detail_fallthrough = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(0),
-            reason: Reason::Fallthrough,
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
         };
 
         let fre_track_rule = Event::new_feature_request(
@@ -443,7 +451,9 @@ mod tests {
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
-            reason: Reason::Fallthrough,
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
         };
 
         let feature_request = Event::new_feature_request(

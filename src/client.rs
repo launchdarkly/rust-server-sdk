@@ -468,7 +468,9 @@ mod tests {
         let result = client.bool_variation_detail(&user, "myFlag", false);
 
         assert_that!(result.value).contains_value(true);
-        assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
+        assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
+            in_experiment: false,
+        });
     }
 
     #[test]
@@ -498,7 +500,9 @@ mod tests {
         let result = client.int_variation_detail(&user, "myFlag", 0);
 
         assert_that!(result.value).contains_value(test_common::FLOAT_TO_INT_MAX);
-        assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
+        assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
+            in_experiment: false,
+        });
     }
 
     #[test]
@@ -531,7 +535,9 @@ mod tests {
 
         let value = result.value.expect("value should not be None");
         assert!(value.is_object());
-        assert_that!(result.reason).is_equal_to(Reason::Fallthrough);
+        assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
+            in_experiment: false,
+        });
     }
 
     #[test]

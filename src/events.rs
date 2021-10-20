@@ -447,7 +447,9 @@ mod tests {
         let fallthrough = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
-            reason: Reason::Fallthrough,
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
         };
 
         let mut fre = Event::new_feature_request(
@@ -534,7 +536,9 @@ mod tests {
 
         let value = FlagValue::from(false);
         let variation_index = 1;
-        let reason = Reason::Fallthrough;
+        let reason = Reason::Fallthrough {
+            in_experiment: false,
+        };
         let eval_at = 1234;
 
         let fallthrough_request = FeatureRequestEvent {

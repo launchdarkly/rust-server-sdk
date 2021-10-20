@@ -123,7 +123,7 @@ fn event_field<'a>(event: &'a es::Event, field: &'a str) -> Result<&'a [u8]> {
 }
 
 fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
-    let data = event_field(&event, "data")?;
+    let data = event_field(event, "data")?;
     serde_json::from_slice(data)
         .map_err(|e| Error::InvalidEventData(event.event_type.clone(), Box::new(e)))
 }
