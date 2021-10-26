@@ -62,14 +62,12 @@ pub struct ClientBuilder {
 
 impl ClientBuilder {
     pub fn stream_base_url<'a>(&'a mut self, url: &str) -> &'a mut ClientBuilder {
-        let url = trim_base_url(url);
-        self.stream_base_url = url.to_owned();
+        self.stream_base_url = url.trim_end_matches('/').to_owned();
         self
     }
 
     pub fn events_base_url<'a>(&'a mut self, url: &str) -> &'a mut ClientBuilder {
-        let url = trim_base_url(url);
-        self.events_base_url = url.to_owned();
+        self.events_base_url = url.trim_end_matches('/').to_owned();
         self
     }
 
@@ -411,15 +409,6 @@ impl Client {
     }
 }
 
-fn trim_base_url(mut url: &str) -> &str {
-    while url.ends_with('/') {
-        let untrimmed_url = url;
-        url = &url[..url.len() - 1];
-        debug!("trimming base url: {} -> {}", untrimmed_url, url);
-    }
-    url
-}
-
 #[cfg(test)]
 mod tests {
     use rust_server_sdk_evaluation::{Reason, User};
@@ -430,16 +419,20 @@ mod tests {
     use crate::store::PatchTarget;
     use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
     use crate::update_processor::{MockUpdateProcessor, PatchData};
+    use test_case::test_case;
 
-    #[test]
-    fn test_trim_base_url() {
-        assert_eq!(trim_base_url("localhost"), "localhost");
-        assert_eq!(trim_base_url("http://localhost"), "http://localhost");
+    #[test_case("localhost", "localhost"; "requires no trimming")]
+    #[test_case("http://localhost", "http://localhost"; "requires no trimming with scheme")]
+    #[test_case("localhost/", "localhost"; "trims trailing slash")]
+    #[test_case("http://localhost/", "http://localhost"; "trims trailing slash with scheme")]
+    #[test_case("localhost////////", "localhost"; "trims multiple trailing slashes")]
+    fn test_client_builder_trims_stream_base_url(url: &str, expected: &str) {
+        let mut builder = Client::configure();
+        builder.stream_base_url(url);
+        builder.events_base_url(url);
 
-        assert_eq!(trim_base_url("localhost/"), "localhost");
-        assert_eq!(trim_base_url("http://localhost/"), "http://localhost");
-
-        assert_eq!(trim_base_url("localhost////////"), "localhost");
+        assert_eq!(builder.stream_base_url, expected);
+        assert_eq!(builder.events_base_url, expected);
     }
 
     #[test]
