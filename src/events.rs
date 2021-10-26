@@ -56,6 +56,28 @@ impl MaybeInlinedUser {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum ContextKind {
+    AnonymousUser,
+    User,
+}
+
+impl ContextKind {
+    fn is_user(&self) -> bool {
+        *self == ContextKind::User
+    }
+}
+
+impl From<&User> for ContextKind {
+    fn from(user: &User) -> Self {
+        match user.anonymous() {
+            Some(true) => Self::AnonymousUser,
+            Some(false) | None => Self::User,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BaseEvent {
     pub creation_date: u64,
     #[serde(skip_serializing_if = "MaybeInlinedUser::not_inlined")]
@@ -77,6 +99,8 @@ pub struct FeatureRequestEvent {
     version: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prereq_of: Option<String>,
+    #[serde(skip_serializing_if = "ContextKind::is_user")]
+    context_kind: ContextKind,
 
     #[serde(skip)]
     pub(crate) track_events: bool,
@@ -110,6 +134,8 @@ pub enum Event {
         metric_value: Option<f64>,
         #[serde(skip_serializing_if = "serde_json::Value::is_null")]
         data: serde_json::Value,
+        #[serde(skip_serializing_if = "ContextKind::is_user")]
+        context_kind: ContextKind,
     },
     #[serde(rename = "summary")]
     Summary(EventSummary),
@@ -178,7 +204,7 @@ impl Event {
             user_key: user.key().to_string(),
             base: BaseEvent {
                 creation_date: Self::now(),
-                user,
+                user: user.clone(),
             },
             key: flag_key.to_owned(),
             default,
@@ -187,6 +213,7 @@ impl Event {
             variation: detail.variation_index,
             version: flag.map(|f| f.version),
             prereq_of: None,
+            context_kind: user.user().into(),
             track_events: flag_track_events || require_experiment_data,
         })
     }
@@ -212,11 +239,12 @@ impl Event {
         Ok(Event::Custom {
             base: BaseEvent {
                 creation_date: Self::now(),
-                user,
+                user: user.clone(),
             },
             key: key.into(),
             metric_value,
             data,
+            context_kind: user.user().into(),
         })
     }
 
@@ -459,12 +487,24 @@ mod tests {
 
     use super::*;
     use crate::test_common::basic_flag;
+    use test_case::test_case;
 
-    #[test]
-    fn serializes_feature_event() {
+    #[test_case(None, ContextKind::User; "default users are user")]
+    #[test_case(Some(false), ContextKind::User; "non-anonymous users are user")]
+    #[test_case(Some(true), ContextKind::AnonymousUser; "anonymous users are anonymousUser")]
+    fn eval_event_context_kind_is_set_appropriately(
+        is_anonymous: Option<bool>,
+        context_kind: ContextKind,
+    ) {
         let flag = basic_flag("flag");
         let default = FlagValue::from(false);
-        let user = MaybeInlinedUser::Inlined(User::with_key("alice".to_string()).build());
+        let mut user = User::with_key("alice".to_string());
+
+        if let Some(b) = is_anonymous {
+            user.anonymous(b);
+        }
+
+        let user = MaybeInlinedUser::Inlined(user.build());
         let fallthrough = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -473,7 +513,65 @@ mod tests {
             },
         };
 
-        let mut fre = Event::new_eval_event(
+        let eval_event = Event::new_eval_event(
+            &flag.key.clone(),
+            user.clone(),
+            &flag,
+            fallthrough.clone(),
+            default.clone(),
+            true,
+        );
+
+        if let Event::FeatureRequest(event) = eval_event {
+            assert_eq!(event.context_kind, context_kind);
+        } else {
+            panic!("new_eval_event did not create a FeatureRequestEvent");
+        }
+    }
+
+    #[test_case(None, ContextKind::User; "default users are user")]
+    #[test_case(Some(false), ContextKind::User; "non-anonymous users are user")]
+    #[test_case(Some(true), ContextKind::AnonymousUser; "anonymous users are anonymousUser")]
+    fn custom_event_context_kind_is_set_appropriately(
+        is_anonymous: Option<bool>,
+        context_kind: ContextKind,
+    ) {
+        let flag = basic_flag("flag");
+        let mut user = User::with_key("alice".to_string());
+
+        if let Some(b) = is_anonymous {
+            user.anonymous(b);
+        }
+
+        let user = MaybeInlinedUser::Inlined(user.build());
+
+        let result = Event::new_custom(user.clone(), &flag.key.clone(), None, "");
+
+        if let Ok(Event::Custom {
+            context_kind: ck, ..
+        }) = result
+        {
+            assert_eq!(ck, context_kind);
+        } else {
+            panic!("new_custom did not create a Custom event");
+        }
+    }
+
+    #[test]
+    fn serializes_eval_event() {
+        let flag = basic_flag("flag");
+        let default = FlagValue::from(false);
+        let user =
+            MaybeInlinedUser::Inlined(User::with_key("alice".to_string()).anonymous(true).build());
+        let fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let mut eval_event = Event::new_eval_event(
             &flag.key.clone(),
             user.clone(),
             &flag,
@@ -482,14 +580,15 @@ mod tests {
             true,
         );
         // fix creation date so JSON is predictable
-        fre.base_mut().unwrap().creation_date = 1234;
+        eval_event.base_mut().unwrap().creation_date = 1234;
 
-        let fre_json = r#"
+        let eval_event_json = r#"
 {
   "kind": "feature",
   "creationDate": 1234,
   "user": {
     "key": "alice",
+    "anonymous": true,
     "custom": {}
   },
   "key": "flag",
@@ -500,12 +599,14 @@ mod tests {
   "reason": {
     "kind": "FALLTHROUGH"
   },
-  "version": 42
+  "version": 42,
+  "contextKind": "anonymousUser"
 }
         "#
         .trim();
 
-        assert_that!(serde_json::to_string_pretty(&fre)).is_ok_containing(fre_json.to_string());
+        assert_that!(serde_json::to_string_pretty(&eval_event))
+            .is_ok_containing(eval_event_json.to_string());
     }
 
     #[test]
@@ -575,6 +676,7 @@ mod tests {
             version: Some(flag.version),
             reason: Some(reason),
             prereq_of: None,
+            context_kind: user.user().into(),
             track_events: false,
         };
 
