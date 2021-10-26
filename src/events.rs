@@ -124,11 +124,31 @@ impl Display for Event {
 }
 
 impl Event {
-    // TODO(ch108613) separate out new_unknown_flag_event so flag doesn't have to be Option
-    pub fn new_feature_request(
+    pub fn new_unknown_flag_event(
         flag_key: &str,
         user: MaybeInlinedUser,
-        flag: Option<Flag>,
+        detail: Detail<FlagValue>,
+        default: FlagValue,
+        send_reason: bool,
+    ) -> Self {
+        Event::new_feature_request_event(flag_key, user, None, detail, default, send_reason)
+    }
+
+    pub fn new_eval_event(
+        flag_key: &str,
+        user: MaybeInlinedUser,
+        flag: &Flag,
+        detail: Detail<FlagValue>,
+        default: FlagValue,
+        send_reason: bool,
+    ) -> Self {
+        Event::new_feature_request_event(flag_key, user, Some(flag), detail, default, send_reason)
+    }
+
+    fn new_feature_request_event(
+        flag_key: &str,
+        user: MaybeInlinedUser,
+        flag: Option<&Flag>,
         detail: Detail<FlagValue>,
         default: FlagValue,
         send_reason: bool,
@@ -139,7 +159,8 @@ impl Event {
 
         let flag_track_events;
         let require_experiment_data;
-        if let Some(f) = flag.as_ref() {
+
+        if let Some(f) = flag {
             flag_track_events = f.track_events;
             require_experiment_data = f.is_experimentation_enabled(&detail.reason);
         } else {
@@ -452,10 +473,10 @@ mod tests {
             },
         };
 
-        let mut fre = Event::new_feature_request(
+        let mut fre = Event::new_eval_event(
             &flag.key.clone(),
             user.clone(),
-            Some(flag.clone()),
+            &flag,
             fallthrough.clone(),
             default.clone(),
             true,

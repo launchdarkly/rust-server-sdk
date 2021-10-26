@@ -312,14 +312,24 @@ impl Client {
 
         let (flag, result) = self.evaluate_internal(user, flag_key, default);
 
-        let event = Event::new_feature_request(
-            flag_key,
-            MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
-            flag,
-            result.clone(),
-            default_for_event,
-            true,
-        );
+        let event = match flag {
+            Some(f) => Event::new_eval_event(
+                flag_key,
+                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                &f,
+                result.clone(),
+                default_for_event,
+                true,
+            ),
+            None => Event::new_unknown_flag_event(
+                flag_key,
+                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                result.clone(),
+                default_for_event,
+                true,
+            ),
+        };
+
         self.send_internal(event);
 
         result
@@ -330,14 +340,23 @@ impl Client {
 
         let (flag, result) = self.evaluate_internal(user, flag_key, default);
 
-        let event = Event::new_feature_request(
-            flag_key,
-            MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
-            flag,
-            result.clone(),
-            default_for_event,
-            false,
-        );
+        let event = match flag {
+            Some(f) => Event::new_eval_event(
+                flag_key,
+                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                &f,
+                result.clone(),
+                default_for_event,
+                false,
+            ),
+            None => Event::new_unknown_flag_event(
+                flag_key,
+                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                result.clone(),
+                default_for_event,
+                false,
+            ),
+        };
         self.send_internal(event);
 
         // unwrap is safe here because value should have been replaced with default if it was None.
@@ -416,6 +435,7 @@ mod tests {
 
     use super::*;
     use crate::event_sink::MockSink;
+    use crate::events::VariationKey;
     use crate::store::PatchTarget;
     use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
     use crate::update_processor::{MockUpdateProcessor, PatchData};
@@ -531,6 +551,142 @@ mod tests {
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
             in_experiment: false,
         });
+    }
+
+    #[test]
+    fn evaluate_tracks_events_correctly() {
+        let (mut client, updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(basic_flag("myFlag")),
+            })
+            .expect("patch should apply");
+        let user = User::with_key("bob").build();
+
+        let flag_value = client.evaluate(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&flag_value.as_bool().unwrap()).is_true();
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(2);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[1].clone() {
+            let variation_key = VariationKey {
+                flag_key: "myFlag".into(),
+                version: Some(42),
+                variation: Some(1),
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        } else {
+            panic!("Event should be a summary type");
+        }
+    }
+
+    #[test]
+    fn evaluate_handles_unknown_flags() {
+        let (mut client, _updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+        let user = User::with_key("bob").build();
+
+        let flag_value = client.evaluate(&user, "non-existent-flag", FlagValue::Bool(false));
+
+        assert_that(&flag_value.as_bool().unwrap()).is_false();
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(2);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[1].clone() {
+            let variation_key = VariationKey {
+                flag_key: "non-existent-flag".into(),
+                version: None,
+                variation: None,
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        } else {
+            panic!("Event should be a summary type");
+        }
+    }
+
+    #[test]
+    fn evaluate_detail_tracks_events_correctly() {
+        let (mut client, updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(basic_flag("myFlag")),
+            })
+            .expect("patch should apply");
+        let user = User::with_key("bob").build();
+
+        let detail = client.evaluate_detail(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
+        assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
+            in_experiment: false,
+        });
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(2);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[1].clone() {
+            let variation_key = VariationKey {
+                flag_key: "myFlag".into(),
+                version: Some(42),
+                variation: Some(1),
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        } else {
+            panic!("Event should be a summary type");
+        }
+    }
+
+    #[test]
+    fn evaluate_detail_handles_unknown_flags() {
+        let (mut client, _updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+        let user = User::with_key("bob").build();
+
+        let detail = client.evaluate_detail(&user, "non-existent-flag", FlagValue::Bool(false));
+
+        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
+        assert_that(&detail.reason).is_equal_to(Reason::Error {
+            error: eval::Error::FlagNotFound,
+        });
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(2);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[1].clone() {
+            let variation_key = VariationKey {
+                flag_key: "non-existent-flag".into(),
+                version: None,
+                variation: None,
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        } else {
+            panic!("Event should be a summary type");
+        }
     }
 
     #[test]

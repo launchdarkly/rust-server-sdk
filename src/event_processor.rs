@@ -228,10 +228,10 @@ mod tests {
             },
         };
 
-        let feature_request = Event::new_feature_request(
-            &flag.key.clone(),
+        let feature_request = Event::new_eval_event(
+            &flag.key,
             user.clone(),
-            Some(flag.clone()),
+            &flag,
             detail.clone(),
             FlagValue::from(false),
             true,
@@ -270,10 +270,10 @@ mod tests {
             },
         };
 
-        let feature_request = Event::new_feature_request(
-            &flag.key.clone(),
+        let feature_request = Event::new_eval_event(
+            &flag.key,
             user.clone(),
-            Some(flag.clone()),
+            &flag,
             detail.clone(),
             FlagValue::from(false),
             true,
@@ -381,26 +381,26 @@ mod tests {
             },
         };
 
-        let fre_track_rule = Event::new_feature_request(
-            &flag.key.clone(),
+        let fre_track_rule = Event::new_eval_event(
+            &flag.key,
             user_track_rule,
-            Some(flag.clone()),
+            &flag,
             detail_track_rule,
             FlagValue::from(false),
             true,
         );
-        let fre_notrack_rule = Event::new_feature_request(
-            &flag.key.clone(),
+        let fre_notrack_rule = Event::new_eval_event(
+            &flag.key,
             user_notrack_rule,
-            Some(flag.clone()),
+            &flag,
             detail_notrack_rule,
             FlagValue::from(false),
             true,
         );
-        let fre_fallthrough = Event::new_feature_request(
-            &flag.key.clone(),
+        let fre_fallthrough = Event::new_eval_event(
+            &flag.key,
             user_fallthrough,
-            Some(flag.clone()),
+            &flag,
             detail_fallthrough,
             FlagValue::from(false),
             true,
@@ -456,10 +456,10 @@ mod tests {
             },
         };
 
-        let feature_request = Event::new_feature_request(
-            &flag.key.clone(),
+        let feature_request = Event::new_eval_event(
+            &flag.key,
             user.clone(),
-            Some(flag.clone()),
+            &flag,
             detail.clone(),
             FlagValue::from(false),
             true,
