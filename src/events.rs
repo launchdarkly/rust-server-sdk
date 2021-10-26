@@ -116,6 +116,20 @@ pub struct IdentifyEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomEvent {
+    #[serde(flatten)]
+    base: BaseEvent,
+    key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metric_value: Option<f64>,
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    data: serde_json::Value,
+    #[serde(skip_serializing_if = "ContextKind::is_user")]
+    context_kind: ContextKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
 pub enum Event {
@@ -125,18 +139,8 @@ pub enum Event {
     Index(IndexEvent),
     #[serde(rename = "identify")]
     Identify(IdentifyEvent),
-    #[serde(rename = "custom", rename_all = "camelCase")]
-    Custom {
-        #[serde(flatten)]
-        base: BaseEvent,
-        key: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metric_value: Option<f64>,
-        #[serde(skip_serializing_if = "serde_json::Value::is_null")]
-        data: serde_json::Value,
-        #[serde(skip_serializing_if = "ContextKind::is_user")]
-        context_kind: ContextKind,
-    },
+    #[serde(rename = "custom")]
+    Custom(CustomEvent),
     #[serde(rename = "summary")]
     Summary(EventSummary),
 }
@@ -236,7 +240,7 @@ impl Event {
     ) -> serde_json::Result<Self> {
         let data = serde_json::to_value(data)?;
 
-        Ok(Event::Custom {
+        Ok(Event::Custom(CustomEvent {
             base: BaseEvent {
                 creation_date: Self::now(),
                 user: user.clone(),
@@ -245,13 +249,13 @@ impl Event {
             metric_value,
             data,
             context_kind: user.user().into(),
-        })
+        }))
     }
 
     pub fn to_index_event(&self) -> Option<IndexEvent> {
         let base = match self {
             Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
-            Event::Custom { base, .. } => base,
+            Event::Custom(CustomEvent { base, .. }) => base,
             Event::Index { .. } | Event::Identify { .. } | Event::Summary { .. } => return None,
         };
 
@@ -286,7 +290,7 @@ impl Event {
             Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
             Event::Index(base) => base,
             Event::Identify(IdentifyEvent { base, .. }) => base,
-            Event::Custom { base, .. } => base,
+            Event::Custom(CustomEvent { base, .. }) => base,
             Event::Summary(_) => return None,
         })
     }
@@ -545,13 +549,10 @@ mod tests {
 
         let user = MaybeInlinedUser::Inlined(user.build());
 
-        let result = Event::new_custom(user.clone(), &flag.key.clone(), None, "");
+        let custom_event = Event::new_custom(user.clone(), &flag.key.clone(), None, "");
 
-        if let Ok(Event::Custom {
-            context_kind: ck, ..
-        }) = result
-        {
-            assert_eq!(ck, context_kind);
+        if let Ok(Event::Custom(event)) = custom_event {
+            assert_eq!(event.context_kind, context_kind);
         } else {
             panic!("new_custom did not create a Custom event");
         }
