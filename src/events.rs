@@ -117,6 +117,17 @@ pub struct IdentifyEvent {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AliasEvent {
+    #[serde(flatten)]
+    base: BaseEvent,
+    key: String,
+    context_kind: ContextKind,
+    previous_key: String,
+    previous_context_kind: ContextKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CustomEvent {
     #[serde(flatten)]
     base: BaseEvent,
@@ -139,6 +150,8 @@ pub enum Event {
     Index(IndexEvent),
     #[serde(rename = "identify")]
     Identify(IdentifyEvent),
+    #[serde(rename = "alias")]
+    Alias(AliasEvent),
     #[serde(rename = "custom")]
     Custom(CustomEvent),
     #[serde(rename = "summary")]
@@ -232,6 +245,19 @@ impl Event {
         })
     }
 
+    pub fn new_alias(user: User, previous_user: User) -> Self {
+        Event::Alias(AliasEvent {
+            base: BaseEvent {
+                creation_date: Self::now(),
+                user: MaybeInlinedUser::new(false, user.clone()),
+            },
+            key: user.key().to_string(),
+            context_kind: (&user).into(),
+            previous_key: previous_user.key().to_string(),
+            previous_context_kind: (&previous_user).into(),
+        })
+    }
+
     pub fn new_custom(
         user: MaybeInlinedUser,
         key: impl Into<String>,
@@ -256,7 +282,10 @@ impl Event {
         let base = match self {
             Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
             Event::Custom(CustomEvent { base, .. }) => base,
-            Event::Index { .. } | Event::Identify { .. } | Event::Summary { .. } => return None,
+            Event::Alias { .. }
+            | Event::Index { .. }
+            | Event::Identify { .. }
+            | Event::Summary { .. } => return None,
         };
 
         // difficult to avoid clone here because we can't express that we're not "really"
@@ -277,6 +306,7 @@ impl Event {
     pub fn kind(&self) -> &'static str {
         match self {
             Event::FeatureRequest { .. } => "feature",
+            Event::Alias { .. } => "alias",
             Event::Index { .. } => "index",
             Event::Identify { .. } => "identify",
             Event::Custom { .. } => "custom",
@@ -288,6 +318,7 @@ impl Event {
     pub fn base_mut(&mut self) -> Option<&mut BaseEvent> {
         Some(match self {
             Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
+            Event::Alias(AliasEvent { base, .. }) => base,
             Event::Index(base) => base,
             Event::Identify(IdentifyEvent { base, .. }) => base,
             Event::Custom(CustomEvent { base, .. }) => base,
@@ -530,6 +561,35 @@ mod tests {
             assert_eq!(event.context_kind, context_kind);
         } else {
             panic!("new_eval_event did not create a FeatureRequestEvent");
+        }
+    }
+
+    #[test_case(false, false, ContextKind::User, ContextKind::User; "neither are anonymous")]
+    #[test_case(true, true, ContextKind::AnonymousUser, ContextKind::AnonymousUser; "both are anonymous")]
+    #[test_case(false, true, ContextKind::User, ContextKind::AnonymousUser; "previous is anonymous")]
+    #[test_case(true, false, ContextKind::AnonymousUser, ContextKind::User; "user is anonymous")]
+    fn alias_event_contains_correct_information(
+        is_anonymous: bool,
+        previous_is_anonymous: bool,
+        context_kind: ContextKind,
+        previous_context_kind: ContextKind,
+    ) {
+        let user = User::with_key("alice".to_string())
+            .anonymous(is_anonymous)
+            .build();
+        let previous_user = User::with_key("previous-alice".to_string())
+            .anonymous(previous_is_anonymous)
+            .build();
+
+        let event = Event::new_alias(user.clone(), previous_user.clone());
+
+        if let Event::Alias(alias) = event {
+            assert_eq!(alias.key, user.key());
+            assert_eq!(alias.context_kind, context_kind);
+            assert_eq!(alias.previous_key, previous_user.key());
+            assert_eq!(alias.previous_context_kind, previous_context_kind);
+        } else {
+            panic!("new_alias did not create an AliasEvent");
         }
     }
 

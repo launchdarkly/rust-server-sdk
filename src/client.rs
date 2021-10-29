@@ -189,6 +189,12 @@ impl Client {
         self.send_internal(event);
     }
 
+    pub fn alias(&self, user: User, previous_user: User) {
+        let event = Event::new_alias(user, previous_user);
+
+        self.send_internal(event);
+    }
+
     pub fn bool_variation(&self, user: &User, flag_key: &str, default: bool) -> bool {
         let val = self.evaluate(user, flag_key, default.into());
         if let Some(b) = val.as_bool() {
@@ -702,6 +708,22 @@ mod tests {
         let events = events.read().unwrap();
         assert_that!(*events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("identify");
+    }
+
+    #[test]
+    fn alias_sends_alias_event() {
+        let (mut client, _updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let user = User::with_key("bob").build();
+        let previous_user = User::with_key("previous-bob").build();
+
+        client.alias(user, previous_user);
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(1);
+        assert_that!(events[0].kind()).is_equal_to("alias");
     }
 
     #[derive(Serialize)]
