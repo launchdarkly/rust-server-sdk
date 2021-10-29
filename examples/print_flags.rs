@@ -10,11 +10,10 @@ use std::time::Duration;
 use launchdarkly_server_sdk::{Client, User};
 
 use env_logger::Env;
-use futures::future::lazy;
-use futures::stream::Stream;
-use tokio::timer::Interval;
+use tokio::time;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init_from_env(Env::new().default_filter_or("info"));
 
     info!("Connecting...");
@@ -60,36 +59,35 @@ fn main() {
         client_builder.events_base_url(&url);
     }
 
-    tokio::run(lazy(move || {
-        let client = client_builder
-            .start_with_default_executor(&sdk_key)
-            .expect("failed to start client");
+    let client = client_builder
+        .start_with_default_executor(&sdk_key)
+        .expect("failed to start client");
 
-        Interval::new_interval(Duration::from_secs(5))
-            .map_err(|_| ())
-            .for_each(move |_| {
-                for user in vec![&alice, &bob] {
-                    for flag_key in &bool_flags {
-                        let flag_detail = client.bool_variation_detail(user, flag_key, false);
-                        info!(
-                            "user {:?}, flag {}: {:?}",
-                            user.key(),
-                            flag_key,
-                            flag_detail
-                        );
-                    }
-                    for flag_key in &str_flags {
-                        let flag_detail =
-                            client.str_variation_detail(user, flag_key, "default".to_string());
-                        info!(
-                            "user {:?}, flag {}: {:?}",
-                            user.key(),
-                            flag_key,
-                            flag_detail
-                        );
-                    }
-                }
-                Ok(())
-            })
-    }));
+    let mut interval = time::interval(Duration::from_secs(5));
+
+    loop {
+        interval.tick().await;
+
+        for user in vec![&alice, &bob] {
+            for flag_key in &bool_flags {
+                let flag_detail = client.bool_variation_detail(user, flag_key, false);
+                info!(
+                    "user {:?}, flag {}: {:?}",
+                    user.key(),
+                    flag_key,
+                    flag_detail
+                );
+            }
+            for flag_key in &str_flags {
+                let flag_detail =
+                    client.str_variation_detail(user, flag_key, "default".to_string());
+                info!(
+                    "user {:?}, flag {}: {:?}",
+                    user.key(),
+                    flag_key,
+                    flag_detail
+                );
+            }
+        }
+    }
 }

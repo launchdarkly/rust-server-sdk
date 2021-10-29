@@ -70,12 +70,12 @@ fn fake_load(ld: Arc<RwLock<Client>>, mut user: User, counter: Counter) {
     while counter.get() < 100 {
         user.attribute("progress", counter.get() as i64).unwrap();
 
-        let millis = ld.int_variation_detail(&user, "progress-delay", 100);
-        thread::sleep(Duration::from_millis(millis.value.unwrap() as u64));
+        let millis = ld.int_variation(&user, "progress-delay", 100);
+        thread::sleep(Duration::from_millis(millis as u64));
 
-        let increase = ld.bool_variation_detail(&user, "make-progress", false);
+        let increase = ld.bool_variation(&user, "make-progress", false);
 
-        if increase.value.unwrap() {
+        if increase {
             counter.tick(1);
         }
     }

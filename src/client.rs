@@ -108,18 +108,19 @@ impl ClientBuilder {
 
         let rw = Arc::new(RwLock::new(client));
 
-        let mut runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
+        let runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
+        let _guard = runtime.enter();
 
+        // Important that we take the write lock before returning the RwLock to the caller:
+        // otherwise caller can grab the read lock first and prevent the client from initialising
         let w = rw.clone();
+        let mut client = w.write().unwrap();
+        client.start_with_default_executor();
 
         thread::spawn(move || {
-            runtime.spawn(future::lazy(move || {
-                let mut client = w.write().unwrap();
-                client.start_with_default_executor();
-                future::ok(())
-            }));
-
-            runtime.shutdown_on_idle()
+            // this thread takes ownership of runtime and prevents it from being dropped before the
+            // client initialises
+            runtime.block_on(future::pending::<()>())
         });
 
         Ok(rw)

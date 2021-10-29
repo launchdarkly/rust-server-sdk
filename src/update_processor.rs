@@ -1,16 +1,17 @@
 use std::sync::{Arc, Mutex};
 
 use eventsource_client as es;
-use futures::future::{lazy, Future};
-use futures::stream::Stream;
+use futures::TryStreamExt;
 use serde::Deserialize;
 
 use super::store::{AllData, FeatureStore, PatchTarget};
 
 #[derive(Debug)]
 pub enum Error {
-    EventSource(es::Error),
-    InvalidEventData(String, Box<dyn std::error::Error + Send>),
+    InvalidEventData {
+        event_type: String,
+        error: Box<dyn std::error::Error + Send>,
+    },
     InvalidPutPath(String),
     InvalidUpdate(String),
     InvalidEventType(String),
@@ -43,7 +44,7 @@ pub trait UpdateProcessor: Send {
 }
 
 pub struct StreamingUpdateProcessor {
-    es_client: es::Client,
+    es_client: es::Client<es::HttpsConnector>,
 }
 
 impl StreamingUpdateProcessor {
@@ -65,25 +66,38 @@ impl StreamingUpdateProcessor {
 
 impl UpdateProcessor for StreamingUpdateProcessor {
     fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>) {
-        let event_stream = self.es_client.stream();
+        let mut event_stream = Box::pin(self.es_client.stream());
 
-        tokio::spawn(lazy(move || {
-            event_stream
-                .map_err(Error::EventSource)
-                .for_each(move |event| {
-                    let mut store = store.lock().unwrap();
-
-                    debug!("update processor got an event: {}", event.event_type);
-
-                    match event.event_type.as_str() {
-                        "put" => process_put(&mut *store, event),
-                        "patch" => process_patch(&mut *store, event),
-                        "delete" => process_delete(&mut *store, event),
-                        _ => Err(Error::InvalidEventType(event.event_type)),
+        tokio::spawn(async move {
+            loop {
+                let event = match event_stream.try_next().await {
+                    Ok(Some(event)) => event,
+                    Ok(None) => {
+                        error!("unexpected end of event stream");
+                        break;
                     }
-                })
-                .map_err(|e| error!("update processor got an error: {:?}", e))
-        }));
+                    Err(e) => {
+                        error!("error on event stream: {:?}", e);
+                        // TODO reconnect?
+                        break;
+                    }
+                };
+
+                let mut store = store.lock().unwrap();
+
+                debug!("update processor got an event: {}", event.event_type);
+
+                let stored = match event.event_type.as_str() {
+                    "put" => process_put(&mut *store, event),
+                    "patch" => process_patch(&mut *store, event),
+                    "delete" => process_delete(&mut *store, event),
+                    _ => Err(Error::InvalidEventType(event.event_type)),
+                };
+                if let Err(e) = stored {
+                    error!("error processing update: {:?}", e);
+                }
+            }
+        });
     }
 }
 
@@ -124,8 +138,10 @@ fn event_field<'a>(event: &'a es::Event, field: &'a str) -> Result<&'a [u8]> {
 
 fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
     let data = event_field(event, "data")?;
-    serde_json::from_slice(data)
-        .map_err(|e| Error::InvalidEventData(event.event_type.clone(), Box::new(e)))
+    serde_json::from_slice(data).map_err(|e| Error::InvalidEventData {
+        event_type: event.event_type.clone(),
+        error: Box::new(e),
+    })
 }
 
 fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
