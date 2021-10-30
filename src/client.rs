@@ -1,21 +1,17 @@
-use std::collections::HashMap;
-use std::io;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-
 use futures::future;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
+use std::{io, thread};
+
 use rust_server_sdk_evaluation::{self as eval, Detail, Flag, FlagValue, Store, User};
 use serde::Serialize;
 use thiserror::Error;
 
+use super::config::Config;
 use super::event_processor::EventProcessor;
-use super::event_sink::EventSink;
 use super::events::{Event, MaybeInlinedUser};
 use super::store::FeatureStore;
-use super::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
-
-const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
-const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
+use super::update_processor::UpdateProcessor;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -31,81 +27,76 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// A client for the LaunchDarkly API.
+///
+/// In order to create a client instance you must first create a [crate::Config].
+///
+/// # Examples
+///
+/// Creating a client, with default configuration.
+/// ```
+/// # use launchdarkly_server_sdk::{Client, ConfigBuilder, ClientError};
+/// # fn main() -> Result<(), ClientError> {
+///     let ld_client = Client::build(ConfigBuilder::new("sdk-key").build())?;
+/// #   Ok(())
+/// # }
+/// ```
+///
+/// Creating an instance which connects to a relay proxy.
+/// ```
+/// # use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, ClientError};
+/// # fn main() -> Result<(), ClientError> {
+///     let ld_client = Client::build(ConfigBuilder::new("sdk-key")
+///         .service_endpoints(ServiceEndpointsBuilder::new()
+///             .relay_proxy("http://my-relay-hostname:8080")
+///         ).build()
+///     )?;
+/// #   Ok(())
+/// # }
+/// ```
+///
+/// Each builder type includes usage examples for the builder.
 pub struct Client {
-    //sdk_key: String,
-    config: Config,
-    event_processor: EventProcessor,
+    event_processor: Arc<Mutex<dyn EventProcessor>>,
     update_processor: Arc<Mutex<dyn UpdateProcessor>>,
     store: Arc<Mutex<FeatureStore>>,
-}
-
-#[derive(Clone, Copy)]
-pub struct Config {
     inline_users_in_events: bool,
+    // TODO: Once we need the config for diagnostic events, then we should add this.
+    // config: Arc<Mutex<Config>>,
 }
 
-impl Default for Config {
-    fn default() -> Config {
-        Config {
-            inline_users_in_events: false,
-        }
-    }
-}
+impl Client {
+    pub fn build(config: Config) -> Result<Self> {
+        let store = FeatureStore::new();
+        let endpoints = config.service_endpoints_builder().build()?;
+        let update_processor = config
+            .data_source_builder()
+            .build(&endpoints, config.sdk_key())?;
+        let event_processor = config
+            .event_processor_builder()
+            .build(&endpoints, config.sdk_key())?;
 
-pub struct ClientBuilder {
-    stream_base_url: String,
-    events_base_url: String,
-    config: Config,
-    update_processor: Option<Arc<Mutex<dyn UpdateProcessor>>>,
-    event_sink: Option<Arc<RwLock<dyn EventSink>>>,
-}
-
-impl ClientBuilder {
-    pub fn stream_base_url<'a>(&'a mut self, url: &str) -> &'a mut ClientBuilder {
-        self.stream_base_url = url.trim_end_matches('/').to_owned();
-        self
-    }
-
-    pub fn events_base_url<'a>(&'a mut self, url: &str) -> &'a mut ClientBuilder {
-        self.events_base_url = url.trim_end_matches('/').to_owned();
-        self
-    }
-
-    pub fn inline_users_in_events(&mut self, inline: bool) -> &mut ClientBuilder {
-        self.config.inline_users_in_events = inline;
-        self
-    }
-
-    // Currently swapping in a different update processor is only supported in
-    // the tests.
-    //
-    // Later we may support this for client code too.
-    #[cfg(test)]
-    fn update_processor(
-        &mut self,
-        processor: Arc<Mutex<dyn UpdateProcessor>>,
-    ) -> &mut ClientBuilder {
-        self.update_processor = Some(processor);
-        self
-    }
-
-    #[cfg(test)]
-    fn event_sink(&mut self, sink: Arc<RwLock<dyn EventSink>>) -> &mut ClientBuilder {
-        self.event_sink = Some(sink);
-        self
+        Ok(Client {
+            event_processor,
+            update_processor,
+            inline_users_in_events: config.inline_users_in_events(),
+            store: Arc::new(Mutex::new(store)),
+        })
     }
 
     /// Starts a client in the current thread, which must have a default tokio runtime.
-    pub fn start_with_default_executor(&self, sdk_key: &str) -> Result<Client> {
-        let mut client = self.build(sdk_key)?;
-        client.start_with_default_executor();
-        Ok(client)
+    pub fn start_with_default_executor(&self) {
+        self.update_processor
+            .lock()
+            .unwrap()
+            .subscribe(self.store.clone());
     }
 
     /// Starts a client in a background thread, with its own tokio runtime.
-    pub fn start(&self, sdk_key: &str) -> Result<Arc<RwLock<Client>>> {
-        let client = self.build(sdk_key)?;
-
+    // TODO: Ryan. I am not sure where we should put this. It seems like configuring an
+    // execution environment is different than just the client instance.
+    pub fn start(config: Config) -> Result<Arc<RwLock<Client>>> {
+        let client = Self::build(config)?;
         let rw = Arc::new(RwLock::new(client));
 
         let runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
@@ -114,7 +105,7 @@ impl ClientBuilder {
         // Important that we take the write lock before returning the RwLock to the caller:
         // otherwise caller can grab the read lock first and prevent the client from initialising
         let w = rw.clone();
-        let mut client = w.write().unwrap();
+        let client = w.write().unwrap();
         client.start_with_default_executor();
 
         thread::spawn(move || {
@@ -126,62 +117,12 @@ impl ClientBuilder {
         Ok(rw)
     }
 
-    fn build(&self, sdk_key: &str) -> Result<Client> {
-        let store = FeatureStore::new();
-        let event_processor = match &self.event_sink {
-            None => reqwest::Url::parse(&self.events_base_url)
-                .map_err(|e| Error::InvalidConfig(format!("couldn't parse events_base_url: {}", e)))
-                .and_then(|base_url| {
-                    EventProcessor::new(base_url, sdk_key).map_err(|e| {
-                        Error::InvalidConfig(format!("invalid events_base_url: {}", e))
-                    })
-                })?,
-            Some(sink) => {
-                let sink = sink.clone(); // so we don't have to consume builder
-                EventProcessor::new_with_sink(sink).map_err(Error::Internal)?
-            }
-        };
-        let update_processor = match &self.update_processor {
-            None => Arc::new(Mutex::new(
-                StreamingUpdateProcessor::new(&self.stream_base_url, sdk_key).map_err(|e| {
-                    Error::InvalidConfig(format!("invalid stream_base_url: {:?}", e))
-                })?,
-            )),
-            Some(update_processor) => update_processor.clone(),
-        };
-        Ok(Client {
-            config: self.config,
-            event_processor,
-            update_processor,
-            store: Arc::new(Mutex::new(store)),
-        })
-    }
-}
-
-impl Client {
-    pub fn new(sdk_key: &str) -> Client {
-        Client::configure().build(sdk_key).unwrap()
-    }
-
-    pub fn configure() -> ClientBuilder {
-        ClientBuilder {
-            config: Config::default(),
-            stream_base_url: DEFAULT_STREAM_BASE_URL.to_string(),
-            events_base_url: DEFAULT_EVENTS_BASE_URL.to_string(),
-            update_processor: None,
-            event_sink: None,
-        }
-    }
-
-    fn start_with_default_executor(&mut self) {
-        self.update_processor
+    pub fn flush(&self) -> Result<()> {
+        self.event_processor
             .lock()
             .unwrap()
-            .subscribe(self.store.clone())
-    }
-
-    pub fn flush(&self) -> Result<()> {
-        self.event_processor.flush().map_err(Error::FlushFailed)
+            .flush()
+            .map_err(Error::FlushFailed)
     }
 
     pub fn identify(&self, user: User) {
@@ -322,7 +263,7 @@ impl Client {
         let event = match flag {
             Some(f) => Event::new_eval_event(
                 flag_key,
-                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
                 &f,
                 result.clone(),
                 default_for_event,
@@ -330,7 +271,7 @@ impl Client {
             ),
             None => Event::new_unknown_flag_event(
                 flag_key,
-                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
                 result.clone(),
                 default_for_event,
                 true,
@@ -350,7 +291,7 @@ impl Client {
         let event = match flag {
             Some(f) => Event::new_eval_event(
                 flag_key,
-                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
                 &f,
                 result.clone(),
                 default_for_event,
@@ -358,7 +299,7 @@ impl Client {
             ),
             None => Event::new_unknown_flag_event(
                 flag_key,
-                MaybeInlinedUser::new(self.config.inline_users_in_events, user.clone()),
+                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
                 result.clone(),
                 default_for_event,
                 false,
@@ -396,7 +337,7 @@ impl Client {
         data: impl Serialize,
     ) -> serde_json::Result<()> {
         let event = Event::new_custom(
-            MaybeInlinedUser::new(self.config.inline_users_in_events, user),
+            MaybeInlinedUser::new(self.inline_users_in_events, user),
             key,
             metric_value,
             data,
@@ -430,6 +371,8 @@ impl Client {
     fn send_internal(&self, event: Event) {
         let _ = self
             .event_processor
+            .lock()
+            .unwrap()
             .send(event)
             .map_err(|e| warn!("failed to send event: {}", e));
     }
@@ -437,30 +380,19 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use crate::ConfigBuilder;
     use rust_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
 
-    use super::*;
+    use crate::data_source_builders::MockDataSourceBuilder;
+    use crate::event_processor_builders::EventProcessorBuilder;
     use crate::event_sink::MockSink;
     use crate::events::VariationKey;
     use crate::store::PatchTarget;
     use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
     use crate::update_processor::{MockUpdateProcessor, PatchData};
-    use test_case::test_case;
 
-    #[test_case("localhost", "localhost"; "requires no trimming")]
-    #[test_case("http://localhost", "http://localhost"; "requires no trimming with scheme")]
-    #[test_case("localhost/", "localhost"; "trims trailing slash")]
-    #[test_case("http://localhost/", "http://localhost"; "trims trailing slash with scheme")]
-    #[test_case("localhost////////", "localhost"; "trims multiple trailing slashes")]
-    fn test_client_builder_trims_stream_base_url(url: &str, expected: &str) {
-        let mut builder = Client::configure();
-        builder.stream_base_url(url);
-        builder.events_base_url(url);
-
-        assert_eq!(builder.stream_base_url, expected);
-        assert_eq!(builder.events_base_url, expected);
-    }
+    use super::*;
 
     #[test]
     // TODO(ch107017) split this test up: test update_processor and event_processor separately and
@@ -468,7 +400,7 @@ mod tests {
     fn client_receives_updates_evals_flags_and_sends_events() {
         let user = User::with_key("foo".to_string()).build();
 
-        let (mut client, updates, _events) = make_mocked_client();
+        let (client, updates, _events) = make_mocked_client();
 
         let result = client.bool_variation_detail(&user, "someFlag", false);
 
@@ -498,7 +430,7 @@ mod tests {
     fn client_receives_updates_evals_flags_and_sends_events_int() {
         let user = User::with_key("foo".to_string()).build();
 
-        let (mut client, updates, _events) = make_mocked_client();
+        let (client, updates, _events) = make_mocked_client();
 
         let result = client.int_variation_detail(&user, "someFlag", 0);
 
@@ -532,7 +464,7 @@ mod tests {
 
         let user = User::with_key("foo".to_string()).build();
 
-        let (mut client, updates, _events) = make_mocked_client();
+        let (client, updates, _events) = make_mocked_client();
 
         let result = client.json_variation_detail(&user, "someFlag", Value::Null);
 
@@ -562,7 +494,7 @@ mod tests {
 
     #[test]
     fn evaluate_tracks_events_correctly() {
-        let (mut client, updates, events) = make_mocked_client();
+        let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -599,7 +531,7 @@ mod tests {
 
     #[test]
     fn evaluate_handles_unknown_flags() {
-        let (mut client, _updates, events) = make_mocked_client();
+        let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -627,7 +559,7 @@ mod tests {
 
     #[test]
     fn evaluate_detail_tracks_events_correctly() {
-        let (mut client, updates, events) = make_mocked_client();
+        let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -667,7 +599,7 @@ mod tests {
 
     #[test]
     fn evaluate_detail_handles_unknown_flags() {
-        let (mut client, _updates, events) = make_mocked_client();
+        let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -698,7 +630,7 @@ mod tests {
 
     #[test]
     fn identify_sends_identify_event() {
-        let (mut client, _updates, events) = make_mocked_client();
+        let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -713,7 +645,7 @@ mod tests {
 
     #[test]
     fn alias_sends_alias_event() {
-        let (mut client, _updates, events) = make_mocked_client();
+        let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -734,7 +666,7 @@ mod tests {
 
     #[test]
     fn track_sends_track_and_index_events() -> serde_json::Result<()> {
-        let (mut client, _updates, events) = make_mocked_client();
+        let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -776,11 +708,12 @@ mod tests {
         let updates = Arc::new(Mutex::new(MockUpdateProcessor::new()));
         let events = Arc::new(RwLock::new(MockSink::new()));
 
-        let client = Client::configure()
-            .update_processor(updates.clone())
-            .event_sink(events.clone())
-            .build("dummy_key")
-            .expect("client should build");
+        let config = ConfigBuilder::new("sdk-key")
+            .data_source(MockDataSourceBuilder::new().data_source(updates.clone()))
+            .event_processor(EventProcessorBuilder::new().event_sink(events.clone()))
+            .build();
+
+        let client = Client::build(config).expect("Should be built.");
 
         (client, updates, events)
     }

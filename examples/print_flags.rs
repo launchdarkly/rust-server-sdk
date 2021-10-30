@@ -7,7 +7,7 @@ use std::env;
 use std::process::exit;
 use std::time::Duration;
 
-use launchdarkly_server_sdk::{Client, User};
+use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, User};
 
 use env_logger::Env;
 use tokio::time;
@@ -45,23 +45,36 @@ async fn main() {
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
     let events_url_opt = env::var("LAUNCHDARKLY_EVENTS_URL");
+    let polling_url_opt = env::var("LAUNCHDARKLY_POLLING_URL");
 
     let alice = User::with_key("alice")
         .custom(hashmap! { "team".into() => "Avengers".into() })
         .build();
     let bob = User::with_key("bob").build();
 
-    let mut client_builder = Client::configure();
-    if let Ok(url) = stream_url_opt {
-        client_builder.stream_base_url(&url);
-    }
-    if let Ok(url) = events_url_opt {
-        client_builder.events_base_url(&url);
+    let mut config_builder = ConfigBuilder::new(&sdk_key);
+    match (stream_url_opt, events_url_opt, polling_url_opt) {
+        (Ok(stream_url_opt), Ok(events_url_opt), Ok(polling_url_opt)) => {
+            config_builder = config_builder.service_endpoints(
+                ServiceEndpointsBuilder::new()
+                    .polling_base_url(&polling_url_opt)
+                    .events_base_url(&events_url_opt)
+                    .streaming_base_url(&stream_url_opt),
+            );
+        }
+        // If none of them are set, then that is fine and we default.
+        (Err(_), Err(_), Err(_)) => {}
+        _ => {
+            error!(
+                "Please specify all URLs LAUNCHDARKLY_STREAM_URL,\
+             LAUNCHDARKLY_EVENTS_URL, and LAUNCHDARKLY_POLLING_URL"
+            );
+        }
     }
 
-    let client = client_builder
-        .start_with_default_executor(&sdk_key)
-        .expect("failed to start client");
+    let config = config_builder.build();
+    let client = Client::build(config).expect("failed to start client");
+    client.start_with_default_executor();
 
     let mut interval = time::interval(Duration::from_secs(5));
 

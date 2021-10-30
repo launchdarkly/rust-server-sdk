@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use eventsource_client as es;
+use eventsource_client::ReconnectOptionsBuilder;
 use futures::TryStreamExt;
 use serde::Deserialize;
 
@@ -51,14 +53,19 @@ impl StreamingUpdateProcessor {
     pub fn new(
         base_url: &str,
         sdk_key: &str,
+        initial_reconnect_delay: Duration,
     ) -> std::result::Result<StreamingUpdateProcessor, es::Error> {
         let stream_url = format!("{}/all", base_url);
         let client_builder = es::Client::for_url(&stream_url)?;
         let es_client = client_builder
-            .header("Authorization", sdk_key)
-            .unwrap()
-            .header("User-Agent", &*crate::USER_AGENT)
-            .unwrap()
+            .reconnect(
+                ReconnectOptionsBuilder::new(true)
+                    .retry_initial(true)
+                    .delay(initial_reconnect_delay)
+                    .build(),
+            )
+            .header("Authorization", sdk_key)?
+            .header("User-Agent", &*crate::USER_AGENT)?
             .build();
         Ok(StreamingUpdateProcessor { es_client })
     }

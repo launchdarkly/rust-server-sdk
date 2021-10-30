@@ -8,15 +8,32 @@ extern crate spectral;
 #[macro_use]
 extern crate serde_json;
 
+use lazy_static::lazy_static;
+pub use rust_server_sdk_evaluation::Error as EvalError;
+pub use rust_server_sdk_evaluation::{
+    AttributeValue, Detail, FlagValue, Reason, TypeError, User, UserBuilder,
+};
+
+pub use client::Client;
+// Re-export
+pub use client::Error as ClientError;
+pub use config::{Config, ConfigBuilder};
+pub use data_source_builders::StreamingDataSourceBuilder;
+pub use event_processor::EventProcessor;
+pub use event_processor_builders::EventProcessorBuilder;
+pub use service_endpoints::ServiceEndpointsBuilder;
+
 mod client;
+mod config;
+mod data_source_builders;
 mod event_processor;
+mod event_processor_builders;
 mod event_sink;
 mod events;
+mod service_endpoints;
 mod store;
 mod test_common;
 mod update_processor;
-
-use lazy_static::lazy_static;
 
 lazy_static! {
     pub(crate) static ref USER_AGENT: String =
@@ -27,11 +44,3 @@ lazy_static! {
 mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
-
-// Re-export
-pub use client::Error as ClientError;
-pub use client::{Client, ClientBuilder};
-pub use rust_server_sdk_evaluation::Error as EvalError;
-pub use rust_server_sdk_evaluation::{
-    AttributeValue, Detail, FlagValue, Reason, TypeError, User, UserBuilder,
-};

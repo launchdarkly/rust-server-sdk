@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use launchdarkly_server_sdk::{Client, User};
+use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, User};
 
 use cursive::traits::Boxable;
 use cursive::utils::Counter;
@@ -20,6 +20,7 @@ fn main() {
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
     let events_url_opt = env::var("LAUNCHDARKLY_EVENTS_URL");
+    let polling_url_opt = env::var("LAUNCHDARKLY_POLLING_URL");
 
     let flags: Vec<String> = env::args().skip(1).collect();
     if flags.len() != 1 {
@@ -28,16 +29,27 @@ fn main() {
     }
     let user = User::with_key(flags[0].clone()).build();
 
-    let mut client_builder = Client::configure();
-    if let Ok(url) = stream_url_opt {
-        client_builder.stream_base_url(&url);
+    let mut config_builder = ConfigBuilder::new(&sdk_key);
+    match (stream_url_opt, events_url_opt, polling_url_opt) {
+        (Ok(stream_url_opt), Ok(events_url_opt), Ok(polling_url_opt)) => {
+            config_builder = config_builder.service_endpoints(
+                ServiceEndpointsBuilder::new()
+                    .polling_base_url(&polling_url_opt)
+                    .events_base_url(&events_url_opt)
+                    .streaming_base_url(&stream_url_opt),
+            );
+        }
+        // If none of them are set, then that is fine and we default.
+        (Err(_), Err(_), Err(_)) => {}
+        _ => {
+            error!(
+                "Please specify all URLs LAUNCHDARKLY_STREAM_URL,\
+             LAUNCHDARKLY_EVENTS_URL, and LAUNCHDARKLY_POLLING_URL"
+            );
+        }
     }
-    if let Ok(url) = events_url_opt {
-        client_builder.events_base_url(&url);
-    }
-    let client = client_builder
-        .start(&sdk_key)
-        .expect("failed to start client");
+
+    let client = Client::start(config_builder.build()).expect("failed to build client");
 
     let mut cursive = Cursive::default();
 

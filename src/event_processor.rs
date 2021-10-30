@@ -10,25 +10,53 @@ use super::events::{Event, EventSummary, MaybeInlinedUser};
 
 type Error = String; // TODO(ch108607) use an error enum
 
-const FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100); // TODO(ch108609) make this configurable instead of hardcoding
+pub trait EventProcessor: Send {
+    fn send(&self, event: Event) -> Result<(), Error>;
+    fn flush(&self) -> Result<(), Error>;
+}
 
-pub struct EventProcessor {
+pub struct EventProcessorImpl {
     batcher: EventBatcher,
 }
 
-impl EventProcessor {
-    pub fn new(base_url: r::Url, sdk_key: &str) -> Result<Self, Error> {
+impl EventProcessorImpl {
+    pub fn new(
+        base_url: r::Url,
+        sdk_key: &str,
+        flush_interval: Duration,
+        capacity: usize,
+        user_keys_capacity: usize,
+    ) -> Result<Self, Error> {
         let sink = sink::ReqwestSink::new(&base_url, sdk_key)?;
-        Self::new_with_sink(Arc::new(RwLock::new(sink)))
+        Self::new_with_sink(
+            Arc::new(RwLock::new(sink)),
+            flush_interval,
+            capacity,
+            user_keys_capacity,
+        )
     }
 
-    pub fn new_with_sink(sink: Arc<RwLock<dyn sink::EventSink>>) -> Result<Self, Error> {
+    pub fn new_with_sink(
+        sink: Arc<RwLock<dyn sink::EventSink>>,
+        flush_interval: Duration,
+        capacity: usize,
+        user_keys_capacity: usize,
+    ) -> Result<Self, Error> {
         // TODO(ch108609) make batcher params configurable
-        let batcher = EventBatcher::start(sink, 1000, Duration::from_secs(30))?;
-        Ok(EventProcessor { batcher })
+        let batcher = EventBatcher::start(
+            sink,
+            capacity,
+            user_keys_capacity,
+            1000,
+            Duration::from_secs(30),
+            flush_interval,
+        )?;
+        Ok(EventProcessorImpl { batcher })
     }
+}
 
-    pub fn send(&self, event: Event) -> Result<(), Error> {
+impl EventProcessor for EventProcessorImpl {
+    fn send(&self, event: Event) -> Result<(), Error> {
         debug!("Sending event: {}", event);
 
         let index_result = match event.to_index_event() {
@@ -40,7 +68,7 @@ impl EventProcessor {
         self.batcher.add(event).and(index_result)
     }
 
-    pub fn flush(&self) -> Result<(), Error> {
+    fn flush(&self) -> Result<(), Error> {
         self.batcher.flush()
     }
 }
@@ -53,10 +81,13 @@ struct EventBatcher {
 impl EventBatcher {
     pub fn start(
         sink: Arc<RwLock<dyn sink::EventSink>>,
+        capacity: usize,
+        user_keys_capacity: usize,
         batch_size: usize,
         batch_timeout: Duration,
+        flush_interval: Duration,
     ) -> Result<Self, Error> {
-        let (sender, receiver) = mpsc::sync_channel(500); // TODO(ch108609) make event buffer size configurable
+        let (sender, receiver) = mpsc::sync_channel(capacity);
 
         let (flusher, flush_receiver) = mpsc::sync_channel::<mpsc::SyncSender<()>>(10); // TODO(ch108609) make flush buffer size configurable
 
@@ -75,14 +106,14 @@ impl EventBatcher {
                 // This restricts us to only deduping users within the batch_timeout.
                 // TODO(ch108616) support configuring the deduping period separately (probably after redoing
                 // this using crossbeam so we can select on multiple channels)
-                let mut user_cache = LruCache::<String, ()>::new(1000); // TODO(ch108609) make user LRU cache size configurable
+                let mut user_cache = LruCache::<String, ()>::new(user_keys_capacity);
 
                 'event: loop {
                     // This was written without access to a (stable) select on multiple channels, so we have to
                     // contort a bit to support flush without blocking flush requesters until the
                     // batch deadline.
                     // TODO(ch108616) redo this using crossbeam-channel, or futures::channel and futures::select
-                    let mut batch_ready = match receiver.recv_timeout(FLUSH_POLL_INTERVAL) {
+                    let mut batch_ready = match receiver.recv_timeout(flush_interval) {
                         Ok(event) => {
                             process_event(event, &mut user_cache, &mut batch, &mut summary);
 
@@ -212,11 +243,15 @@ mod tests {
     use super::*;
     use crate::test_common::basic_flag;
 
+    fn make_test_sink(events: &Arc<RwLock<sink::MockSink>>) -> EventProcessorImpl {
+        EventProcessorImpl::new_with_sink(events.clone(), Duration::from_millis(100), 1000, 1000)
+            .expect("event processor should initialize")
+    }
+
     #[test]
     fn sending_feature_event_emits_only_index_and_summary() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = EventProcessor::new_with_sink(events.clone())
-            .expect("event processor should initialize");
+        let ep = make_test_sink(&events);
 
         let flag = basic_flag("flag");
         let user = MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
@@ -256,8 +291,7 @@ mod tests {
     #[test]
     fn sending_feature_event_with_track_events_emits_index_and_summary() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = EventProcessor::new_with_sink(events.clone())
-            .expect("event processor should initialize");
+        let ep = make_test_sink(&events);
 
         let mut flag = basic_flag("flag");
         flag.track_events = true;
@@ -302,8 +336,7 @@ mod tests {
     #[test]
     fn sending_feature_event_with_rule_track_events_emits_index_and_summary() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = EventProcessor::new_with_sink(events.clone())
-            .expect("event processor should initialize");
+        let ep = make_test_sink(&events);
 
         let flag: Flag = serde_json::from_str(
             r#"{
@@ -443,8 +476,7 @@ mod tests {
     #[test]
     fn feature_events_dedupe_index_events() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = EventProcessor::new_with_sink(events.clone())
-            .expect("event processor should initialize");
+        let ep = make_test_sink(&events);
 
         let flag = basic_flag("flag");
         let user = MaybeInlinedUser::Inlined(User::with_key("bar".to_string()).build());
