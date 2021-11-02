@@ -25,6 +25,7 @@ pub use service_endpoints::ServiceEndpointsBuilder;
 
 mod client;
 mod config;
+mod data_source;
 mod data_source_builders;
 mod event_processor;
 mod event_processor_builders;
@@ -33,7 +34,6 @@ mod events;
 mod service_endpoints;
 mod store;
 mod test_common;
-mod update_processor;
 
 lazy_static! {
     pub(crate) static ref USER_AGENT: String =

@@ -41,20 +41,20 @@ pub(crate) struct DeleteData {
     // TODO(ch108603) care about version
 }
 
-pub trait UpdateProcessor: Send {
+pub trait DataSource: Send {
     fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>);
 }
 
-pub struct StreamingUpdateProcessor {
+pub struct StreamingDataSource {
     es_client: es::Client<es::HttpsConnector>,
 }
 
-impl StreamingUpdateProcessor {
+impl StreamingDataSource {
     pub fn new(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
-    ) -> std::result::Result<StreamingUpdateProcessor, es::Error> {
+    ) -> std::result::Result<StreamingDataSource, es::Error> {
         let stream_url = format!("{}/all", base_url);
         let client_builder = es::Client::for_url(&stream_url)?;
         let es_client = client_builder
@@ -67,11 +67,11 @@ impl StreamingUpdateProcessor {
             .header("Authorization", sdk_key)?
             .header("User-Agent", &*crate::USER_AGENT)?
             .build();
-        Ok(StreamingUpdateProcessor { es_client })
+        Ok(StreamingDataSource { es_client })
     }
 }
 
-impl UpdateProcessor for StreamingUpdateProcessor {
+impl DataSource for StreamingDataSource {
     fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>) {
         let mut event_stream = Box::pin(self.es_client.stream());
 
@@ -92,7 +92,7 @@ impl UpdateProcessor for StreamingUpdateProcessor {
 
                 let mut store = store.lock().unwrap();
 
-                debug!("update processor got an event: {}", event.event_type);
+                debug!("data source got an event: {}", event.event_type);
 
                 let stored = match event.event_type.as_str() {
                     "put" => process_put(&mut *store, event),
@@ -109,14 +109,14 @@ impl UpdateProcessor for StreamingUpdateProcessor {
 }
 
 #[cfg(test)]
-pub(crate) struct MockUpdateProcessor {
+pub(crate) struct MockDataSource {
     store: Option<Arc<Mutex<FeatureStore>>>,
 }
 
 #[cfg(test)]
-impl MockUpdateProcessor {
+impl MockDataSource {
     pub fn new() -> Self {
-        return MockUpdateProcessor { store: None };
+        return MockDataSource { store: None };
     }
 
     pub fn patch(&self, patch: PatchData) -> Result<()> {
@@ -131,7 +131,7 @@ impl MockUpdateProcessor {
 }
 
 #[cfg(test)]
-impl UpdateProcessor for MockUpdateProcessor {
+impl DataSource for MockDataSource {
     fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>) {
         self.store = Some(store);
     }

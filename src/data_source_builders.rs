@@ -1,11 +1,11 @@
 use super::client::Error;
 use super::service_endpoints;
-use crate::update_processor::{StreamingUpdateProcessor, UpdateProcessor};
+use crate::data_source::{DataSource, StreamingDataSource};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(test)]
-use super::update_processor;
+use super::data_source;
 
 const DEFAULT_INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
@@ -15,7 +15,7 @@ pub trait DataSourceFactory: Send {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn UpdateProcessor>>, Error>;
+    ) -> Result<Arc<Mutex<dyn DataSource>>, Error>;
     fn to_owned(&self) -> Box<dyn DataSourceFactory + Send>;
 }
 
@@ -61,14 +61,14 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn UpdateProcessor>>, Error> {
-        let processor = StreamingUpdateProcessor::new(
+    ) -> Result<Arc<Mutex<dyn DataSource>>, Error> {
+        let data_source = StreamingDataSource::new(
             endpoints.streaming_base_url(),
             sdk_key,
             self.initial_reconnect_delay,
         )
         .map_err(|e| Error::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
-        Ok(Arc::new(Mutex::new(processor)))
+        Ok(Arc::new(Mutex::new(data_source)))
     }
 
     fn to_owned(&self) -> Box<dyn DataSourceFactory + Send> {
@@ -82,11 +82,11 @@ impl Default for StreamingDataSourceBuilder {
     }
 }
 
-/// For testing you can use this builder to inject the MockUpdateProcessor.
+/// For testing you can use this builder to inject the MockDataSource.
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct MockDataSourceBuilder {
-    data_source: Option<Arc<Mutex<update_processor::MockUpdateProcessor>>>,
+    data_source: Option<Arc<Mutex<data_source::MockDataSource>>>,
 }
 
 #[cfg(test)]
@@ -97,7 +97,7 @@ impl MockDataSourceBuilder {
 
     pub fn data_source(
         &mut self,
-        data_source: Arc<Mutex<update_processor::MockUpdateProcessor>>,
+        data_source: Arc<Mutex<data_source::MockDataSource>>,
     ) -> &mut MockDataSourceBuilder {
         self.data_source = Some(data_source);
         self
@@ -111,7 +111,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         &self,
         _endpoints: &service_endpoints::ServiceEndpoints,
         _sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn UpdateProcessor>>, Error> {
+    ) -> Result<Arc<Mutex<dyn DataSource>>, Error> {
         return Ok(self.data_source.as_ref().unwrap().clone());
     }
 

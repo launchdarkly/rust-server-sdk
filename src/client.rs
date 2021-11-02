@@ -8,10 +8,10 @@ use serde::Serialize;
 use thiserror::Error;
 
 use super::config::Config;
+use super::data_source::DataSource;
 use super::event_processor::EventProcessor;
 use super::events::{Event, MaybeInlinedUser};
 use super::store::FeatureStore;
-use super::update_processor::UpdateProcessor;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -58,7 +58,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Each builder type includes usage examples for the builder.
 pub struct Client {
     event_processor: Arc<Mutex<dyn EventProcessor>>,
-    update_processor: Arc<Mutex<dyn UpdateProcessor>>,
+    data_source: Arc<Mutex<dyn DataSource>>,
     store: Arc<Mutex<FeatureStore>>,
     inline_users_in_events: bool,
     // TODO: Once we need the config for diagnostic events, then we should add this.
@@ -69,7 +69,7 @@ impl Client {
     pub fn build(config: Config) -> Result<Self> {
         let store = FeatureStore::new();
         let endpoints = config.service_endpoints_builder().build()?;
-        let update_processor = config
+        let data_source = config
             .data_source_builder()
             .build(&endpoints, config.sdk_key())?;
         let event_processor = config
@@ -78,7 +78,7 @@ impl Client {
 
         Ok(Client {
             event_processor,
-            update_processor,
+            data_source,
             inline_users_in_events: config.inline_users_in_events(),
             store: Arc::new(Mutex::new(store)),
         })
@@ -86,7 +86,7 @@ impl Client {
 
     /// Starts a client in the current thread, which must have a default tokio runtime.
     pub fn start_with_default_executor(&self) {
-        self.update_processor
+        self.data_source
             .lock()
             .unwrap()
             .subscribe(self.store.clone());
@@ -384,18 +384,18 @@ mod tests {
     use rust_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
 
+    use crate::data_source::{MockDataSource, PatchData};
     use crate::data_source_builders::MockDataSourceBuilder;
     use crate::event_processor_builders::EventProcessorBuilder;
     use crate::event_sink::MockSink;
     use crate::events::VariationKey;
     use crate::store::PatchTarget;
     use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
-    use crate::update_processor::{MockUpdateProcessor, PatchData};
 
     use super::*;
 
     #[test]
-    // TODO(ch107017) split this test up: test update_processor and event_processor separately and
+    // TODO(ch107017) split this test up: test data_source and event_processor separately and
     // just mutate store to test evals
     fn client_receives_updates_evals_flags_and_sends_events() {
         let user = User::with_key("foo".to_string()).build();
@@ -700,12 +700,8 @@ mod tests {
         Ok(())
     }
 
-    fn make_mocked_client() -> (
-        Client,
-        Arc<Mutex<MockUpdateProcessor>>,
-        Arc<RwLock<MockSink>>,
-    ) {
-        let updates = Arc::new(Mutex::new(MockUpdateProcessor::new()));
+    fn make_mocked_client() -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
+        let updates = Arc::new(Mutex::new(MockDataSource::new()));
         let events = Arc::new(RwLock::new(MockSink::new()));
 
         let config = ConfigBuilder::new("sdk-key")
