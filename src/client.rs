@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{io, thread};
 
-use rust_server_sdk_evaluation::{self as eval, Detail, Flag, FlagValue, Store, User};
+use rust_server_sdk_evaluation::{self as eval, Detail, Flag, FlagValue, User};
 use serde::Serialize;
 use thiserror::Error;
 
 use super::config::Config;
 use super::data_source::DataSource;
+use super::data_store::DataStore;
 use super::event_processor::EventProcessor;
 use super::events::{Event, MaybeInlinedUser};
-use super::store::FeatureStore;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -59,7 +59,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Client {
     event_processor: Arc<Mutex<dyn EventProcessor>>,
     data_source: Arc<Mutex<dyn DataSource>>,
-    store: Arc<Mutex<FeatureStore>>,
+    data_store: Arc<Mutex<dyn DataStore>>,
     inline_users_in_events: bool,
     // TODO: Once we need the config for diagnostic events, then we should add this.
     // config: Arc<Mutex<Config>>,
@@ -67,20 +67,20 @@ pub struct Client {
 
 impl Client {
     pub fn build(config: Config) -> Result<Self> {
-        let store = FeatureStore::new();
         let endpoints = config.service_endpoints_builder().build()?;
-        let data_source = config
-            .data_source_builder()
-            .build(&endpoints, config.sdk_key())?;
         let event_processor = config
             .event_processor_builder()
             .build(&endpoints, config.sdk_key())?;
+        let data_source = config
+            .data_source_builder()
+            .build(&endpoints, config.sdk_key())?;
+        let data_store = config.data_store_builder().build()?;
 
         Ok(Client {
             event_processor,
             data_source,
+            data_store,
             inline_users_in_events: config.inline_users_in_events(),
-            store: Arc::new(Mutex::new(store)),
         })
     }
 
@@ -89,7 +89,7 @@ impl Client {
         self.data_source
             .lock()
             .unwrap()
-            .subscribe(self.store.clone());
+            .subscribe(self.data_store.clone());
     }
 
     /// Starts a client in a background thread, with its own tokio runtime.
@@ -241,10 +241,12 @@ impl Client {
     }
 
     pub fn all_flags_detail(&self, user: &User) -> HashMap<String, Detail<FlagValue>> {
-        let store = self.store.lock().unwrap();
-        let flags = store.all_flags();
+        let data_store = self.data_store.lock().unwrap();
+        let flags = data_store.all_flags();
         let evals = flags.iter().map(|(key, flag)| {
-            let val = flag.evaluate(user, &*store).map(|v| v.clone());
+            let val = flag
+                .evaluate(user, &*data_store.to_store())
+                .map(|v| v.clone());
             (key.clone(), val)
         });
         evals.collect()
@@ -353,8 +355,8 @@ impl Client {
         flag_key: &str,
         default: FlagValue,
     ) -> (Option<Flag>, Detail<FlagValue>) {
-        let store = self.store.lock().unwrap();
-        let flag = if let Some(flag) = store.flag(flag_key) {
+        let data_store = self.data_store.lock().unwrap();
+        let flag = if let Some(flag) = data_store.flag(flag_key) {
             flag
         } else {
             return (
@@ -363,7 +365,10 @@ impl Client {
             );
         };
 
-        let result = flag.evaluate(user, &*store).map(|v| v.clone()).or(default);
+        let result = flag
+            .evaluate(user, &*data_store.to_store())
+            .map(|v| v.clone())
+            .or(default);
 
         (Some(flag.clone()), result)
     }
@@ -386,10 +391,10 @@ mod tests {
 
     use crate::data_source::{MockDataSource, PatchData};
     use crate::data_source_builders::MockDataSourceBuilder;
+    use crate::data_store::PatchTarget;
     use crate::event_processor_builders::EventProcessorBuilder;
     use crate::event_sink::MockSink;
     use crate::events::VariationKey;
-    use crate::store::PatchTarget;
     use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
 
     use super::*;

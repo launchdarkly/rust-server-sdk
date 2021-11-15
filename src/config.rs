@@ -1,4 +1,5 @@
 use crate::data_source_builders::DataSourceFactory;
+use crate::data_store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
 use crate::event_processor_builders::{EventProcessorBuilder, EventProcessorFactory};
 use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};
 
@@ -10,8 +11,9 @@ use std::borrow::Borrow;
 pub struct Config {
     sdk_key: String,
     service_endpoints_builder: ServiceEndpointsBuilder,
-    data_source_builder: Box<dyn DataSourceFactory + Send>,
-    event_processor_builder: Box<dyn EventProcessorFactory + Send>,
+    data_store_builder: Box<dyn DataStoreFactory>,
+    data_source_builder: Box<dyn DataSourceFactory>,
+    event_processor_builder: Box<dyn EventProcessorFactory>,
     inline_users_in_events: bool,
 }
 
@@ -24,11 +26,15 @@ impl Config {
         &self.service_endpoints_builder
     }
 
-    pub fn data_source_builder(&self) -> &(dyn DataSourceFactory + Send) {
+    pub fn data_store_builder(&self) -> &(dyn DataStoreFactory) {
+        self.data_store_builder.borrow()
+    }
+
+    pub fn data_source_builder(&self) -> &(dyn DataSourceFactory) {
         self.data_source_builder.borrow()
     }
 
-    pub fn event_processor_builder(&self) -> &(dyn EventProcessorFactory + Send) {
+    pub fn event_processor_builder(&self) -> &(dyn EventProcessorFactory) {
         self.event_processor_builder.borrow()
     }
 
@@ -40,13 +46,15 @@ impl Config {
 /// Used to create a [Config] struct for creating [crate::Client] instances.
 ///
 /// For usage examples see:
+// TODO(doc) Include the data store builder example once we have something that can be customized
 /// - [crate::ServiceEndpointsBuilder]
 /// - [crate::StreamingDataSourceBuilder]
 /// - [crate::EventProcessorBuilder]
 pub struct ConfigBuilder {
     service_endpoints_builder: Option<ServiceEndpointsBuilder>,
-    data_source_builder: Option<Box<dyn DataSourceFactory + Send>>,
-    event_processor_builder: Option<Box<dyn EventProcessorFactory + Send>>,
+    data_store_builder: Option<Box<dyn DataStoreFactory>>,
+    data_source_builder: Option<Box<dyn DataSourceFactory>>,
+    event_processor_builder: Option<Box<dyn EventProcessorFactory>>,
     inline_users_in_events: bool,
     sdk_key: String,
 }
@@ -55,6 +63,7 @@ impl ConfigBuilder {
     pub fn new(sdk_key: &str) -> Self {
         Self {
             service_endpoints_builder: None,
+            data_store_builder: None,
             data_source_builder: None,
             event_processor_builder: None,
             inline_users_in_events: false,
@@ -64,6 +73,12 @@ impl ConfigBuilder {
     /// Set the URLs to use for this client. For usage see [ServiceEndpointsBuilder]
     pub fn service_endpoints(mut self, builder: &ServiceEndpointsBuilder) -> Self {
         self.service_endpoints_builder = Some(builder.clone());
+        self
+    }
+
+    /// Set the data store to use for this client.
+    pub fn data_store(mut self, builder: &dyn DataStoreFactory) -> Self {
+        self.data_store_builder = Some(builder.to_owned());
         self
     }
 
@@ -96,6 +111,10 @@ impl ConfigBuilder {
             Some(service_endpoints_builder) => service_endpoints_builder.clone(),
         };
 
+        let data_store_builder = match &self.data_store_builder {
+            None => Box::new(InMemoryDataStoreBuilder::new()),
+            Some(_data_store_builder) => self.data_store_builder.unwrap(),
+        };
         let data_source_builder = match &self.data_source_builder {
             None => Box::new(StreamingDataSourceBuilder::new()),
             Some(_data_source_builder) => self.data_source_builder.unwrap(),
@@ -108,6 +127,7 @@ impl ConfigBuilder {
         Config {
             sdk_key: self.sdk_key,
             service_endpoints_builder,
+            data_store_builder,
             data_source_builder,
             event_processor_builder,
             inline_users_in_events: self.inline_users_in_events,

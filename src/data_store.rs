@@ -23,12 +23,36 @@ pub struct AllData {
     segments: HashMap<String, Segment>,
 }
 
+/// Trait for a data store that holds and updates feature flags and related data received by the
+/// SDK.
+pub trait DataStore: Store + Send {
+    fn init(&mut self, new_data: AllData);
+    fn all_flags(&self) -> &HashMap<String, Flag>;
+    fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error>;
+    fn patch_flag(&mut self, flag_key: &str, data: PatchTarget) -> Result<(), Error>;
+    fn patch_segment(&mut self, segment_key: &str, data: PatchTarget) -> Result<(), Error>;
+    fn delete(&mut self, path: &str) -> Result<(), Error>;
+    fn to_store(&self) -> &dyn Store;
+}
+
 // TODO(ch108602) implement Error::ClientNotReady
-pub struct FeatureStore {
+/// Default implementation of the DataStore which holds information in an in-memory data store.
+pub struct InMemoryDataStore {
     pub data: AllData,
 }
 
-impl Store for FeatureStore {
+impl InMemoryDataStore {
+    pub fn new() -> Self {
+        Self {
+            data: AllData {
+                flags: HashMap::new(),
+                segments: HashMap::new(),
+            },
+        }
+    }
+}
+
+impl Store for InMemoryDataStore {
     fn flag(&self, flag_key: &str) -> Option<&Flag> {
         self.data.flags.get(flag_key)
     }
@@ -38,25 +62,16 @@ impl Store for FeatureStore {
     }
 }
 
-impl FeatureStore {
-    pub fn new() -> FeatureStore {
-        FeatureStore {
-            data: AllData {
-                flags: HashMap::new(),
-                segments: HashMap::new(),
-            },
-        }
-    }
-
-    pub fn init(&mut self, new_data: AllData) {
+impl DataStore for InMemoryDataStore {
+    fn init(&mut self, new_data: AllData) {
         self.data = new_data;
     }
 
-    pub fn all_flags(&self) -> &HashMap<String, Flag> {
+    fn all_flags(&self) -> &HashMap<String, Flag> {
         &self.data.flags
     }
 
-    pub fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error> {
+    fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error> {
         if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
             self.patch_flag(flag_key, data)
         } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
@@ -88,7 +103,7 @@ impl FeatureStore {
         Ok(())
     }
 
-    pub fn delete(&mut self, path: &str) -> Result<(), Error> {
+    fn delete(&mut self, path: &str) -> Result<(), Error> {
         if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
             self.data.flags.remove(flag_key);
         } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
@@ -99,9 +114,13 @@ impl FeatureStore {
 
         Ok(())
     }
+
+    fn to_store(&self) -> &dyn Store {
+        self
+    }
 }
 
-impl Default for FeatureStore {
+impl Default for InMemoryDataStore {
     fn default() -> Self {
         Self::new()
     }

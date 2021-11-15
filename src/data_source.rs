@@ -6,7 +6,7 @@ use eventsource_client::ReconnectOptionsBuilder;
 use futures::TryStreamExt;
 use serde::Deserialize;
 
-use super::store::{AllData, FeatureStore, PatchTarget};
+use super::data_store::{AllData, DataStore, PatchTarget};
 
 #[derive(Debug)]
 pub enum Error {
@@ -42,7 +42,7 @@ pub(crate) struct DeleteData {
 }
 
 pub trait DataSource: Send {
-    fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>);
+    fn subscribe(&mut self, data_store: Arc<Mutex<dyn DataStore>>);
 }
 
 pub struct StreamingDataSource {
@@ -72,7 +72,7 @@ impl StreamingDataSource {
 }
 
 impl DataSource for StreamingDataSource {
-    fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>) {
+    fn subscribe(&mut self, data_store: Arc<Mutex<dyn DataStore>>) {
         let mut event_stream = Box::pin(self.es_client.stream());
 
         tokio::spawn(async move {
@@ -90,14 +90,14 @@ impl DataSource for StreamingDataSource {
                     }
                 };
 
-                let mut store = store.lock().unwrap();
+                let mut data_store = data_store.lock().unwrap();
 
                 debug!("data source got an event: {}", event.event_type);
 
                 let stored = match event.event_type.as_str() {
-                    "put" => process_put(&mut *store, event),
-                    "patch" => process_patch(&mut *store, event),
-                    "delete" => process_delete(&mut *store, event),
+                    "put" => process_put(&mut *data_store, event),
+                    "patch" => process_patch(&mut *data_store, event),
+                    "delete" => process_delete(&mut *data_store, event),
                     _ => Err(Error::InvalidEventType(event.event_type)),
                 };
                 if let Err(e) = stored {
@@ -110,17 +110,17 @@ impl DataSource for StreamingDataSource {
 
 #[cfg(test)]
 pub(crate) struct MockDataSource {
-    store: Option<Arc<Mutex<FeatureStore>>>,
+    data_store: Option<Arc<Mutex<dyn DataStore>>>,
 }
 
 #[cfg(test)]
 impl MockDataSource {
     pub fn new() -> Self {
-        return MockDataSource { store: None };
+        return MockDataSource { data_store: None };
     }
 
     pub fn patch(&self, patch: PatchData) -> Result<()> {
-        self.store
+        self.data_store
             .as_ref()
             .expect("not subscribed")
             .lock()
@@ -132,8 +132,8 @@ impl MockDataSource {
 
 #[cfg(test)]
 impl DataSource for MockDataSource {
-    fn subscribe(&mut self, store: Arc<Mutex<FeatureStore>>) {
-        self.store = Some(store);
+    fn subscribe(&mut self, datastore: Arc<Mutex<dyn DataStore>>) {
+        self.data_store = Some(datastore);
     }
 }
 
@@ -151,24 +151,26 @@ fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
     })
 }
 
-fn process_put(store: &mut FeatureStore, event: es::Event) -> Result<()> {
+fn process_put(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let put: PutData = parse_event_data(&event)?;
     if put.path == "/" {
-        store.init(put.data);
+        data_store.init(put.data);
         Ok(())
     } else {
         Err(Error::InvalidPutPath(put.path))
     }
 }
 
-fn process_patch(store: &mut FeatureStore, event: es::Event) -> Result<()> {
+fn process_patch(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
-    store
+    data_store
         .patch(&patch.path, patch.data)
         .map_err(Error::InvalidUpdate)
 }
 
-fn process_delete(store: &mut FeatureStore, event: es::Event) -> Result<()> {
+fn process_delete(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let delete: DeleteData = parse_event_data(&event)?;
-    store.delete(&delete.path).map_err(Error::InvalidUpdate)
+    data_store
+        .delete(&delete.path)
+        .map_err(Error::InvalidUpdate)
 }

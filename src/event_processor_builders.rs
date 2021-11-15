@@ -11,13 +11,13 @@ const DEFAULT_USER_KEY_SIZE: usize = 1000;
 
 /// Trait which allows creation of event processors. Should be implemented by event processor
 /// builder types.
-pub trait EventProcessorFactory: Send {
+pub trait EventProcessorFactory {
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
     ) -> Result<Arc<Mutex<dyn EventProcessor>>, Error>;
-    fn to_owned(&self) -> Box<dyn EventProcessorFactory + Send>;
+    fn to_owned(&self) -> Box<dyn EventProcessorFactory>;
 }
 
 /// Contains methods for configuring delivery of analytics events.
@@ -80,7 +80,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
         )))
     }
 
-    fn to_owned(&self) -> Box<dyn EventProcessorFactory + Send> {
+    fn to_owned(&self) -> Box<dyn EventProcessorFactory> {
         Box::new(self.clone())
     }
 }

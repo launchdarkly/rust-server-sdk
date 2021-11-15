@@ -27,12 +27,13 @@ mod client;
 mod config;
 mod data_source;
 mod data_source_builders;
+mod data_store;
+mod data_store_builders;
 mod event_processor;
 mod event_processor_builders;
 mod event_sink;
 mod events;
 mod service_endpoints;
-mod store;
 mod test_common;
 
 lazy_static! {

@@ -10,13 +10,13 @@ use super::data_source;
 const DEFAULT_INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 /// Trait which allows creation of data sources. Should be implemented by data source builder types.
-pub trait DataSourceFactory: Send {
+pub trait DataSourceFactory {
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
     ) -> Result<Arc<Mutex<dyn DataSource>>, Error>;
-    fn to_owned(&self) -> Box<dyn DataSourceFactory + Send>;
+    fn to_owned(&self) -> Box<dyn DataSourceFactory>;
 }
 
 /// Contains methods for configuring the streaming data source.
@@ -71,7 +71,7 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
         Ok(Arc::new(Mutex::new(data_source)))
     }
 
-    fn to_owned(&self) -> Box<dyn DataSourceFactory + Send> {
+    fn to_owned(&self) -> Box<dyn DataSourceFactory> {
         Box::new(self.clone())
     }
 }
@@ -115,7 +115,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         return Ok(self.data_source.as_ref().unwrap().clone());
     }
 
-    fn to_owned(&self) -> Box<dyn DataSourceFactory + Send> {
+    fn to_owned(&self) -> Box<dyn DataSourceFactory> {
         Box::new(self.clone())
     }
 }
