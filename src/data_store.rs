@@ -125,3 +125,121 @@ impl Default for InMemoryDataStore {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_common::{basic_flag, basic_segment};
+    use maplit::hashmap;
+    use test_case::test_case;
+
+    fn basic_data() -> AllData {
+        AllData {
+            flags: hashmap! {"flag-key".into() => basic_flag("flag-key")},
+            segments: hashmap! {"segment-key".into() => basic_segment("segment-key")},
+        }
+    }
+
+    #[test]
+    fn in_memory_can_be_initialized() {
+        let mut data_store = InMemoryDataStore::new();
+        assert!(data_store.flag("flag-key").is_none());
+        assert!(data_store.segment("segment-key").is_none());
+
+        data_store.init(basic_data());
+
+        assert_eq!(data_store.flag("flag-key").unwrap().key, "flag-key");
+        assert_eq!(
+            data_store.segment("segment-key").unwrap().key,
+            "segment-key"
+        );
+    }
+
+    #[test]
+    fn in_memory_can_return_all_flags() {
+        let mut data_store = InMemoryDataStore::new();
+
+        assert!(!data_store.all_flags().contains_key("flag-key"));
+        data_store.init(basic_data());
+        assert!(data_store.all_flags().contains_key("flag-key"));
+    }
+
+    #[test]
+    fn in_memory_patch_can_upsert_flag() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        // Verify patch can insert
+        assert!(data_store.flag("flag-does-not-exist").is_none());
+        let patch_target = PatchTarget::Flag(basic_flag("flag-does-not-exist"));
+        let result = data_store.patch("/flags/flag-does-not-exist".into(), patch_target);
+        assert!(result.is_ok());
+        assert_eq!(
+            data_store.flag("flag-does-not-exist").unwrap().key,
+            "flag-does-not-exist"
+        );
+
+        // Verify that patch can update
+        let patch_target = PatchTarget::Flag(basic_flag("new-key"));
+        let result = data_store.patch("/flags/flag-key".into(), patch_target);
+        assert!(result.is_ok());
+        assert_eq!(data_store.flag("flag-key").unwrap().key, "new-key");
+    }
+
+    #[test]
+    fn in_memory_patch_can_upsert_segment() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        // Verify patch can insert
+        assert!(data_store.segment("segment-does-not-exist").is_none());
+        let patch_target = PatchTarget::Segment(basic_segment("segment-does-not-exist"));
+        let result = data_store.patch("/segments/segment-does-not-exist".into(), patch_target);
+        assert!(result.is_ok());
+        assert_eq!(
+            data_store.segment("segment-does-not-exist").unwrap().key,
+            "segment-does-not-exist"
+        );
+
+        // Verify that patch can update
+        let patch_target = PatchTarget::Segment(basic_segment("new-key"));
+        let result = data_store.patch("/segments/my-boolean-segment".into(), patch_target);
+        assert!(result.is_ok());
+        assert_eq!(
+            data_store.segment("my-boolean-segment").unwrap().key,
+            "new-key"
+        );
+    }
+
+    #[test_case("/invalid-path/flag-key", PatchTarget::Flag(basic_flag("flag-key")); "invalid path")]
+    #[test_case("/flags/flag-key", PatchTarget::Segment(basic_segment("segment-key")); "flag with segment target")]
+    #[test_case("/flags/flag-key", PatchTarget::Other(serde_json::Value::Null); "flag with other target")]
+    #[test_case("/segments/segment-key", PatchTarget::Flag(basic_flag("flag-key")); "segment with flag target")]
+    #[test_case("/segments/segment-key", PatchTarget::Other(serde_json::Value::Null); "segment with other target")]
+    fn in_memory_invalid_patch_is_err(path: &str, patch_target: PatchTarget) {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        assert!(data_store.patch(path, patch_target).is_err());
+    }
+
+    #[test]
+    fn in_memory_can_delete_flag() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        assert!(data_store.flag("flag-key").is_some());
+        assert!(data_store.delete("/flags/flag-key").is_ok());
+        assert!(data_store.flag("flag-key").is_none());
+    }
+
+    #[test]
+    fn in_memory_can_delete_segment() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        assert!(data_store.segment("segment-key").is_some());
+        assert!(data_store.delete("/segments/segment-key").is_ok());
+        assert!(data_store.segment("segment-key").is_none());
+    }
+}

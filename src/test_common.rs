@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use rust_server_sdk_evaluation::Flag;
+use rust_server_sdk_evaluation::{Flag, Segment};
 
 pub const FLOAT_TO_INT_MAX: i64 = 9007199254740991;
 
@@ -68,6 +68,21 @@ pub fn basic_json_flag(key: &str) -> Flag {
                 "usingEnvironmentId": false
             }},
             "salt": "kosher"
+        }}"#,
+        serde_json::Value::String(key.to_string())
+    ))
+    .unwrap()
+}
+
+pub fn basic_segment(key: &str) -> Segment {
+    serde_json::from_str(&format!(
+        r#"{{
+            "key": {},
+            "included": ["alice"],
+            "excluded": [],
+            "rules": [],
+            "salt": "salty",
+            "version": 1
         }}"#,
         serde_json::Value::String(key.to_string())
     ))
