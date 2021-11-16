@@ -1,6 +1,6 @@
 use futures::future;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::{io, thread};
 
 use rust_server_sdk_evaluation::{self as eval, Detail, Flag, FlagValue, User};
@@ -95,17 +95,12 @@ impl Client {
     /// Starts a client in a background thread, with its own tokio runtime.
     // TODO: Ryan. I am not sure where we should put this. It seems like configuring an
     // execution environment is different than just the client instance.
-    pub fn start(config: Config) -> Result<Arc<RwLock<Client>>> {
+    pub fn start(config: Config) -> Result<Client> {
         let client = Self::build(config)?;
-        let rw = Arc::new(RwLock::new(client));
 
         let runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
         let _guard = runtime.enter();
 
-        // Important that we take the write lock before returning the RwLock to the caller:
-        // otherwise caller can grab the read lock first and prevent the client from initialising
-        let w = rw.clone();
-        let client = w.write().unwrap();
         client.start_with_default_executor();
 
         thread::spawn(move || {
@@ -114,7 +109,7 @@ impl Client {
             runtime.block_on(future::pending::<()>())
         });
 
-        Ok(rw)
+        Ok(client)
     }
 
     pub fn flush(&self) -> Result<()> {
@@ -388,6 +383,7 @@ mod tests {
     use crate::ConfigBuilder;
     use rust_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
+    use std::sync::RwLock;
 
     use crate::data_source::{MockDataSource, PatchData};
     use crate::data_source_builders::MockDataSourceBuilder;

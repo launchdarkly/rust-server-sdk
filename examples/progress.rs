@@ -71,8 +71,6 @@ fn main() {
 
     let client = Client::start(config_builder.build()).expect("failed to build client");
 
-    let ld = client.read().unwrap();
-
     let mut counter = ProgressCounter { count: 0 };
 
     counter.start();
@@ -83,10 +81,10 @@ fn main() {
     while counter.count < 100 {
         user.attribute("progress", counter.count as f64).unwrap();
 
-        let millis = ld.int_variation(&user, "progress-delay", 100);
+        let millis = client.int_variation(&user, "progress-delay", 100);
         thread::sleep(Duration::from_millis(millis as u64));
 
-        let increase = ld.bool_variation(&user, "make-progress", false);
+        let increase = client.bool_variation(&user, "make-progress", false);
         if increase {
             counter.inc();
         }

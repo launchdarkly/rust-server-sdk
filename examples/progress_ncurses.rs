@@ -3,7 +3,6 @@ extern crate log;
 
 use std::env;
 use std::process::exit;
-use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -59,7 +58,7 @@ fn main() {
 
     let progress = ProgressBar::new()
         .with_task(move |counter| {
-            fake_load(client, user, counter);
+            fake_load(&client, user, counter);
 
             cb.send(Box::new(display_done)).unwrap();
         })
@@ -71,9 +70,7 @@ fn main() {
     cursive.run();
 }
 
-fn fake_load(ld: Arc<RwLock<Client>>, mut user: User, counter: Counter) {
-    let ld = ld.read().unwrap();
-
+fn fake_load(client: &Client, mut user: User, counter: Counter) {
     while counter.get() < 20 {
         thread::sleep(Duration::from_millis(20));
         counter.tick(1);
@@ -82,10 +79,10 @@ fn fake_load(ld: Arc<RwLock<Client>>, mut user: User, counter: Counter) {
     while counter.get() < 100 {
         user.attribute("progress", counter.get() as i64).unwrap();
 
-        let millis = ld.int_variation(&user, "progress-delay", 100);
+        let millis = client.int_variation(&user, "progress-delay", 100);
         thread::sleep(Duration::from_millis(millis as u64));
 
-        let increase = ld.bool_variation(&user, "make-progress", false);
+        let increase = client.bool_variation(&user, "make-progress", false);
 
         if increase {
             counter.tick(1);
