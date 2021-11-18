@@ -1,11 +1,13 @@
 use futures::future;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{io, thread};
 
 use rust_server_sdk_evaluation::{self as eval, Detail, Flag, FlagValue, User};
 use serde::Serialize;
 use thiserror::Error;
+use tokio::sync::Semaphore;
 
 use super::config::Config;
 use super::data_source::DataSource;
@@ -26,6 +28,30 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(PartialEq, Copy, Clone, Debug)]
+enum ClientInitState {
+    Initializing = 0,
+    Initialized = 1,
+    InitializationFailed = 2,
+}
+
+impl PartialEq<usize> for ClientInitState {
+    fn eq(&self, other: &usize) -> bool {
+        *self as usize == *other
+    }
+}
+
+impl From<usize> for ClientInitState {
+    fn from(val: usize) -> Self {
+        match val {
+            0 => ClientInitState::Initializing,
+            1 => ClientInitState::Initialized,
+            2 => ClientInitState::InitializationFailed,
+            _ => unreachable!(),
+        }
+    }
+}
 
 /// A client for the LaunchDarkly API.
 ///
@@ -61,8 +87,10 @@ pub struct Client {
     data_source: Arc<Mutex<dyn DataSource>>,
     data_store: Arc<Mutex<dyn DataStore>>,
     inline_users_in_events: bool,
+    init_notify: Arc<Semaphore>,
+    init_state: Arc<AtomicUsize>,
     // TODO: Once we need the config for diagnostic events, then we should add this.
-    // config: Arc<Mutex<Config>>,
+    // config: Arc<Mutex<Config>>
 }
 
 impl Client {
@@ -81,15 +109,33 @@ impl Client {
             data_source,
             data_store,
             inline_users_in_events: config.inline_users_in_events(),
+            init_notify: Arc::new(Semaphore::new(0)),
+            init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
         })
     }
 
     /// Starts a client in the current thread, which must have a default tokio runtime.
     pub fn start_with_default_executor(&self) {
-        self.data_source
-            .lock()
-            .unwrap()
-            .subscribe(self.data_store.clone());
+        // These clones are going to move into the closure, we
+        // do not want to move or reference `self`, because
+        // then lifetimes will get involved.
+        let notify = self.init_notify.clone();
+        let init_state = self.init_state.clone();
+
+        self.data_source.lock().unwrap().subscribe(
+            self.data_store.clone(),
+            Arc::new(move |success| {
+                init_state.store(
+                    (if success {
+                        ClientInitState::Initialized
+                    } else {
+                        ClientInitState::InitializationFailed
+                    }) as usize,
+                    Ordering::SeqCst,
+                );
+                notify.add_permits(1);
+            }),
+        );
     }
 
     /// Starts a client in a background thread, with its own tokio runtime.
@@ -110,6 +156,28 @@ impl Client {
         });
 
         Ok(client)
+    }
+
+    /// This is an async method that will resolve once initialization is complete.
+    /// Initialization being complete does not mean that initialization was a success.
+    /// The return value from the method indicates if the client successfully initialized.
+    pub async fn initialized_async(&self) -> bool {
+        // If the client is not initialized, then we need to wait for it to be initialized.
+        // Because we are using atomic types, and not a lock, then there is still the possibility
+        // that the value will change between the read and when we wait. We use a semaphore to wait,
+        // and we do not forget the permit, therefore if the permit has been added, then we will get
+        // it very quickly and reduce blocking.
+        if ClientInitState::Initialized != self.init_state.load(Ordering::SeqCst) {
+            let _permit = self.init_notify.acquire().await;
+        }
+        ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
+    }
+
+    /// This function synchronously returns if the SDK is initialized.
+    /// In the case of unrecoverable errors in establishing a connection it is possible for the
+    /// SDK to never become initialized.
+    pub fn initialized(&self) -> bool {
+        ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
     }
 
     pub fn flush(&self) -> Result<()> {
@@ -350,7 +418,15 @@ impl Client {
         flag_key: &str,
         default: FlagValue,
     ) -> (Option<Flag>, Detail<FlagValue>) {
+        if !self.initialized() {
+            return (
+                None,
+                Detail::err_default(eval::Error::ClientNotReady, default),
+            );
+        }
+
         let data_store = self.data_store.lock().unwrap();
+
         let flag = if let Some(flag) = data_store.flag(flag_key) {
             flag
         } else {
@@ -384,6 +460,7 @@ mod tests {
     use rust_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
     use std::sync::RwLock;
+    use tokio::time::Instant;
 
     use crate::data_source::{MockDataSource, PatchData};
     use crate::data_source_builders::MockDataSourceBuilder;
@@ -394,6 +471,19 @@ mod tests {
     use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
 
     use super::*;
+
+    #[tokio::test]
+    async fn client_asynchronously_initializes() {
+        let (client, _updates, _events) = make_mocked_client_with_delay(1000);
+        client.start_with_default_executor();
+
+        let now = Instant::now();
+        let initialized = client.initialized_async().await;
+        let elapsed_time = now.elapsed();
+        assert!(initialized);
+        // Give ourself a good margin for thread scheduling.
+        assert!(elapsed_time.as_millis() > 500)
+    }
 
     #[test]
     // TODO(ch107017) split this test up: test data_source and event_processor separately and
@@ -599,9 +689,18 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_detail_handles_unknown_flags() {
-        let (client, _updates, events) = make_mocked_client();
+    fn evaluate_detail_handles_flag_not_found() {
+        let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
+        updates
+            .lock()
+            .unwrap()
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(basic_flag("myFlag")),
+            })
+            .expect("patch should apply");
+
         let user = User::with_key("bob").build();
 
         let detail = client.evaluate_detail(&user, "non-existent-flag", FlagValue::Bool(false));
@@ -609,6 +708,37 @@ mod tests {
         assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
         assert_that(&detail.reason).is_equal_to(Reason::Error {
             error: eval::Error::FlagNotFound,
+        });
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(2);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[1].clone() {
+            let variation_key = VariationKey {
+                flag_key: "non-existent-flag".into(),
+                version: None,
+                variation: None,
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        } else {
+            panic!("Event should be a summary type");
+        }
+    }
+
+    #[tokio::test]
+    async fn evaluate_detail_handles_client_not_ready() {
+        let (client, _updates, events) = make_mocked_client_with_delay(1000);
+        client.start_with_default_executor();
+        let user = User::with_key("bob").build();
+
+        let detail = client.evaluate_detail(&user, "non-existent-flag", FlagValue::Bool(false));
+
+        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
+        assert_that(&detail.reason).is_equal_to(Reason::Error {
+            error: eval::Error::ClientNotReady,
         });
         client.flush().expect("flush should succeed");
 
@@ -701,8 +831,10 @@ mod tests {
         Ok(())
     }
 
-    fn make_mocked_client() -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
-        let updates = Arc::new(Mutex::new(MockDataSource::new()));
+    fn make_mocked_client_with_delay(
+        delay: u64,
+    ) -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
+        let updates = Arc::new(Mutex::new(MockDataSource::new_with_init_delay(delay)));
         let events = Arc::new(RwLock::new(MockSink::new()));
 
         let config = ConfigBuilder::new("sdk-key")
@@ -713,5 +845,9 @@ mod tests {
         let client = Client::build(config).expect("Should be built.");
 
         (client, updates, events)
+    }
+
+    fn make_mocked_client() -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
+        make_mocked_client_with_delay(0)
     }
 }

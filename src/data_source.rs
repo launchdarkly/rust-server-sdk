@@ -42,7 +42,11 @@ pub(crate) struct DeleteData {
 }
 
 pub trait DataSource: Send {
-    fn subscribe(&mut self, data_store: Arc<Mutex<dyn DataStore>>);
+    fn subscribe(
+        &mut self,
+        data_store: Arc<Mutex<dyn DataStore>>,
+        init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+    );
 }
 
 pub struct StreamingDataSource {
@@ -72,10 +76,16 @@ impl StreamingDataSource {
 }
 
 impl DataSource for StreamingDataSource {
-    fn subscribe(&mut self, data_store: Arc<Mutex<dyn DataStore>>) {
+    fn subscribe(
+        &mut self,
+        data_store: Arc<Mutex<dyn DataStore>>,
+        init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+    ) {
         let mut event_stream = Box::pin(self.es_client.stream());
 
         tokio::spawn(async move {
+            let mut first_pass = true;
+            let mut init_success = true;
             loop {
                 let event = match event_stream.try_next().await {
                     Ok(Some(event)) => event,
@@ -101,7 +111,15 @@ impl DataSource for StreamingDataSource {
                     _ => Err(Error::InvalidEventType(event.event_type)),
                 };
                 if let Err(e) = stored {
+                    init_success = false;
                     error!("error processing update: {:?}", e);
+                }
+                // Only want to notify for the first event.
+                // TODO: When error handling is added this should happen once we are successful,
+                // or if we have encountered an unrecoverable error.
+                if first_pass {
+                    (init_complete)(init_success);
+                    first_pass = false;
                 }
             }
         });
@@ -111,12 +129,16 @@ impl DataSource for StreamingDataSource {
 #[cfg(test)]
 pub(crate) struct MockDataSource {
     data_store: Option<Arc<Mutex<dyn DataStore>>>,
+    delay_init: u64,
 }
 
 #[cfg(test)]
 impl MockDataSource {
-    pub fn new() -> Self {
-        return MockDataSource { data_store: None };
+    pub fn new_with_init_delay(delay_init: u64) -> Self {
+        return MockDataSource {
+            data_store: None,
+            delay_init,
+        };
     }
 
     pub fn patch(&self, patch: PatchData) -> Result<()> {
@@ -132,8 +154,21 @@ impl MockDataSource {
 
 #[cfg(test)]
 impl DataSource for MockDataSource {
-    fn subscribe(&mut self, datastore: Arc<Mutex<dyn DataStore>>) {
+    fn subscribe(
+        &mut self,
+        datastore: Arc<Mutex<dyn DataStore>>,
+        init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+    ) {
         self.data_store = Some(datastore);
+        let delay_init = self.delay_init;
+        if self.delay_init != 0 {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(delay_init)).await;
+                (init_complete)(true);
+            });
+        } else {
+            (init_complete)(true);
+        }
     }
 }
 

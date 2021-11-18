@@ -78,6 +78,12 @@ async fn main() {
 
     let mut interval = time::interval(Duration::from_secs(5));
 
+    let initialized = client.initialized_async().await;
+
+    if !initialized {
+        error!("The client failed to initialize!");
+    }
+
     loop {
         interval.tick().await;
 
