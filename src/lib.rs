@@ -16,11 +16,11 @@ pub use rust_server_sdk_evaluation::{
 
 pub use client::Client;
 // Re-export
-pub use client::Error as ClientError;
+pub use client::{BuildError, FlushError, StartError};
 pub use config::{Config, ConfigBuilder};
-pub use data_source_builders::StreamingDataSourceBuilder;
+pub use data_source_builders::{BuildError as DataSourceBuildError, StreamingDataSourceBuilder};
 pub use event_processor::EventProcessor;
-pub use event_processor_builders::EventProcessorBuilder;
+pub use event_processor_builders::{BuildError as EventProcessorBuildError, EventProcessorBuilder};
 pub use service_endpoints::ServiceEndpointsBuilder;
 
 mod client;

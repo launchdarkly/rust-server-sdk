@@ -1,10 +1,17 @@
-use super::client::Error;
 use super::data_store::{DataStore, InMemoryDataStore};
 use std::sync::{Arc, Mutex};
+use thiserror::Error;
+
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("data store factory failed to build: {0}")]
+    InvalidConfig(String),
+}
 
 /// Trait which allows creation of data stores. Should be implemented by data store builder types.
 pub trait DataStoreFactory {
-    fn build(&self) -> Result<Arc<Mutex<dyn DataStore>>, Error>;
+    fn build(&self) -> Result<Arc<Mutex<dyn DataStore>>, BuildError>;
     fn to_owned(&self) -> Box<dyn DataStoreFactory>;
 }
 
@@ -21,7 +28,7 @@ impl InMemoryDataStoreBuilder {
 }
 
 impl DataStoreFactory for InMemoryDataStoreBuilder {
-    fn build(&self) -> Result<Arc<Mutex<dyn DataStore>>, Error> {
+    fn build(&self) -> Result<Arc<Mutex<dyn DataStore>>, BuildError> {
         Ok(Arc::new(Mutex::new(InMemoryDataStore::new())))
     }
 

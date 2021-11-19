@@ -12,8 +12,11 @@ use tokio::sync::Semaphore;
 
 use super::config::Config;
 use super::data_source::DataSource;
+use super::data_source_builders::BuildError as DataSourceError;
 use super::data_store::DataStore;
+use super::data_store_builders::BuildError as DataStoreError;
 use super::event_processor::EventProcessor;
+use super::event_processor_builders::BuildError as EventProcessorError;
 use super::events::{Event, EventFactory};
 
 struct EventsScope {
@@ -47,19 +50,44 @@ impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum BuildError {
     #[error("invalid client config: {0}")]
     InvalidConfig(String),
-    #[error("couldn't spawn background thread for client: {0}")]
-    SpawnFailed(io::Error),
-    #[error("failed to flush events: {0}")]
-    FlushFailed(String),
-    #[error("unexpected internal error: {0}")]
-    Internal(String),
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+impl From<DataSourceError> for BuildError {
+    fn from(error: DataSourceError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
+}
+
+impl From<DataStoreError> for BuildError {
+    fn from(error: DataStoreError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
+}
+
+impl From<EventProcessorError> for BuildError {
+    fn from(error: EventProcessorError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
+}
+
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum StartError {
+    #[error("couldn't spawn background thread for client: {0}")]
+    SpawnFailed(io::Error),
+}
+
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum FlushError {
+    #[error("failed to flush events: {0}")]
+    FlushFailed(String),
+}
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 enum ClientInitState {
@@ -93,8 +121,8 @@ impl From<usize> for ClientInitState {
 ///
 /// Creating a client, with default configuration.
 /// ```
-/// # use launchdarkly_server_sdk::{Client, ConfigBuilder, ClientError};
-/// # fn main() -> Result<(), ClientError> {
+/// # use launchdarkly_server_sdk::{Client, ConfigBuilder, BuildError};
+/// # fn main() -> Result<(), BuildError> {
 ///     let ld_client = Client::build(ConfigBuilder::new("sdk-key").build())?;
 /// #   Ok(())
 /// # }
@@ -102,8 +130,8 @@ impl From<usize> for ClientInitState {
 ///
 /// Creating an instance which connects to a relay proxy.
 /// ```
-/// # use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, ClientError};
-/// # fn main() -> Result<(), ClientError> {
+/// # use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, BuildError};
+/// # fn main() -> Result<(), BuildError> {
 ///     let ld_client = Client::build(ConfigBuilder::new("sdk-key")
 ///         .service_endpoints(ServiceEndpointsBuilder::new()
 ///             .relay_proxy("http://my-relay-hostname:8080")
@@ -128,7 +156,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn build(config: Config) -> Result<Self> {
+    pub fn build(config: Config) -> Result<Self, BuildError> {
         let endpoints = config.service_endpoints_builder().build()?;
         let event_processor = config
             .event_processor_builder()
@@ -207,13 +235,13 @@ impl Client {
     /// If your application already has a tokio runtime, then you can use
     /// [crate::Client::start_with_default_executor] and the client will dispatch tasks to
     /// your existing runtime.
-    pub fn start_with_runtime(&self) -> Result<bool> {
+    pub fn start_with_runtime(&self) -> Result<bool, StartError> {
         if self.started.get() {
             return Ok(true);
         }
         self.started.replace(true);
 
-        let runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
+        let runtime = tokio::runtime::Runtime::new().map_err(StartError::SpawnFailed)?;
         let _guard = runtime.enter();
 
         self.start_with_default_executor_internal();
@@ -249,12 +277,12 @@ impl Client {
         ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
     }
 
-    pub fn flush(&self) -> Result<()> {
+    pub fn flush(&self) -> Result<(), FlushError> {
         self.event_processor
             .lock()
             .unwrap()
             .flush()
-            .map_err(Error::FlushFailed)
+            .map_err(FlushError::FlushFailed)
     }
 
     pub fn identify(&self, user: User) {

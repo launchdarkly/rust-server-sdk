@@ -1,4 +1,4 @@
-use super::client::Error;
+use super::client::BuildError;
 
 const DEFAULT_POLLING_BASE_URL: &str = "https://sdk.launchdarkly.com";
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
@@ -115,7 +115,7 @@ impl ServiceEndpointsBuilder {
     /// If some URLs are set, but others are not, then this will return an error.
     /// If no URLs are set, then the default values will be used.
     /// This prevents a combination of custom and default values from being used.
-    pub fn build(&self) -> Result<ServiceEndpoints, Error> {
+    pub fn build(&self) -> Result<ServiceEndpoints, BuildError> {
         match (
             &self.polling_base_url,
             &self.streaming_base_url,
@@ -133,7 +133,7 @@ impl ServiceEndpointsBuilder {
                 streaming_base_url: String::from(DEFAULT_STREAM_BASE_URL),
                 events_base_url: String::from(DEFAULT_EVENTS_BASE_URL),
             }),
-            _ => Err(Error::InvalidConfig(
+            _ => Err(BuildError::InvalidConfig(
                 "If you specify any endpoints,\
              then you must specify all endpoints."
                     .into(),
@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn default_configuration() -> Result<(), Error> {
+    fn default_configuration() -> Result<(), BuildError> {
         let endpoints = ServiceEndpointsBuilder::new().build()?;
         assert_eq!(
             "https://events.launchdarkly.com",
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn full_custom_configuration() -> Result<(), Error> {
+    fn full_custom_configuration() -> Result<(), BuildError> {
         let endpoints = ServiceEndpointsBuilder::new()
             .polling_base_url("https://sdk.my-private-instance.com")
             .streaming_base_url("https://stream.my-private-instance.com")
@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn configure_relay_proxy() -> Result<(), Error> {
+    fn configure_relay_proxy() -> Result<(), BuildError> {
         let endpoints = ServiceEndpointsBuilder::new()
             .relay_proxy("http://my-relay-hostname:8080")
             .build()?;

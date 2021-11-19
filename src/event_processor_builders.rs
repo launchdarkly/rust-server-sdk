@@ -1,13 +1,20 @@
-use super::client::Error;
 use super::event_sink as sink;
 use crate::event_processor::{EventProcessor, EventProcessorImpl};
 use crate::service_endpoints;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use thiserror::Error;
 
 const DEFAULT_FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_EVENT_CAPACITY: usize = 500;
 const DEFAULT_USER_KEY_SIZE: usize = 1000;
+
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("event processor factory failed to build: {0}")]
+    InvalidConfig(String),
+}
 
 /// Trait which allows creation of event processors. Should be implemented by event processor
 /// builder types.
@@ -16,7 +23,7 @@ pub trait EventProcessorFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn EventProcessor>>, Error>;
+    ) -> Result<Arc<Mutex<dyn EventProcessor>>, BuildError>;
     fn to_owned(&self) -> Box<dyn EventProcessorFactory>;
 }
 
@@ -56,10 +63,12 @@ impl EventProcessorFactory for EventProcessorBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn EventProcessor>>, Error> {
+    ) -> Result<Arc<Mutex<dyn EventProcessor>>, BuildError> {
         Ok(Arc::new(Mutex::new(
             reqwest::Url::parse(endpoints.events_base_url())
-                .map_err(|e| Error::InvalidConfig(format!("couldn't parse events_base_url: {}", e)))
+                .map_err(|e| {
+                    BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
+                })
                 .and_then(|base_url| match &self.event_sink {
                     None => EventProcessorImpl::new(
                         base_url,
@@ -68,14 +77,18 @@ impl EventProcessorFactory for EventProcessorBuilder {
                         self.capacity,
                         self.user_keys_capacity,
                     )
-                    .map_err(|e| Error::InvalidConfig(format!("invalid events_base_url: {}", e))),
+                    .map_err(|e| {
+                        BuildError::InvalidConfig(format!("invalid events_base_url: {}", e))
+                    }),
                     Some(event_sink) => EventProcessorImpl::new_with_sink(
                         event_sink.clone(),
                         self.flush_interval,
                         self.capacity,
                         self.user_keys_capacity,
                     )
-                    .map_err(|e| Error::InvalidConfig(format!("invalid events_base_url: {}", e))),
+                    .map_err(|e| {
+                        BuildError::InvalidConfig(format!("invalid events_base_url: {}", e))
+                    }),
                 })?,
         )))
     }

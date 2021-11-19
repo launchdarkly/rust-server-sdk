@@ -1,11 +1,18 @@
-use super::client::Error;
 use super::service_endpoints;
 use crate::data_source::{DataSource, StreamingDataSource};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use thiserror::Error;
 
 #[cfg(test)]
 use super::data_source;
+
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("data source factory failed to build: {0}")]
+    InvalidConfig(String),
+}
 
 const DEFAULT_INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
@@ -15,7 +22,7 @@ pub trait DataSourceFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, Error>;
+    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError>;
     fn to_owned(&self) -> Box<dyn DataSourceFactory>;
 }
 
@@ -61,13 +68,13 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, Error> {
+    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError> {
         let data_source = StreamingDataSource::new(
             endpoints.streaming_base_url(),
             sdk_key,
             self.initial_reconnect_delay,
         )
-        .map_err(|e| Error::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
+        .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
         Ok(Arc::new(Mutex::new(data_source)))
     }
 
@@ -111,7 +118,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         &self,
         _endpoints: &service_endpoints::ServiceEndpoints,
         _sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, Error> {
+    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError> {
         return Ok(self.data_source.as_ref().unwrap().clone());
     }
 
