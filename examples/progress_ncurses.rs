@@ -48,7 +48,8 @@ fn main() {
         }
     }
 
-    let client = Client::start(config_builder.build()).expect("failed to build client");
+    let client = Client::build(config_builder.build()).expect("failed to build client");
+    client.start_with_runtime().expect("failed to start");
 
     let mut cursive = Cursive::default();
 

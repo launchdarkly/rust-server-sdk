@@ -1,4 +1,5 @@
 use futures::future;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -89,6 +90,7 @@ pub struct Client {
     inline_users_in_events: bool,
     init_notify: Arc<Semaphore>,
     init_state: Arc<AtomicUsize>,
+    started: Cell<bool>,
     // TODO: Once we need the config for diagnostic events, then we should add this.
     // config: Arc<Mutex<Config>>
 }
@@ -111,11 +113,20 @@ impl Client {
             inline_users_in_events: config.inline_users_in_events(),
             init_notify: Arc::new(Semaphore::new(0)),
             init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
+            started: Cell::new(false),
         })
     }
 
     /// Starts a client in the current thread, which must have a default tokio runtime.
     pub fn start_with_default_executor(&self) {
+        if self.started.get() {
+            return;
+        }
+        self.started.replace(true);
+        self.start_with_default_executor_internal();
+    }
+
+    fn start_with_default_executor_internal(&self) {
         // These clones are going to move into the closure, we
         // do not want to move or reference `self`, because
         // then lifetimes will get involved.
@@ -138,16 +149,21 @@ impl Client {
         );
     }
 
-    /// Starts a client in a background thread, with its own tokio runtime.
-    // TODO: Ryan. I am not sure where we should put this. It seems like configuring an
-    // execution environment is different than just the client instance.
-    pub fn start(config: Config) -> Result<Client> {
-        let client = Self::build(config)?;
+    /// Creates a new tokio runtime and then starts the client. Tasks from the client will
+    /// be executed on created runtime.
+    /// If your application already has a tokio runtime, then you can use
+    /// [crate::Client::start_with_default_executor] and the client will dispatch tasks to
+    /// your existing runtime.
+    pub fn start_with_runtime(&self) -> Result<bool> {
+        if self.started.get() {
+            return Ok(true);
+        }
+        self.started.replace(true);
 
         let runtime = tokio::runtime::Runtime::new().map_err(Error::SpawnFailed)?;
         let _guard = runtime.enter();
 
-        client.start_with_default_executor();
+        self.start_with_default_executor_internal();
 
         thread::spawn(move || {
             // this thread takes ownership of runtime and prevents it from being dropped before the
@@ -155,7 +171,7 @@ impl Client {
             runtime.block_on(future::pending::<()>())
         });
 
-        Ok(client)
+        Ok(true)
     }
 
     /// This is an async method that will resolve once initialization is complete.
@@ -730,7 +746,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_detail_handles_client_not_ready() {
-        let (client, _updates, events) = make_mocked_client_with_delay(1000);
+        let (client, _updates, events) = make_mocked_client_with_delay(u64::MAX);
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
