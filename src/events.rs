@@ -67,8 +67,8 @@ impl ContextKind {
     }
 }
 
-impl From<&User> for ContextKind {
-    fn from(user: &User) -> Self {
+impl From<User> for ContextKind {
+    fn from(user: User) -> Self {
         match user.anonymous() {
             Some(true) => Self::AnonymousUser,
             Some(false) | None => Self::User,
@@ -166,36 +166,57 @@ impl Display for Event {
     }
 }
 
-impl Event {
+pub struct EventFactory {
+    send_reason: bool,
+    inline_users_in_events: bool,
+}
+
+impl EventFactory {
+    pub fn new(send_reason: bool, inline_users_in_events: bool) -> Self {
+        Self {
+            send_reason,
+            inline_users_in_events,
+        }
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    }
+
     pub fn new_unknown_flag_event(
+        &self,
         flag_key: &str,
-        user: MaybeInlinedUser,
+        user: User,
         detail: Detail<FlagValue>,
         default: FlagValue,
-        send_reason: bool,
-    ) -> Self {
-        Event::new_feature_request_event(flag_key, user, None, detail, default, send_reason)
+    ) -> Event {
+        self.new_feature_request_event(flag_key, user, None, detail, default, None)
     }
 
     pub fn new_eval_event(
+        &self,
         flag_key: &str,
-        user: MaybeInlinedUser,
+        user: User,
         flag: &Flag,
         detail: Detail<FlagValue>,
         default: FlagValue,
-        send_reason: bool,
-    ) -> Self {
-        Event::new_feature_request_event(flag_key, user, Some(flag), detail, default, send_reason)
+        prereq_of: Option<String>,
+    ) -> Event {
+        self.new_feature_request_event(flag_key, user, Some(flag), detail, default, prereq_of)
     }
 
     fn new_feature_request_event(
+        &self,
         flag_key: &str,
-        user: MaybeInlinedUser,
+        user: User,
         flag: Option<&Flag>,
         detail: Detail<FlagValue>,
         default: FlagValue,
-        send_reason: bool,
-    ) -> Self {
+        prereq_of: Option<String>,
+    ) -> Event {
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO(ch108604) that is ugly, use the type system to fix it
         let value = detail.value.unwrap();
@@ -211,7 +232,7 @@ impl Event {
             require_experiment_data = false;
         }
 
-        let reason = if send_reason || require_experiment_data {
+        let reason = if self.send_reason || require_experiment_data {
             Some(detail.reason)
         } else {
             None
@@ -221,7 +242,7 @@ impl Event {
             user_key: user.key().to_string(),
             base: BaseEvent {
                 creation_date: Self::now(),
-                user: user.clone(),
+                user: MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
             },
             key: flag_key.to_owned(),
             default,
@@ -229,13 +250,13 @@ impl Event {
             value,
             variation: detail.variation_index,
             version: flag.map(|f| f.version),
-            prereq_of: None,
-            context_kind: user.user().into(),
+            prereq_of,
+            context_kind: user.into(),
             track_events: flag_track_events || require_experiment_data,
         })
     }
 
-    pub fn new_identify(user: User) -> Self {
+    pub fn new_identify(&self, user: User) -> Event {
         Event::Identify(IdentifyEvent {
             key: user.key().to_string(),
             base: BaseEvent {
@@ -245,39 +266,42 @@ impl Event {
         })
     }
 
-    pub fn new_alias(user: User, previous_user: User) -> Self {
+    pub fn new_alias(&self, user: User, previous_user: User) -> Event {
         Event::Alias(AliasEvent {
             base: BaseEvent {
                 creation_date: Self::now(),
                 user: MaybeInlinedUser::new(false, user.clone()),
             },
             key: user.key().to_string(),
-            context_kind: (&user).into(),
+            context_kind: user.into(),
             previous_key: previous_user.key().to_string(),
-            previous_context_kind: (&previous_user).into(),
+            previous_context_kind: previous_user.into(),
         })
     }
 
     pub fn new_custom(
-        user: MaybeInlinedUser,
+        &self,
+        user: User,
         key: impl Into<String>,
         metric_value: Option<f64>,
         data: impl Serialize,
-    ) -> serde_json::Result<Self> {
+    ) -> serde_json::Result<Event> {
         let data = serde_json::to_value(data)?;
 
         Ok(Event::Custom(CustomEvent {
             base: BaseEvent {
                 creation_date: Self::now(),
-                user: user.clone(),
+                user: MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
             },
             key: key.into(),
             metric_value,
             data,
-            context_kind: user.user().into(),
+            context_kind: user.into(),
         }))
     }
+}
 
+impl Event {
     pub fn to_index_event(&self) -> Option<IndexEvent> {
         let base = match self {
             Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
@@ -293,13 +317,6 @@ impl Event {
         let mut base = base.clone();
         base.user = base.user.force_inlined();
         Some(base)
-    }
-
-    fn now() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
     }
 
     #[cfg(test)]
@@ -539,7 +556,6 @@ mod tests {
             user.anonymous(b);
         }
 
-        let user = MaybeInlinedUser::Inlined(user.build());
         let fallthrough = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -548,13 +564,14 @@ mod tests {
             },
         };
 
-        let eval_event = Event::new_eval_event(
+        let event_factory = EventFactory::new(true, true);
+        let eval_event = event_factory.new_eval_event(
             &flag.key.clone(),
-            user.clone(),
+            user.build(),
             &flag,
             fallthrough.clone(),
             default.clone(),
-            true,
+            None,
         );
 
         if let Event::FeatureRequest(event) = eval_event {
@@ -581,7 +598,8 @@ mod tests {
             .anonymous(previous_is_anonymous)
             .build();
 
-        let event = Event::new_alias(user.clone(), previous_user.clone());
+        let event_factory = EventFactory::new(true, true);
+        let event = event_factory.new_alias(user.clone(), previous_user.clone());
 
         if let Event::Alias(alias) = event {
             assert_eq!(alias.key, user.key());
@@ -607,9 +625,8 @@ mod tests {
             user.anonymous(b);
         }
 
-        let user = MaybeInlinedUser::Inlined(user.build());
-
-        let custom_event = Event::new_custom(user.clone(), &flag.key.clone(), None, "");
+        let event_factory = EventFactory::new(true, true);
+        let custom_event = event_factory.new_custom(user.build(), &flag.key.clone(), None, "");
 
         if let Ok(Event::Custom(event)) = custom_event {
             assert_eq!(event.context_kind, context_kind);
@@ -622,8 +639,7 @@ mod tests {
     fn serializes_eval_event() {
         let flag = basic_flag("flag");
         let default = FlagValue::from(false);
-        let user =
-            MaybeInlinedUser::Inlined(User::with_key("alice".to_string()).anonymous(true).build());
+        let user = User::with_key("alice".to_string()).anonymous(true).build();
         let fallthrough = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -632,13 +648,14 @@ mod tests {
             },
         };
 
-        let mut eval_event = Event::new_eval_event(
+        let event_factory = EventFactory::new(true, true);
+        let mut eval_event = event_factory.new_eval_event(
             &flag.key.clone(),
-            user.clone(),
+            user,
             &flag,
             fallthrough.clone(),
             default.clone(),
-            true,
+            None,
         );
         // fix creation date so JSON is predictable
         eval_event.base_mut().unwrap().creation_date = 1234;
@@ -715,7 +732,7 @@ mod tests {
 
         let flag = basic_flag("flag");
         let default = FlagValue::from(false);
-        let user = MaybeInlinedUser::Inlined(User::with_key("alice".to_string()).build());
+        let user = User::with_key("alice".to_string()).build();
 
         let value = FlagValue::from(false);
         let variation_index = 1;
@@ -726,7 +743,7 @@ mod tests {
 
         let fallthrough_request = FeatureRequestEvent {
             base: BaseEvent {
-                user: user.clone(),
+                user: MaybeInlinedUser::Inlined(user.clone()),
                 creation_date: eval_at,
             },
             key: flag.key.clone(),
@@ -737,7 +754,7 @@ mod tests {
             version: Some(flag.version),
             reason: Some(reason),
             prereq_of: None,
-            context_kind: user.user().into(),
+            context_kind: user.into(),
             track_events: false,
         };
 

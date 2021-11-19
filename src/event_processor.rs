@@ -241,7 +241,7 @@ mod tests {
     use spectral::prelude::*;
 
     use super::*;
-    use crate::test_common::basic_flag;
+    use crate::{events::EventFactory, test_common::basic_flag};
 
     fn make_test_sink(events: &Arc<RwLock<sink::MockSink>>) -> EventProcessorImpl {
         EventProcessorImpl::new_with_sink(events.clone(), Duration::from_millis(100), 1000, 1000)
@@ -254,7 +254,7 @@ mod tests {
         let ep = make_test_sink(&events);
 
         let flag = basic_flag("flag");
-        let user = MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
+        let user = User::with_key("foo".to_string()).build();
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -263,13 +263,14 @@ mod tests {
             },
         };
 
-        let feature_request = Event::new_eval_event(
+        let event_factory = EventFactory::new(true, true);
+        let feature_request = event_factory.new_eval_event(
             &flag.key,
-            user.clone(),
+            user,
             &flag,
             detail.clone(),
             FlagValue::from(false),
-            true,
+            None,
         );
         ep.send(feature_request.clone())
             .expect("send should succeed");
@@ -295,7 +296,7 @@ mod tests {
 
         let mut flag = basic_flag("flag");
         flag.track_events = true;
-        let user = MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
+        let user = User::with_key("foo".to_string()).build();
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -304,13 +305,14 @@ mod tests {
             },
         };
 
-        let feature_request = Event::new_eval_event(
+        let event_factory = EventFactory::new(true, true);
+        let feature_request = event_factory.new_eval_event(
             &flag.key,
-            user.clone(),
+            user,
             &flag,
             detail.clone(),
             FlagValue::from(false),
-            true,
+            None,
         );
         ep.send(feature_request.clone())
             .expect("send should succeed");
@@ -382,11 +384,9 @@ mod tests {
         )
         .expect("flag should parse");
 
-        let user_track_rule =
-            MaybeInlinedUser::Inlined(User::with_key("do-track".to_string()).build());
-        let user_notrack_rule =
-            MaybeInlinedUser::Inlined(User::with_key("no-track".to_string()).build());
-        let user_fallthrough = MaybeInlinedUser::Inlined(User::with_key("foo".to_string()).build());
+        let user_track_rule = User::with_key("do-track".to_string()).build();
+        let user_notrack_rule = User::with_key("no-track".to_string()).build();
+        let user_fallthrough = User::with_key("foo".to_string()).build();
 
         let detail_track_rule = Detail {
             value: Some(FlagValue::from(true)),
@@ -414,29 +414,30 @@ mod tests {
             },
         };
 
-        let fre_track_rule = Event::new_eval_event(
+        let event_factory = EventFactory::new(true, true);
+        let fre_track_rule = event_factory.new_eval_event(
             &flag.key,
             user_track_rule,
             &flag,
             detail_track_rule,
             FlagValue::from(false),
-            true,
+            None,
         );
-        let fre_notrack_rule = Event::new_eval_event(
+        let fre_notrack_rule = event_factory.new_eval_event(
             &flag.key,
             user_notrack_rule,
             &flag,
             detail_notrack_rule,
             FlagValue::from(false),
-            true,
+            None,
         );
-        let fre_fallthrough = Event::new_eval_event(
+        let fre_fallthrough = event_factory.new_eval_event(
             &flag.key,
             user_fallthrough,
             &flag,
             detail_fallthrough,
             FlagValue::from(false),
-            true,
+            None,
         );
 
         for fre in vec![&fre_track_rule, &fre_notrack_rule, &fre_fallthrough] {
@@ -479,7 +480,7 @@ mod tests {
         let ep = make_test_sink(&events);
 
         let flag = basic_flag("flag");
-        let user = MaybeInlinedUser::Inlined(User::with_key("bar".to_string()).build());
+        let user = User::with_key("bar".to_string()).build();
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -488,13 +489,14 @@ mod tests {
             },
         };
 
-        let feature_request = Event::new_eval_event(
+        let event_factory = EventFactory::new(true, true);
+        let feature_request = event_factory.new_eval_event(
             &flag.key,
-            user.clone(),
+            user,
             &flag,
             detail.clone(),
             FlagValue::from(false),
-            true,
+            None,
         );
         ep.send(feature_request.clone())
             .expect("send should succeed");

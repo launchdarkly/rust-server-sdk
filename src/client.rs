@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{io, thread};
 
-use rust_server_sdk_evaluation::{self as eval, Detail, Flag, FlagValue, User};
+use rust_server_sdk_evaluation::{self as eval, Detail, FlagValue, PrerequisiteEvent, User};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -14,7 +14,38 @@ use super::config::Config;
 use super::data_source::DataSource;
 use super::data_store::DataStore;
 use super::event_processor::EventProcessor;
-use super::events::{Event, MaybeInlinedUser};
+use super::events::{Event, EventFactory};
+
+struct EventsScope {
+    disabled: bool,
+    event_factory: EventFactory,
+    prerequisite_event_recorder: Box<dyn eval::PrerequisiteEventRecorder + Send + Sync>,
+}
+
+struct PrerequisiteEventRecorder {
+    event_factory: EventFactory,
+    event_processor: Arc<Mutex<dyn EventProcessor>>,
+}
+
+impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
+    fn record(&self, event: PrerequisiteEvent) {
+        let evt = self.event_factory.new_eval_event(
+            &event.prerequisite_flag.key,
+            event.user.clone(),
+            &event.prerequisite_flag,
+            event.prerequisite_result,
+            FlagValue::Json(serde_json::Value::Null),
+            Some(event.target_flag_key),
+        );
+
+        let _ = self
+            .event_processor
+            .lock()
+            .unwrap()
+            .send(evt)
+            .map_err(|e| warn!("failed to send event: {}", e));
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -87,7 +118,8 @@ pub struct Client {
     event_processor: Arc<Mutex<dyn EventProcessor>>,
     data_source: Arc<Mutex<dyn DataSource>>,
     data_store: Arc<Mutex<dyn DataStore>>,
-    inline_users_in_events: bool,
+    events_default: EventsScope,
+    events_with_reasons: EventsScope,
     init_notify: Arc<Semaphore>,
     init_state: Arc<AtomicUsize>,
     started: Cell<bool>,
@@ -106,11 +138,32 @@ impl Client {
             .build(&endpoints, config.sdk_key())?;
         let data_store = config.data_store_builder().build()?;
 
+        // TODO Once we support offline mode, we need to toggle the disabled flag
+        let events_default = EventsScope {
+            disabled: false,
+            event_factory: EventFactory::new(false, config.inline_users_in_events()),
+            prerequisite_event_recorder: Box::new(PrerequisiteEventRecorder {
+                event_factory: EventFactory::new(false, config.inline_users_in_events()),
+                event_processor: event_processor.clone(),
+            }),
+        };
+
+        // TODO Once we support offline mode, we need to toggle the disabled flag
+        let events_with_reasons = EventsScope {
+            disabled: false,
+            event_factory: EventFactory::new(true, config.inline_users_in_events()),
+            prerequisite_event_recorder: Box::new(PrerequisiteEventRecorder {
+                event_factory: EventFactory::new(true, config.inline_users_in_events()),
+                event_processor: event_processor.clone(),
+            }),
+        };
+
         Ok(Client {
             event_processor,
             data_source,
             data_store,
-            inline_users_in_events: config.inline_users_in_events(),
+            events_default,
+            events_with_reasons,
             init_notify: Arc::new(Semaphore::new(0)),
             init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
             started: Cell::new(false),
@@ -205,15 +258,19 @@ impl Client {
     }
 
     pub fn identify(&self, user: User) {
-        let event = Event::new_identify(user);
-
-        self.send_internal(event);
+        if !self.events_default.disabled {
+            self.send_internal(self.events_default.event_factory.new_identify(user));
+        }
     }
 
     pub fn alias(&self, user: User, previous_user: User) {
-        let event = Event::new_alias(user, previous_user);
-
-        self.send_internal(event);
+        if !self.events_default.disabled {
+            self.send_internal(
+                self.events_default
+                    .event_factory
+                    .new_alias(user, previous_user),
+            );
+        }
     }
 
     pub fn bool_variation(&self, user: &User, flag_key: &str, default: bool) -> bool {
@@ -323,10 +380,8 @@ impl Client {
         let data_store = self.data_store.lock().unwrap();
         let flags = data_store.all_flags();
         let evals = flags.iter().map(|(key, flag)| {
-            let val = flag
-                .evaluate(user, &*data_store.to_store())
-                .map(|v| v.clone());
-            (key.clone(), val)
+            let val = eval::evaluate(&*data_store.to_store(), flag, user, None);
+            (key.clone(), val.map(|v| v.clone()))
         });
         evals.collect()
     }
@@ -337,60 +392,15 @@ impl Client {
         flag_key: &str,
         default: FlagValue,
     ) -> Detail<FlagValue> {
-        let default_for_event = default.clone();
-
-        let (flag, result) = self.evaluate_internal(user, flag_key, default);
-
-        let event = match flag {
-            Some(f) => Event::new_eval_event(
-                flag_key,
-                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
-                &f,
-                result.clone(),
-                default_for_event,
-                true,
-            ),
-            None => Event::new_unknown_flag_event(
-                flag_key,
-                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
-                result.clone(),
-                default_for_event,
-                true,
-            ),
-        };
-
-        self.send_internal(event);
-
-        result
+        self.evaluate_internal(user, flag_key, default, &self.events_with_reasons)
     }
 
     pub fn evaluate(&self, user: &User, flag_key: &str, default: FlagValue) -> FlagValue {
-        let default_for_event = default.clone();
-
-        let (flag, result) = self.evaluate_internal(user, flag_key, default);
-
-        let event = match flag {
-            Some(f) => Event::new_eval_event(
-                flag_key,
-                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
-                &f,
-                result.clone(),
-                default_for_event,
-                false,
-            ),
-            None => Event::new_unknown_flag_event(
-                flag_key,
-                MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
-                result.clone(),
-                default_for_event,
-                false,
-            ),
-        };
-        self.send_internal(event);
-
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO(ch108604) that is ugly, use the type system to fix it
-        result.value.unwrap()
+        self.evaluate_internal(user, flag_key, default, &self.events_default)
+            .value
+            .unwrap()
     }
 
     pub fn track_event(&self, user: User, key: impl Into<String>) {
@@ -417,14 +427,15 @@ impl Client {
         metric_value: Option<f64>,
         data: impl Serialize,
     ) -> serde_json::Result<()> {
-        let event = Event::new_custom(
-            MaybeInlinedUser::new(self.inline_users_in_events, user),
-            key,
-            metric_value,
-            data,
-        )?;
+        if !self.events_default.disabled {
+            let event =
+                self.events_default
+                    .event_factory
+                    .new_custom(user, key, metric_value, data)?;
 
-        self.send_internal(event);
+            self.send_internal(event);
+        }
+
         Ok(())
     }
 
@@ -433,31 +444,57 @@ impl Client {
         user: &User,
         flag_key: &str,
         default: FlagValue,
-    ) -> (Option<Flag>, Detail<FlagValue>) {
-        if !self.initialized() {
-            return (
+        events_scope: &EventsScope,
+    ) -> Detail<FlagValue> {
+        let (flag, result) = match self.initialized() {
+            false => (
                 None,
-                Detail::err_default(eval::Error::ClientNotReady, default),
-            );
-        }
+                Detail::err_default(eval::Error::ClientNotReady, default.clone()),
+            ),
+            true => {
+                let data_store = self.data_store.lock().unwrap();
+                match data_store.flag(flag_key) {
+                    Some(flag) => {
+                        let result = eval::evaluate(
+                            &*data_store.to_store(),
+                            flag,
+                            user,
+                            Some(&*events_scope.prerequisite_event_recorder),
+                        )
+                        .map(|v| v.clone())
+                        .or(default.clone());
 
-        let data_store = self.data_store.lock().unwrap();
-
-        let flag = if let Some(flag) = data_store.flag(flag_key) {
-            flag
-        } else {
-            return (
-                None,
-                Detail::err_default(eval::Error::FlagNotFound, default),
-            );
+                        (Some(flag.clone()), result)
+                    }
+                    None => (
+                        None,
+                        Detail::err_default(eval::Error::FlagNotFound, default.clone()),
+                    ),
+                }
+            }
         };
 
-        let result = flag
-            .evaluate(user, &*data_store.to_store())
-            .map(|v| v.clone())
-            .or(default);
+        if !events_scope.disabled {
+            let event = match &flag {
+                Some(f) => self.events_default.event_factory.new_eval_event(
+                    flag_key,
+                    user.clone(),
+                    f,
+                    result.clone(),
+                    default,
+                    None,
+                ),
+                None => self.events_default.event_factory.new_unknown_flag_event(
+                    flag_key,
+                    user.clone(),
+                    result.clone(),
+                    default,
+                ),
+            };
+            self.send_internal(event);
+        }
 
-        (Some(flag.clone()), result)
+        result
     }
 
     fn send_internal(&self, event: Event) {
@@ -484,7 +521,9 @@ mod tests {
     use crate::event_processor_builders::EventProcessorBuilder;
     use crate::event_sink::MockSink;
     use crate::events::VariationKey;
-    use crate::test_common::{self, basic_flag, basic_int_flag, basic_json_flag};
+    use crate::test_common::{
+        self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_json_flag,
+    };
 
     use super::*;
 
@@ -701,6 +740,64 @@ mod tests {
             assert_that!(event_summary.features).contains_key(variation_key);
         } else {
             panic!("Event should be a summary type");
+        }
+    }
+
+    #[test]
+    fn evaluate_detail_tracks_prereq_events_correctly() {
+        let (client, updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+
+        let mut basic_preqreq_flag = basic_flag("prereqFlag");
+        basic_preqreq_flag.track_events = true;
+
+        updates
+            .patch(PatchData {
+                path: "/flags/prereqFlag".to_string(),
+                data: PatchTarget::Flag(basic_preqreq_flag),
+            })
+            .expect("patch should apply");
+
+        let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
+        basic_flag.track_events = true;
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(basic_flag),
+            })
+            .expect("patch should apply");
+        let user = User::with_key("bob").build();
+
+        let detail = client.evaluate_detail(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
+        assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
+            in_experiment: false,
+        });
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(4);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("feature");
+        assert_that!(events[2].kind()).is_equal_to("feature");
+        assert_that!(events[3].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[3].clone() {
+            let variation_key = VariationKey {
+                flag_key: "myFlag".into(),
+                version: Some(42),
+                variation: Some(1),
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+            let variation_key = VariationKey {
+                flag_key: "prereqFlag".into(),
+                version: Some(42),
+                variation: Some(1),
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
         }
     }
 
