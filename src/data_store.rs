@@ -18,27 +18,82 @@ pub enum PatchTarget {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct AllData {
-    flags: HashMap<String, Flag>,
-    segments: HashMap<String, Segment>,
+pub enum StorageItem<T> {
+    Item(T),
+    Tombstone(u64),
+}
+
+impl From<Flag> for StorageItem<Flag> {
+    fn from(flag: Flag) -> Self {
+        Self::Item(flag)
+    }
+}
+
+impl StorageItem<Flag> {
+    pub fn is_newer_than(&self, version: u64) -> bool {
+        let self_version = match self {
+            Self::Item(f) => f.version,
+            Self::Tombstone(version) => *version,
+        };
+
+        self_version > version
+    }
+}
+
+impl From<Segment> for StorageItem<Segment> {
+    fn from(segment: Segment) -> Self {
+        Self::Item(segment)
+    }
+}
+
+impl StorageItem<Segment> {
+    pub fn is_newer_than(&self, version: u64) -> bool {
+        let self_version = match self {
+            Self::Item(s) => s.version,
+            Self::Tombstone(version) => *version,
+        };
+
+        self_version > version
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AllData<F, S> {
+    flags: HashMap<String, F>,
+    segments: HashMap<String, S>,
+}
+
+impl From<AllData<Flag, Segment>> for AllData<StorageItem<Flag>, StorageItem<Segment>> {
+    fn from(all_data: AllData<Flag, Segment>) -> Self {
+        Self {
+            flags: all_data
+                .flags
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            segments: all_data
+                .segments
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+        }
+    }
 }
 
 /// Trait for a data store that holds and updates feature flags and related data received by the
 /// SDK.
 pub trait DataStore: Store + Send {
-    fn init(&mut self, new_data: AllData);
-    fn all_flags(&self) -> &HashMap<String, Flag>;
+    fn init(&mut self, new_data: AllData<Flag, Segment>);
+    fn all_flags(&self) -> HashMap<String, &Flag>;
     fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error>;
-    fn patch_flag(&mut self, flag_key: &str, data: PatchTarget) -> Result<(), Error>;
-    fn patch_segment(&mut self, segment_key: &str, data: PatchTarget) -> Result<(), Error>;
-    fn delete(&mut self, path: &str) -> Result<(), Error>;
+    fn delete(&mut self, path: &str, version: u64) -> Result<(), Error>;
     fn to_store(&self) -> &dyn Store;
 }
 
 // TODO(ch108602) implement Error::ClientNotReady
 /// Default implementation of the DataStore which holds information in an in-memory data store.
 pub struct InMemoryDataStore {
-    pub data: AllData,
+    pub data: AllData<StorageItem<Flag>, StorageItem<Segment>>,
 }
 
 impl InMemoryDataStore {
@@ -50,25 +105,91 @@ impl InMemoryDataStore {
             },
         }
     }
+
+    fn patch_flag(&mut self, flag_key: &str, data: PatchTarget) -> Result<(), Error> {
+        let flag = match data {
+            PatchTarget::Flag(f) => Ok(f),
+            PatchTarget::Segment(_) => Err("expected a flag, got a segment".to_string()),
+            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a flag: {}", json)),
+        }?;
+
+        match self.data.flags.get(flag_key) {
+            Some(item) if item.is_newer_than(flag.version) => None,
+            _ => self.data.flags.insert(flag_key.to_string(), flag.into()),
+        };
+
+        Ok(())
+    }
+
+    fn patch_segment(&mut self, segment_key: &str, data: PatchTarget) -> Result<(), Error> {
+        let segment = match data {
+            PatchTarget::Segment(s) => Ok(s),
+            PatchTarget::Flag(_) => Err("expected a segment, got a flag".to_string()),
+            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a segment: {}", json)),
+        }?;
+
+        match self.data.segments.get(segment_key) {
+            Some(item) if item.is_newer_than(segment.version) => None,
+            _ => self
+                .data
+                .segments
+                .insert(segment_key.to_string(), segment.into()),
+        };
+
+        Ok(())
+    }
+
+    fn delete_flag(&mut self, flag_key: &str, version: u64) {
+        match self.data.flags.get(flag_key) {
+            Some(item) if item.is_newer_than(version) => None,
+            _ => self
+                .data
+                .flags
+                .insert(flag_key.to_string(), StorageItem::Tombstone(version)),
+        };
+    }
+
+    fn delete_segment(&mut self, segment_key: &str, version: u64) {
+        match self.data.segments.get(segment_key) {
+            Some(item) if item.is_newer_than(version) => None,
+            _ => self
+                .data
+                .segments
+                .insert(segment_key.to_string(), StorageItem::Tombstone(version)),
+        };
+    }
 }
 
 impl Store for InMemoryDataStore {
     fn flag(&self, flag_key: &str) -> Option<&Flag> {
-        self.data.flags.get(flag_key)
+        match self.data.flags.get(flag_key) {
+            Some(StorageItem::Item(f)) => Some(f),
+            _ => None,
+        }
     }
 
     fn segment(&self, segment_key: &str) -> Option<&Segment> {
-        self.data.segments.get(segment_key)
+        match self.data.segments.get(segment_key) {
+            Some(StorageItem::Item(s)) => Some(s),
+            _ => None,
+        }
     }
 }
 
 impl DataStore for InMemoryDataStore {
-    fn init(&mut self, new_data: AllData) {
-        self.data = new_data;
+    fn init(&mut self, new_data: AllData<Flag, Segment>) {
+        self.data = new_data.into();
     }
 
-    fn all_flags(&self) -> &HashMap<String, Flag> {
-        &self.data.flags
+    fn all_flags(&self) -> HashMap<String, &Flag> {
+        self.data
+            .flags
+            .iter()
+            .filter_map(|(key, item)| match item {
+                StorageItem::Tombstone(_) => None,
+                StorageItem::Item(f) => Some((key.clone(), f)),
+            })
+            .collect()
     }
 
     fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error> {
@@ -81,36 +202,14 @@ impl DataStore for InMemoryDataStore {
         }
     }
 
-    fn patch_flag(&mut self, flag_key: &str, data: PatchTarget) -> Result<(), Error> {
-        let flag = match data {
-            PatchTarget::Flag(f) => Ok(f),
-            PatchTarget::Segment(_) => Err("expected a flag, got a segment".to_string()),
-            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a flag: {}", json)),
-        }?;
-
-        self.data.flags.insert(flag_key.to_string(), flag);
-        Ok(())
-    }
-
-    fn patch_segment(&mut self, segment_key: &str, data: PatchTarget) -> Result<(), Error> {
-        let segment = match data {
-            PatchTarget::Segment(s) => Ok(s),
-            PatchTarget::Flag(_) => Err("expected a segment, got a flag".to_string()),
-            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a segment: {}", json)),
-        }?;
-
-        self.data.segments.insert(segment_key.to_string(), segment);
-        Ok(())
-    }
-
-    fn delete(&mut self, path: &str) -> Result<(), Error> {
+    fn delete(&mut self, path: &str, version: u64) -> Result<(), Error> {
         if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
-            self.data.flags.remove(flag_key);
+            self.delete_flag(flag_key, version);
         } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
-            self.data.segments.remove(segment_key);
+            self.delete_segment(segment_key, version);
         } else {
             return Err(format!("can't delete {}", path));
-        }
+        };
 
         Ok(())
     }
@@ -133,7 +232,7 @@ mod tests {
     use maplit::hashmap;
     use test_case::test_case;
 
-    fn basic_data() -> AllData {
+    fn basic_data() -> AllData<Flag, Segment> {
         AllData {
             flags: hashmap! {"flag-key".into() => basic_flag("flag-key")},
             segments: hashmap! {"segment-key".into() => basic_segment("segment-key")},
@@ -187,6 +286,55 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_patch_can_upsert_flag_deleted_flag() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        let mut flag = data_store.flag("flag-key").unwrap().clone();
+
+        assert!(data_store.delete("/flags/flag-key", flag.version).is_ok());
+        assert!(data_store.flag("flag-key").is_none());
+
+        flag.version = flag.version - 1;
+
+        let patch_target = PatchTarget::Flag(flag.clone());
+        assert!(data_store
+            .patch("/flags/flag-key".into(), patch_target)
+            .is_ok());
+        assert!(data_store.flag("flag-key").is_none());
+
+        flag.version = flag.version + 2;
+        let patch_target = PatchTarget::Flag(flag);
+        assert!(data_store
+            .patch("/flags/flag-key".into(), patch_target)
+            .is_ok());
+        assert!(data_store.flag("flag-key").is_some());
+    }
+
+    #[test_case(41, 42)]
+    #[test_case(43, 43)]
+    fn in_memory_patch_does_not_update_flag_with_older_version(
+        updated_version: u64,
+        expected_version: u64,
+    ) {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        let flag = data_store.flag("flag-key").unwrap();
+        assert_eq!(42, flag.version);
+
+        let mut flag = flag.clone();
+        flag.version = updated_version;
+
+        let patch_target = PatchTarget::Flag(flag);
+        let result = data_store.patch("/flags/flag-key".into(), patch_target);
+        assert!(result.is_ok());
+
+        let flag = data_store.flag("flag-key").unwrap();
+        assert_eq!(expected_version, flag.version);
+    }
+
+    #[test]
     fn in_memory_patch_can_upsert_segment() {
         let mut data_store = InMemoryDataStore::new();
         data_store.init(basic_data());
@@ -211,6 +359,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn in_memory_patch_can_upsert_segment_deleted_segment() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        let mut segment = data_store.segment("segment-key").unwrap().clone();
+
+        assert!(data_store
+            .delete("/segments/segment-key", segment.version)
+            .is_ok());
+        assert!(data_store.segment("segment-key").is_none());
+
+        segment.version = segment.version - 1;
+
+        let patch_target = PatchTarget::Segment(segment.clone());
+        assert!(data_store
+            .patch("/segments/segment-key".into(), patch_target)
+            .is_ok());
+        assert!(data_store.segment("segment-key").is_none());
+
+        segment.version = segment.version + 2;
+        let patch_target = PatchTarget::Segment(segment);
+        assert!(data_store
+            .patch("/segments/segment-key".into(), patch_target)
+            .is_ok());
+        assert!(data_store.segment("segment-key").is_some());
+    }
+
+    #[test_case(0, 1)]
+    #[test_case(2, 2)]
+    fn in_memory_patch_does_not_update_segment_with_older_version(
+        updated_version: u64,
+        expected_version: u64,
+    ) {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        let segment = data_store.segment("segment-key").unwrap();
+        assert_eq!(1, segment.version);
+
+        let mut segment = segment.clone();
+        segment.version = updated_version;
+
+        let patch_target = PatchTarget::Segment(segment);
+        let result = data_store.patch("/segments/segment-key".into(), patch_target);
+        assert!(result.is_ok());
+
+        let segment = data_store.segment("segment-key").unwrap();
+        assert_eq!(expected_version, segment.version);
+    }
+
     #[test_case("/invalid-path/flag-key", PatchTarget::Flag(basic_flag("flag-key")); "invalid path")]
     #[test_case("/flags/flag-key", PatchTarget::Segment(basic_segment("segment-key")); "flag with segment target")]
     #[test_case("/flags/flag-key", PatchTarget::Other(serde_json::Value::Null); "flag with other target")]
@@ -229,7 +428,15 @@ mod tests {
         data_store.init(basic_data());
 
         assert!(data_store.flag("flag-key").is_some());
-        assert!(data_store.delete("/flags/flag-key").is_ok());
+        assert!(data_store.delete("/flags/flag-key", 41).is_ok());
+        assert!(data_store.flag("flag-key").is_some());
+
+        assert!(data_store.delete("/flags/flag-key", 42).is_ok());
+        assert!(data_store.flag("flag-key").is_none());
+
+        data_store.init(basic_data());
+
+        assert!(data_store.delete("/flags/flag-key", 43).is_ok());
         assert!(data_store.flag("flag-key").is_none());
     }
 
@@ -239,7 +446,15 @@ mod tests {
         data_store.init(basic_data());
 
         assert!(data_store.segment("segment-key").is_some());
-        assert!(data_store.delete("/segments/segment-key").is_ok());
+        assert!(data_store.delete("/segments/segment-key", 0).is_ok());
+        assert!(data_store.segment("segment-key").is_some());
+
+        assert!(data_store.delete("/segments/segment-key", 1).is_ok());
+        assert!(data_store.segment("segment-key").is_none());
+
+        data_store.init(basic_data());
+
+        assert!(data_store.delete("/segments/segment-key", 2).is_ok());
         assert!(data_store.segment("segment-key").is_none());
     }
 }

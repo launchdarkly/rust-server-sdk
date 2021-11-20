@@ -4,6 +4,7 @@ use std::time::Duration;
 use eventsource_client as es;
 use eventsource_client::ReconnectOptionsBuilder;
 use futures::TryStreamExt;
+use rust_server_sdk_evaluation::{Flag, Segment};
 use serde::Deserialize;
 
 use super::data_store::{AllData, DataStore, PatchTarget};
@@ -25,20 +26,19 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Deserialize)]
 pub(crate) struct PutData {
     path: String,
-    data: AllData,
+    data: AllData<Flag, Segment>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct PatchData {
     pub path: String,
     pub data: PatchTarget,
-    // TODO(ch108603) care about version
 }
 
 #[derive(Deserialize)]
 pub(crate) struct DeleteData {
     path: String,
-    // TODO(ch108603) care about version
+    version: u64,
 }
 
 pub trait DataSource: Send {
@@ -206,6 +206,6 @@ fn process_patch(data_store: &mut dyn DataStore, event: es::Event) -> Result<()>
 fn process_delete(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let delete: DeleteData = parse_event_data(&event)?;
     data_store
-        .delete(&delete.path)
+        .delete(&delete.path, delete.version)
         .map_err(Error::InvalidUpdate)
 }
