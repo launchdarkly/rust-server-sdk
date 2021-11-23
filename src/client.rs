@@ -549,9 +549,8 @@ mod tests {
     use crate::event_processor_builders::EventProcessorBuilder;
     use crate::event_sink::MockSink;
     use crate::events::VariationKey;
-    use crate::test_common::{
-        self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_json_flag,
-    };
+    use crate::test_common::{self, basic_flag, basic_flag_with_prereq, basic_int_flag};
+    use test_case::test_case;
 
     use super::*;
 
@@ -568,54 +567,23 @@ mod tests {
         assert!(elapsed_time.as_millis() > 500)
     }
 
-    #[test]
-    // TODO(ch107017) split this test up: test data_source and event_processor separately and
-    // just mutate store to test evals
-    fn client_receives_updates_evals_flags_and_sends_events() {
+    #[test_case(basic_flag("myFlag"), false.into(), true.into())]
+    #[test_case(basic_int_flag("myFlag"), 0.into(), test_common::FLOAT_TO_INT_MAX.into())]
+    fn client_updates_changes_evaluation_results(
+        flag: eval::Flag,
+        default: FlagValue,
+        expected: FlagValue,
+    ) {
         let user = User::with_key("foo".to_string()).build();
 
         let (client, updates, _events) = make_mocked_client();
 
-        let result = client.bool_variation_detail(&user, "someFlag", false);
-
-        assert_that!(result.value).contains_value(false);
-
-        client.start_with_default_executor();
-
-        let updates = updates.lock().unwrap();
-
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(basic_flag("myFlag")),
-            })
-            .expect("patch should apply");
-
-        let result = client.bool_variation_detail(&user, "myFlag", false);
-
-        assert_that!(result.value).contains_value(true);
-        assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
-            in_experiment: false,
-        });
-    }
-
-    #[test]
-    // TODO(ch107017) This test is copy-pasta
-    fn client_receives_updates_evals_flags_and_sends_events_int() {
-        let user = User::with_key("foo".to_string()).build();
-
-        let (client, updates, _events) = make_mocked_client();
-
-        let result = client.int_variation_detail(&user, "someFlag", 0);
-
-        assert_that!(result.value).contains_value(0);
+        let result = client.evaluate_detail(&user, "myFlag", default.clone());
+        assert_that!(result.value).contains_value(default.clone());
 
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
-
-        let flag = basic_int_flag("myFlag");
-
         updates
             .patch(PatchData {
                 path: "/flags/myFlag".to_string(),
@@ -623,44 +591,8 @@ mod tests {
             })
             .expect("patch should apply");
 
-        let result = client.int_variation_detail(&user, "myFlag", 0);
-
-        assert_that!(result.value).contains_value(test_common::FLOAT_TO_INT_MAX);
-        assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
-            in_experiment: false,
-        });
-    }
-
-    #[test]
-    // TODO(ch107017) This test is copy-pasta
-    fn client_receives_updates_evals_flags_and_sends_events_json() {
-        use serde_json::Value;
-
-        let user = User::with_key("foo".to_string()).build();
-
-        let (client, updates, _events) = make_mocked_client();
-
-        let result = client.json_variation_detail(&user, "someFlag", Value::Null);
-
-        assert_that!(result.value).contains_value(Value::Null);
-
-        client.start_with_default_executor();
-
-        let updates = updates.lock().unwrap();
-
-        let flag = basic_json_flag("myFlag");
-
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(flag),
-            })
-            .expect("patch should apply");
-
-        let result = client.json_variation_detail(&user, "myFlag", Value::Null);
-
-        let value = result.value.expect("value should not be None");
-        assert!(value.is_object());
+        let result = client.evaluate_detail(&user, "myFlag", default);
+        assert_that!(result.value).contains_value(expected);
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
             in_experiment: false,
         });
@@ -831,19 +763,10 @@ mod tests {
 
     #[test]
     fn evaluate_detail_handles_flag_not_found() {
-        let (client, updates, events) = make_mocked_client();
+        let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
-        updates
-            .lock()
-            .unwrap()
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(basic_flag("myFlag")),
-            })
-            .expect("patch should apply");
 
         let user = User::with_key("bob").build();
-
         let detail = client.evaluate_detail(&user, "non-existent-flag", FlagValue::Bool(false));
 
         assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();

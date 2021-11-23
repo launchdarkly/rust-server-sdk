@@ -75,29 +75,6 @@ pub fn basic_int_flag(key: &str) -> Flag {
     .unwrap()
 }
 
-pub fn basic_json_flag(key: &str) -> Flag {
-    serde_json::from_str(&format!(
-        r#"{{
-            "key": {},
-            "version": 42,
-            "on": true,
-            "targets": [],
-            "rules": [],
-            "prerequisites": [],
-            "fallthrough": {{"variation": 1}},
-            "offVariation": 0,
-            "variations": [null, {{"foo": "bar"}}],
-            "clientSideAvailability": {{
-                "usingMobileKey": false,
-                "usingEnvironmentId": false
-            }},
-            "salt": "kosher"
-        }}"#,
-        serde_json::Value::String(key.to_string())
-    ))
-    .unwrap()
-}
-
 pub fn basic_segment(key: &str) -> Segment {
     serde_json::from_str(&format!(
         r#"{{

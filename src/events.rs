@@ -784,4 +784,161 @@ mod tests {
             .that(&fallthrough_summary.count)
             .is_equal_to(2);
     }
+
+    #[test]
+    fn event_factory_unknown_flags_do_not_track_events() {
+        let event_factory = EventFactory::new(true, true);
+        let user = User::with_key("bob").build();
+        let detail = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Off,
+        };
+        let event =
+            event_factory.new_unknown_flag_event("myFlag", user, detail, FlagValue::Bool(true));
+
+        if let Event::FeatureRequest(event) = event {
+            assert!(!event.track_events);
+        } else {
+            panic!("Event should be a feature request type");
+        }
+    }
+
+    // Test for flag.track-events
+    #[test_case(true, true, false, Reason::Off, true, true)]
+    #[test_case(true, false, false, Reason::Off, false, true)]
+    #[test_case(false, true, false, Reason::Off, true, false)]
+    #[test_case(false, false, false, Reason::Off, false, false)]
+    // Test for flag.track_events_fallthrough
+    #[test_case(true, false, true, Reason::Off, false, true)]
+    #[test_case(true, false, true, Reason::Fallthrough { in_experiment: false }, true, true)]
+    #[test_case(true, false, false, Reason::Fallthrough { in_experiment: false }, false, true)]
+    #[test_case(false, false, true, Reason::Off, false, false)]
+    #[test_case(false, false, true, Reason::Fallthrough { in_experiment: false }, true, true)]
+    #[test_case(false, false, false, Reason::Fallthrough { in_experiment: false }, false, false)]
+    // Test for Flagthrough.in_experiment
+    #[test_case(true, false, false, Reason::Fallthrough { in_experiment: true }, true, true)]
+    #[test_case(false, false, false, Reason::Fallthrough { in_experiment: true }, true, true)]
+    fn event_factory_eval_tracks_events(
+        event_factory_send_events: bool,
+        flag_track_events: bool,
+        flag_track_events_fallthrough: bool,
+        reason: Reason,
+        should_events_be_tracked: bool,
+        should_include_reason: bool,
+    ) {
+        let event_factory = EventFactory::new(event_factory_send_events, true);
+        let mut flag = basic_flag("myFlag");
+        flag.track_events = flag_track_events;
+        flag.track_events_fallthrough = flag_track_events_fallthrough;
+
+        let user = User::with_key("bob").build();
+        let detail = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason,
+        };
+        let event = event_factory.new_eval_event(
+            "myFlag",
+            user,
+            &flag,
+            detail,
+            FlagValue::Bool(true),
+            None,
+        );
+
+        if let Event::FeatureRequest(event) = event {
+            assert_eq!(event.track_events, should_events_be_tracked);
+            assert_eq!(event.reason.is_some(), should_include_reason);
+        } else {
+            panic!("Event should be a feature request type");
+        }
+    }
+
+    #[test_case(true, 0, false, true, true)]
+    #[test_case(true, 0, true, true, true)]
+    #[test_case(true, 1, false, false, true)]
+    #[test_case(true, 1, true, true, true)]
+    #[test_case(false, 0, false, true, true)]
+    #[test_case(false, 0, true, true, true)]
+    #[test_case(false, 1, false, false, false)]
+    #[test_case(false, 1, true, true, true)]
+    fn event_factory_eval_tracks_events_for_rule_matches(
+        event_factory_send_events: bool,
+        rule_index: usize,
+        rule_in_experiment: bool,
+        should_events_be_tracked: bool,
+        should_include_reason: bool,
+    ) {
+        let event_factory = EventFactory::new(event_factory_send_events, true);
+        let flag: Flag = serde_json::from_str(
+            r#"{
+                 "key": "with_rule",
+                 "on": true,
+                 "targets": [],
+                 "prerequisites": [],
+                 "rules": [
+                   {
+                     "id": "rule-0",
+                     "clauses": [{
+                       "attribute": "key",
+                       "negate": false,
+                       "op": "matches",
+                       "values": ["do-track"]
+                     }],
+                     "trackEvents": true,
+                     "variation": 1
+                   },
+                   {
+                     "id": "rule-1",
+                     "clauses": [{
+                       "attribute": "key",
+                       "negate": false,
+                       "op": "matches",
+                       "values": ["no-track"]
+                     }],
+                     "trackEvents": false,
+                     "variation": 1
+                   }
+                 ],
+                 "fallthrough": {"variation": 0},
+                 "trackEventsFallthrough": false,
+                 "offVariation": 0,
+                 "clientSideAvailability": {
+                   "usingMobileKey": false,
+                   "usingEnvironmentId": false
+                 },
+                 "salt": "kosher",
+                 "version": 2,
+                 "variations": [false, true]
+               }"#,
+        )
+        .expect("flag should parse");
+
+        let user = User::with_key("do-track").build();
+        let detail = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::RuleMatch {
+                rule_index,
+                rule_id: format!("rule-{}", rule_index),
+                in_experiment: rule_in_experiment,
+            },
+        };
+        let event = event_factory.new_eval_event(
+            "myFlag",
+            user,
+            &flag,
+            detail,
+            FlagValue::Bool(true),
+            None,
+        );
+
+        if let Event::FeatureRequest(event) = event {
+            assert_eq!(event.track_events, should_events_be_tracked);
+            assert_eq!(event.reason.is_some(), should_include_reason);
+        } else {
+            panic!("Event should be a feature request type");
+        }
+    }
 }
