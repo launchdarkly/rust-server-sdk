@@ -2,30 +2,41 @@ version: 2
 jobs:
   build:
     docker:
-      # TODO test on other versions of Rust
-      - image: circleci/rust:latest
-
+      - image: cimg/rust:1.56.1
     steps:
       - checkout
-
       - run:
-          name: Install clippy
-          command: rustup component add clippy
+          name: Check Version
+          command: |
+            cargo --version
+            rustc --version
       - run:
-          name: Install rustfmt
-          command: rustup component add rustfmt
-
-      - run: cargo build
-      - run: cargo test
-      - run:
-          name: Check consistent formatting
+          name: Check Formatting
           command: cargo fmt && git diff --exit-code
-      - run: cargo doc --no-deps
-      - run: cargo clippy -- -D warnings
-
+      - run:
+          name: Install Crate Dependencies
+          command: sudo apt-get update && sudo apt install libssl-dev libncurses5-dev libncursesw5-dev
+      - run:
+          name: Clippy
+          command: cargo clippy -- -D warnings
+      - run:
+          name: Test
+          command: cargo test
+      - run: 
+          name: Gather Coverage
+          command: ./coverage.sh --html
       - store_artifacts:
+          name: Upload Coverage
+          path: target/llvm-cov/html
+          destination: coverage
+      - run:
+          name: Generate Docs
+          command: cargo doc --no-deps
+      - store_artifacts:
+          name: Upload Docs
           path: target/doc
           destination: doc
+
 
   # TODO publish crate
 
