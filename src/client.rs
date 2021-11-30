@@ -549,7 +549,9 @@ mod tests {
     use crate::event_processor_builders::EventProcessorBuilder;
     use crate::event_sink::MockSink;
     use crate::events::VariationKey;
-    use crate::test_common::{self, basic_flag, basic_flag_with_prereq, basic_int_flag};
+    use crate::test_common::{
+        self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_off_flag,
+    };
     use test_case::test_case;
 
     use super::*;
@@ -704,6 +706,43 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_handles_off_flag_without_variation() {
+        let (client, updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(basic_off_flag("myFlag")),
+            })
+            .expect("patch should apply");
+        let user = User::with_key("bob").build();
+
+        let result = client.evaluate(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&result.as_bool().unwrap()).is_false();
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(2);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[1].clone() {
+            let variation_key = VariationKey {
+                flag_key: "myFlag".into(),
+                version: Some(42),
+                variation: None,
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        } else {
+            panic!("Event should be a summary type");
+        }
+    }
+
+    #[test]
     fn evaluate_detail_tracks_prereq_events_correctly() {
         let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
@@ -756,6 +795,61 @@ mod tests {
                 flag_key: "prereqFlag".into(),
                 version: Some(42),
                 variation: Some(1),
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        }
+    }
+
+    #[test]
+    fn evaluate_handles_failed_prereqs_correctly() {
+        let (client, updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+
+        let mut basic_preqreq_flag = basic_off_flag("prereqFlag");
+        basic_preqreq_flag.track_events = true;
+
+        updates
+            .patch(PatchData {
+                path: "/flags/prereqFlag".to_string(),
+                data: PatchTarget::Flag(basic_preqreq_flag),
+            })
+            .expect("patch should apply");
+
+        let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
+        basic_flag.track_events = true;
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(basic_flag),
+            })
+            .expect("patch should apply");
+        let user = User::with_key("bob").build();
+
+        let detail = client.evaluate(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&detail.as_bool().unwrap()).is_false();
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(4);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("feature");
+        assert_that!(events[2].kind()).is_equal_to("feature");
+        assert_that!(events[3].kind()).is_equal_to("summary");
+
+        if let Event::Summary(event_summary) = events[3].clone() {
+            let variation_key = VariationKey {
+                flag_key: "myFlag".into(),
+                version: Some(42),
+                variation: Some(0),
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+            let variation_key = VariationKey {
+                flag_key: "prereqFlag".into(),
+                version: Some(42),
+                variation: None,
             };
             assert_that!(event_summary.features).contains_key(variation_key);
         }

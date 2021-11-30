@@ -217,9 +217,12 @@ impl EventFactory {
         default: FlagValue,
         prereq_of: Option<String>,
     ) -> Event {
-        // unwrap is safe here because value should have been replaced with default if it was None.
-        // TODO(ch108604) that is ugly, use the type system to fix it
-        let value = detail.value.unwrap();
+        // TODO(ch108604) Events created during prereq evaluation might not have a value set (e.g.
+        // flag is off and the off variation is None). In those situations, we are going to default
+        // to a JSON null until we can better sort out the Detail struct.
+        let value = detail
+            .value
+            .unwrap_or(FlagValue::Json(serde_json::Value::Null));
 
         let flag_track_events;
         let require_experiment_data;

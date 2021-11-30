@@ -27,6 +27,29 @@ pub fn basic_flag(key: &str) -> Flag {
     .unwrap()
 }
 
+pub fn basic_off_flag(key: &str) -> Flag {
+    serde_json::from_str(&format!(
+        r#"{{
+            "key": {},
+            "version": 42,
+            "on": false,
+            "targets": [],
+            "rules": [],
+            "prerequisites": [],
+            "fallthrough": {{"variation": 1}},
+            "offVariation": null,
+            "variations": [false, true],
+            "clientSideAvailability": {{
+                "usingMobileKey": false,
+                "usingEnvironmentId": false
+            }},
+            "salt": "kosher"
+        }}"#,
+        serde_json::Value::String(key.to_string())
+    ))
+    .unwrap()
+}
+
 pub fn basic_flag_with_prereq(key: &str, prereq_key: &str) -> Flag {
     serde_json::from_str(&format!(
         r#"{{
