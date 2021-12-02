@@ -1,6 +1,5 @@
 use futures::future;
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{io, thread};
@@ -15,6 +14,7 @@ use super::data_source::DataSource;
 use super::data_source_builders::BuildError as DataSourceError;
 use super::data_store::DataStore;
 use super::data_store_builders::BuildError as DataStoreError;
+use super::evaluation::{FlagDetail, FlagDetailConfig};
 use super::event_processor::EventProcessor;
 use super::event_processor_builders::BuildError as EventProcessorError;
 use super::events::{Event, EventFactory};
@@ -404,14 +404,28 @@ impl Client {
             .try_map(|val| val.as_json(), eval::Error::Exception)
     }
 
-    pub fn all_flags_detail(&self, user: &User) -> HashMap<String, Detail<FlagValue>> {
+    /// all_flags_detail returns an object that encapsulates the state of all feature flags for a given user.
+    /// This includes the flag values, and also metadata that can be used on the front end.
+    ///
+    /// The most common use case for this method is to bootstrap a set of client-side feature flags from a
+    /// back-end service.
+    ///
+    /// You may pass any configuration of [FlagDetailConfig] to control what data is included.
+    ///
+    /// For more information, see the Reference Guide: <https://docs.launchdarkly.com/sdk/features/all-flags#rust>
+    pub fn all_flags_detail(&self, user: &User, flag_state_config: FlagDetailConfig) -> FlagDetail {
+        // TODO Once we have an offline designation, we need to handle that here.
+
+        if !self.initialized() {
+            return FlagDetail::new(false);
+        }
+
+        let mut flag_detail = FlagDetail::new(true);
+
         let data_store = self.data_store.lock().unwrap();
-        let flags = data_store.all_flags();
-        let evals = flags.iter().map(|(key, flag)| {
-            let val = eval::evaluate(&*data_store.to_store(), flag, user, None);
-            (key.clone(), val.map(|v| v.clone()))
-        });
-        evals.collect()
+        flag_detail.populate(&*data_store, user, flag_state_config);
+
+        flag_detail
     }
 
     pub fn evaluate_detail(
@@ -540,7 +554,9 @@ mod tests {
     use crate::ConfigBuilder;
     use rust_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
+    use std::collections::HashMap;
     use std::sync::RwLock;
+
     use tokio::time::Instant;
 
     use crate::data_source::{MockDataSource, PatchData};

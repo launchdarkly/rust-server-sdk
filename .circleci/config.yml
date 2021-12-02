@@ -3,6 +3,7 @@ jobs:
   build:
     docker:
       - image: cimg/rust:1.56.1
+    resource_class: medium+
     steps:
       - checkout
       - run:
@@ -22,7 +23,7 @@ jobs:
       - run:
           name: Test
           command: cargo test
-      - run: 
+      - run:
           name: Gather Coverage
           command: ./coverage.sh --html
       - store_artifacts:
