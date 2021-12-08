@@ -302,7 +302,7 @@ impl Client {
     }
 
     pub fn bool_variation(&self, user: &User, flag_key: &str, default: bool) -> bool {
-        let val = self.evaluate(user, flag_key, default.into());
+        let val = self.variation(user, flag_key, default);
         if let Some(b) = val.as_bool() {
             b
         } else {
@@ -315,7 +315,7 @@ impl Client {
     }
 
     pub fn str_variation(&self, user: &User, flag_key: &str, default: String) -> String {
-        let val = self.evaluate(user, flag_key, default.clone().into());
+        let val = self.variation(user, flag_key, default.clone());
         if let Some(s) = val.as_string() {
             s
         } else {
@@ -328,7 +328,7 @@ impl Client {
     }
 
     pub fn float_variation(&self, user: &User, flag_key: &str, default: f64) -> f64 {
-        let val = self.evaluate(user, flag_key, default.into());
+        let val = self.variation(user, flag_key, default);
         if let Some(f) = val.as_float() {
             f
         } else {
@@ -341,7 +341,7 @@ impl Client {
     }
 
     pub fn int_variation(&self, user: &User, flag_key: &str, default: i64) -> i64 {
-        let val = self.evaluate(user, flag_key, default.into());
+        let val = self.variation(user, flag_key, default);
         if let Some(f) = val.as_int() {
             f
         } else {
@@ -359,9 +359,9 @@ impl Client {
         flag_key: &str,
         default: serde_json::Value,
     ) -> serde_json::Value {
-        self.evaluate(user, flag_key, default.clone().into())
+        self.variation(user, flag_key, default.clone())
             .as_json()
-            .unwrap_or_else(|| default.clone())
+            .unwrap_or(default)
     }
 
     pub fn bool_variation_detail(
@@ -370,7 +370,7 @@ impl Client {
         flag_key: &str,
         default: bool,
     ) -> Detail<bool> {
-        self.evaluate_detail(user, flag_key, default.into())
+        self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_bool(), eval::Error::Exception)
     }
 
@@ -380,17 +380,17 @@ impl Client {
         flag_key: &str,
         default: String,
     ) -> Detail<String> {
-        self.evaluate_detail(user, flag_key, default.into())
+        self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_string(), eval::Error::Exception)
     }
 
     pub fn float_variation_detail(&self, user: &User, flag_key: &str, default: f64) -> Detail<f64> {
-        self.evaluate_detail(user, flag_key, default.into())
+        self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_float(), eval::Error::Exception)
     }
 
     pub fn int_variation_detail(&self, user: &User, flag_key: &str, default: i64) -> Detail<i64> {
-        self.evaluate_detail(user, flag_key, default.into())
+        self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_int(), eval::Error::Exception)
     }
 
@@ -400,7 +400,7 @@ impl Client {
         flag_key: &str,
         default: serde_json::Value,
     ) -> Detail<serde_json::Value> {
-        self.evaluate_detail(user, flag_key, default.into())
+        self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_json(), eval::Error::Exception)
     }
 
@@ -428,19 +428,24 @@ impl Client {
         flag_detail
     }
 
-    pub fn evaluate_detail(
+    pub fn variation_detail<T: Into<FlagValue> + Clone>(
         &self,
         user: &User,
         flag_key: &str,
-        default: FlagValue,
+        default: T,
     ) -> Detail<FlagValue> {
-        self.evaluate_internal(user, flag_key, default, &self.events_with_reasons)
+        self.variation_internal(user, flag_key, default, &self.events_with_reasons)
     }
 
-    pub fn evaluate(&self, user: &User, flag_key: &str, default: FlagValue) -> FlagValue {
+    pub fn variation<T: Into<FlagValue> + Clone>(
+        &self,
+        user: &User,
+        flag_key: &str,
+        default: T,
+    ) -> FlagValue {
         // unwrap is safe here because value should have been replaced with default if it was None.
         // TODO(ch108604) that is ugly, use the type system to fix it
-        self.evaluate_internal(user, flag_key, default, &self.events_default)
+        self.variation_internal(user, flag_key, default, &self.events_default)
             .value
             .unwrap()
     }
@@ -481,17 +486,17 @@ impl Client {
         Ok(())
     }
 
-    fn evaluate_internal(
+    fn variation_internal<T: Into<FlagValue> + Clone>(
         &self,
         user: &User,
         flag_key: &str,
-        default: FlagValue,
+        default: T,
         events_scope: &EventsScope,
     ) -> Detail<FlagValue> {
         let (flag, result) = match self.initialized() {
             false => (
                 None,
-                Detail::err_default(eval::Error::ClientNotReady, default.clone()),
+                Detail::err_default(eval::Error::ClientNotReady, default.clone().into()),
             ),
             true => {
                 let data_store = self.data_store.lock().unwrap();
@@ -504,13 +509,13 @@ impl Client {
                             Some(&*events_scope.prerequisite_event_recorder),
                         )
                         .map(|v| v.clone())
-                        .or(default.clone());
+                        .or(default.clone().into());
 
                         (Some(flag.clone()), result)
                     }
                     None => (
                         None,
-                        Detail::err_default(eval::Error::FlagNotFound, default.clone()),
+                        Detail::err_default(eval::Error::FlagNotFound, default.clone().into()),
                     ),
                 }
             }
@@ -523,14 +528,14 @@ impl Client {
                     user.clone(),
                     f,
                     result.clone(),
-                    default,
+                    default.into(),
                     None,
                 ),
                 None => self.events_default.event_factory.new_unknown_flag_event(
                     flag_key,
                     user.clone(),
                     result.clone(),
-                    default,
+                    default.into(),
                 ),
             };
             self.send_internal(event);
@@ -596,7 +601,7 @@ mod tests {
 
         let (client, updates, _events) = make_mocked_client();
 
-        let result = client.evaluate_detail(&user, "myFlag", default.clone());
+        let result = client.variation_detail(&user, "myFlag", default.clone());
         assert_that!(result.value).contains_value(default.clone());
 
         client.start_with_default_executor();
@@ -609,7 +614,7 @@ mod tests {
             })
             .expect("patch should apply");
 
-        let result = client.evaluate_detail(&user, "myFlag", default);
+        let result = client.variation_detail(&user, "myFlag", default);
         assert_that!(result.value).contains_value(expected);
         assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
             in_experiment: false,
@@ -617,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_tracks_events_correctly() {
+    fn variation_tracks_events_correctly() {
         let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
@@ -631,7 +636,7 @@ mod tests {
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
-        let flag_value = client.evaluate(&user, "myFlag", FlagValue::Bool(false));
+        let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&flag_value.as_bool().unwrap()).is_true();
         client.flush().expect("flush should succeed");
@@ -654,12 +659,12 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_handles_unknown_flags() {
+    fn variation_handles_unknown_flags() {
         let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
-        let flag_value = client.evaluate(&user, "non-existent-flag", FlagValue::Bool(false));
+        let flag_value = client.variation(&user, "non-existent-flag", FlagValue::Bool(false));
 
         assert_that(&flag_value.as_bool().unwrap()).is_false();
         client.flush().expect("flush should succeed");
@@ -682,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_detail_tracks_events_correctly() {
+    fn variation_detail_tracks_events_correctly() {
         let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
@@ -696,7 +701,7 @@ mod tests {
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
-        let detail = client.evaluate_detail(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
         assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
@@ -722,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_handles_off_flag_without_variation() {
+    fn variation_handles_off_flag_without_variation() {
         let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
@@ -736,7 +741,7 @@ mod tests {
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
-        let result = client.evaluate(&user, "myFlag", FlagValue::Bool(false));
+        let result = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&result.as_bool().unwrap()).is_false();
         client.flush().expect("flush should succeed");
@@ -759,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_detail_tracks_prereq_events_correctly() {
+    fn variation_detail_tracks_prereq_events_correctly() {
         let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
@@ -785,7 +790,7 @@ mod tests {
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
-        let detail = client.evaluate_detail(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
         assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
@@ -817,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_handles_failed_prereqs_correctly() {
+    fn variation_handles_failed_prereqs_correctly() {
         let (client, updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
@@ -843,7 +848,7 @@ mod tests {
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
-        let detail = client.evaluate(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&detail.as_bool().unwrap()).is_false();
         client.flush().expect("flush should succeed");
@@ -872,12 +877,12 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_detail_handles_flag_not_found() {
+    fn variation_detail_handles_flag_not_found() {
         let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
-        let detail = client.evaluate_detail(&user, "non-existent-flag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&user, "non-existent-flag", FlagValue::Bool(false));
 
         assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
         assert_that(&detail.reason).is_equal_to(Reason::Error {
@@ -903,12 +908,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_detail_handles_client_not_ready() {
+    async fn variation_detail_handles_client_not_ready() {
         let (client, _updates, events) = make_mocked_client_with_delay(u64::MAX);
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
-        let detail = client.evaluate_detail(&user, "non-existent-flag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&user, "non-existent-flag", FlagValue::Bool(false));
 
         assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
         assert_that(&detail.reason).is_equal_to(Reason::Error {
