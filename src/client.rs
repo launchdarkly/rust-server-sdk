@@ -1,6 +1,5 @@
 use futures::future;
-use std::cell::Cell;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{io, thread};
 
@@ -152,7 +151,7 @@ pub struct Client {
     events_with_reasons: EventsScope,
     init_notify: Arc<Semaphore>,
     init_state: Arc<AtomicUsize>,
-    started: Cell<bool>,
+    started: AtomicBool,
     // TODO: Once we need the config for diagnostic events, then we should add this.
     // config: Arc<Mutex<Config>>
 }
@@ -196,16 +195,16 @@ impl Client {
             events_with_reasons,
             init_notify: Arc::new(Semaphore::new(0)),
             init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
-            started: Cell::new(false),
+            started: AtomicBool::new(false),
         })
     }
 
     /// Starts a client in the current thread, which must have a default tokio runtime.
     pub fn start_with_default_executor(&self) {
-        if self.started.get() {
+        if self.started.load(Ordering::SeqCst) {
             return;
         }
-        self.started.replace(true);
+        self.started.store(true, Ordering::SeqCst);
         self.start_with_default_executor_internal();
     }
 
@@ -238,10 +237,10 @@ impl Client {
     /// [crate::Client::start_with_default_executor] and the client will dispatch tasks to
     /// your existing runtime.
     pub fn start_with_runtime(&self) -> Result<bool, StartError> {
-        if self.started.get() {
+        if self.started.load(Ordering::SeqCst) {
             return Ok(true);
         }
-        self.started.replace(true);
+        self.started.store(true, Ordering::SeqCst);
 
         let runtime = tokio::runtime::Runtime::new().map_err(StartError::SpawnFailed)?;
         let _guard = runtime.enter();
@@ -578,6 +577,13 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
+
+    fn is_send_and_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn ensure_client_is_send_and_sync() {
+        is_send_and_sync::<Client>()
+    }
 
     #[tokio::test]
     async fn client_asynchronously_initializes() {
