@@ -3,56 +3,8 @@ use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
 use rust_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User, VariationIndex};
-use serde::Serialize;
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(untagged)]
-/// a user that may be inlined in the event.
-///
-/// TODO(ch108613) have the event processor handle this
-pub enum MaybeInlinedUser {
-    Inlined(User),
-    NotInlined(User),
-}
-
-impl MaybeInlinedUser {
-    pub fn new(inline: bool, user: User) -> Self {
-        if inline {
-            MaybeInlinedUser::Inlined(user)
-        } else {
-            MaybeInlinedUser::NotInlined(user)
-        }
-    }
-
-    fn is_inlined(&self) -> bool {
-        match self {
-            MaybeInlinedUser::Inlined(_) => true,
-            MaybeInlinedUser::NotInlined(_) => false,
-        }
-    }
-
-    fn not_inlined(&self) -> bool {
-        !self.is_inlined()
-    }
-
-    fn force_inlined(self) -> Self {
-        match self {
-            MaybeInlinedUser::Inlined(_) => self,
-            MaybeInlinedUser::NotInlined(u) => MaybeInlinedUser::Inlined(u),
-        }
-    }
-
-    fn user(&self) -> &User {
-        match self {
-            MaybeInlinedUser::Inlined(u) => u,
-            MaybeInlinedUser::NotInlined(u) => u,
-        }
-    }
-
-    pub fn key(&self) -> &str {
-        self.user().key()
-    }
-}
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,21 +28,56 @@ impl From<User> for ContextKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BaseEvent {
     pub creation_date: u64,
-    #[serde(skip_serializing_if = "MaybeInlinedUser::not_inlined")]
-    pub user: MaybeInlinedUser,
+    pub user: User,
+
+    // This will not be serialized. It must also always default to false.
+    inline: bool,
+}
+
+impl Serialize for BaseEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("BaseEvent", 2)?;
+        state.serialize_field("creationDate", &self.creation_date)?;
+
+        if self.inline {
+            state.serialize_field("user", &self.user)?;
+        } else {
+            state.serialize_field("userKey", &self.user.key())?;
+        }
+
+        state.end()
+    }
+}
+
+impl BaseEvent {
+    pub fn new(creation_date: u64, user: User) -> Self {
+        Self {
+            creation_date,
+            user,
+            inline: false,
+        }
+    }
+
+    pub(crate) fn into_inline(self) -> Self {
+        Self {
+            inline: true,
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeatureRequestEvent {
     #[serde(flatten)]
-    base: BaseEvent,
+    pub(crate) base: BaseEvent,
     key: String,
-    user_key: String,
     value: FlagValue,
     variation: Option<VariationIndex>,
     default: FlagValue,
@@ -106,20 +93,55 @@ pub struct FeatureRequestEvent {
     pub(crate) track_events: bool,
 }
 
-pub type IndexEvent = BaseEvent;
+impl FeatureRequestEvent {
+    pub fn to_index_event(&self) -> IndexEvent {
+        self.base.clone().into()
+    }
+
+    pub(crate) fn into_inline(self) -> Self {
+        Self {
+            base: self.base.into_inline(),
+            ..self
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct IndexEvent {
+    #[serde(flatten)]
+    base: BaseEvent,
+}
+
+impl From<BaseEvent> for IndexEvent {
+    fn from(base: BaseEvent) -> Self {
+        let base = BaseEvent {
+            inline: true,
+            ..base
+        };
+
+        Self { base }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct IdentifyEvent {
     #[serde(flatten)]
-    base: BaseEvent,
+    pub(crate) base: BaseEvent,
     key: String,
+}
+
+impl IdentifyEvent {
+    pub(crate) fn into_inline(self) -> Self {
+        Self {
+            base: self.base.into_inline(),
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AliasEvent {
-    #[serde(flatten)]
-    base: BaseEvent,
     key: String,
     context_kind: ContextKind,
     previous_key: String,
@@ -130,7 +152,7 @@ pub struct AliasEvent {
 #[serde(rename_all = "camelCase")]
 pub struct CustomEvent {
     #[serde(flatten)]
-    base: BaseEvent,
+    pub(crate) base: BaseEvent,
     key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     metric_value: Option<f64>,
@@ -140,25 +162,77 @@ pub struct CustomEvent {
     context_kind: ContextKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+impl CustomEvent {
+    pub fn to_index_event(&self) -> IndexEvent {
+        self.base.clone().into()
+    }
+
+    pub(crate) fn into_inline(self) -> Self {
+        Self {
+            base: self.base.into_inline(),
+            ..self
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
-pub enum Event {
-    #[serde(rename = "feature")]
-    FeatureRequest(FeatureRequestEvent),
+pub enum OutputEvent {
     #[serde(rename = "index")]
     Index(IndexEvent),
+
+    #[serde(rename = "feature")]
+    FeatureRequest(FeatureRequestEvent),
+
     #[serde(rename = "identify")]
     Identify(IdentifyEvent),
+
     #[serde(rename = "alias")]
     Alias(AliasEvent),
+
     #[serde(rename = "custom")]
     Custom(CustomEvent),
+
     #[serde(rename = "summary")]
     Summary(EventSummary),
 }
 
-impl Display for Event {
+impl OutputEvent {
+    #[cfg(test)]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            OutputEvent::Index { .. } => "index",
+            OutputEvent::FeatureRequest { .. } => "feature",
+            OutputEvent::Identify { .. } => "identify",
+            OutputEvent::Alias { .. } => "alias",
+            OutputEvent::Custom { .. } => "custom",
+            OutputEvent::Summary { .. } => "summary",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum InputEvent {
+    FeatureRequest(FeatureRequestEvent),
+    Identify(IdentifyEvent),
+    Alias(AliasEvent),
+    Custom(CustomEvent),
+}
+
+impl InputEvent {
+    #[cfg(test)]
+    pub fn base_mut(&mut self) -> Option<&mut BaseEvent> {
+        match self {
+            InputEvent::FeatureRequest(FeatureRequestEvent { base, .. }) => Some(base),
+            InputEvent::Identify(IdentifyEvent { base, .. }) => Some(base),
+            InputEvent::Alias(_) => None,
+            InputEvent::Custom(CustomEvent { base, .. }) => Some(base),
+        }
+    }
+}
+
+impl Display for InputEvent {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let json = serde_json::to_string_pretty(self)
             .unwrap_or_else(|e| format!("JSON serialization failed ({}): {:?}", e, self));
@@ -168,15 +242,11 @@ impl Display for Event {
 
 pub struct EventFactory {
     send_reason: bool,
-    inline_users_in_events: bool,
 }
 
 impl EventFactory {
-    pub fn new(send_reason: bool, inline_users_in_events: bool) -> Self {
-        Self {
-            send_reason,
-            inline_users_in_events,
-        }
+    pub fn new(send_reason: bool) -> Self {
+        Self { send_reason }
     }
 
     fn now() -> u64 {
@@ -192,7 +262,7 @@ impl EventFactory {
         user: User,
         detail: Detail<FlagValue>,
         default: FlagValue,
-    ) -> Event {
+    ) -> InputEvent {
         self.new_feature_request_event(flag_key, user, None, detail, default, None)
     }
 
@@ -204,7 +274,7 @@ impl EventFactory {
         detail: Detail<FlagValue>,
         default: FlagValue,
         prereq_of: Option<String>,
-    ) -> Event {
+    ) -> InputEvent {
         self.new_feature_request_event(flag_key, user, Some(flag), detail, default, prereq_of)
     }
 
@@ -216,7 +286,7 @@ impl EventFactory {
         detail: Detail<FlagValue>,
         default: FlagValue,
         prereq_of: Option<String>,
-    ) -> Event {
+    ) -> InputEvent {
         // TODO(ch108604) Events created during prereq evaluation might not have a value set (e.g.
         // flag is off and the off variation is None). In those situations, we are going to default
         // to a JSON null until we can better sort out the Detail struct.
@@ -241,12 +311,8 @@ impl EventFactory {
             None
         };
 
-        Event::FeatureRequest(FeatureRequestEvent {
-            user_key: user.key().to_string(),
-            base: BaseEvent {
-                creation_date: Self::now(),
-                user: MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
-            },
+        InputEvent::FeatureRequest(FeatureRequestEvent {
+            base: BaseEvent::new(Self::now(), user.clone()),
             key: flag_key.to_owned(),
             default,
             reason,
@@ -259,22 +325,15 @@ impl EventFactory {
         })
     }
 
-    pub fn new_identify(&self, user: User) -> Event {
-        Event::Identify(IdentifyEvent {
+    pub fn new_identify(&self, user: User) -> InputEvent {
+        InputEvent::Identify(IdentifyEvent {
             key: user.key().to_string(),
-            base: BaseEvent {
-                creation_date: Self::now(),
-                user: MaybeInlinedUser::new(true, user),
-            },
+            base: BaseEvent::new(Self::now(), user),
         })
     }
 
-    pub fn new_alias(&self, user: User, previous_user: User) -> Event {
-        Event::Alias(AliasEvent {
-            base: BaseEvent {
-                creation_date: Self::now(),
-                user: MaybeInlinedUser::new(false, user.clone()),
-            },
+    pub fn new_alias(&self, user: User, previous_user: User) -> InputEvent {
+        InputEvent::Alias(AliasEvent {
             key: user.key().to_string(),
             context_kind: user.into(),
             previous_key: previous_user.key().to_string(),
@@ -288,62 +347,16 @@ impl EventFactory {
         key: impl Into<String>,
         metric_value: Option<f64>,
         data: impl Serialize,
-    ) -> serde_json::Result<Event> {
+    ) -> serde_json::Result<InputEvent> {
         let data = serde_json::to_value(data)?;
 
-        Ok(Event::Custom(CustomEvent {
-            base: BaseEvent {
-                creation_date: Self::now(),
-                user: MaybeInlinedUser::new(self.inline_users_in_events, user.clone()),
-            },
+        Ok(InputEvent::Custom(CustomEvent {
+            base: BaseEvent::new(Self::now(), user.clone()),
             key: key.into(),
             metric_value,
             data,
             context_kind: user.into(),
         }))
-    }
-}
-
-impl Event {
-    pub fn to_index_event(&self) -> Option<IndexEvent> {
-        let base = match self {
-            Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
-            Event::Custom(CustomEvent { base, .. }) => base,
-            Event::Alias { .. }
-            | Event::Index { .. }
-            | Event::Identify { .. }
-            | Event::Summary { .. } => return None,
-        };
-
-        // difficult to avoid clone here because we can't express that we're not "really"
-        // borrowing base.clone().user
-        let mut base = base.clone();
-        base.user = base.user.force_inlined();
-        Some(base)
-    }
-
-    #[cfg(test)]
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Event::FeatureRequest { .. } => "feature",
-            Event::Alias { .. } => "alias",
-            Event::Index { .. } => "index",
-            Event::Identify { .. } => "identify",
-            Event::Custom { .. } => "custom",
-            Event::Summary { .. } => "summary",
-        }
-    }
-
-    #[cfg(test)]
-    pub fn base_mut(&mut self) -> Option<&mut BaseEvent> {
-        Some(match self {
-            Event::FeatureRequest(FeatureRequestEvent { base, .. }) => base,
-            Event::Alias(AliasEvent { base, .. }) => base,
-            Event::Index(base) => base,
-            Event::Identify(IdentifyEvent { base, .. }) => base,
-            Event::Custom(CustomEvent { base, .. }) => base,
-            Event::Summary(_) => return None,
-        })
     }
 }
 
@@ -567,7 +580,7 @@ mod tests {
             },
         };
 
-        let event_factory = EventFactory::new(true, true);
+        let event_factory = EventFactory::new(true);
         let eval_event = event_factory.new_eval_event(
             &flag.key.clone(),
             user.build(),
@@ -577,7 +590,7 @@ mod tests {
             None,
         );
 
-        if let Event::FeatureRequest(event) = eval_event {
+        if let InputEvent::FeatureRequest(event) = eval_event {
             assert_eq!(event.context_kind, context_kind);
         } else {
             panic!("new_eval_event did not create a FeatureRequestEvent");
@@ -601,10 +614,10 @@ mod tests {
             .anonymous(previous_is_anonymous)
             .build();
 
-        let event_factory = EventFactory::new(true, true);
+        let event_factory = EventFactory::new(true);
         let event = event_factory.new_alias(user.clone(), previous_user.clone());
 
-        if let Event::Alias(alias) = event {
+        if let InputEvent::Alias(alias) = event {
             assert_eq!(alias.key, user.key());
             assert_eq!(alias.context_kind, context_kind);
             assert_eq!(alias.previous_key, previous_user.key());
@@ -628,10 +641,10 @@ mod tests {
             user.anonymous(b);
         }
 
-        let event_factory = EventFactory::new(true, true);
+        let event_factory = EventFactory::new(true);
         let custom_event = event_factory.new_custom(user.build(), &flag.key.clone(), None, "");
 
-        if let Ok(Event::Custom(event)) = custom_event {
+        if let Ok(InputEvent::Custom(event)) = custom_event {
             assert_eq!(event.context_kind, context_kind);
         } else {
             panic!("new_custom did not create a Custom event");
@@ -639,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn serializes_eval_event() {
+    fn serializes_feature_request_event() {
         let flag = basic_flag("flag");
         let default = FlagValue::from(false);
         let user = User::with_key("alice".to_string()).anonymous(true).build();
@@ -651,8 +664,8 @@ mod tests {
             },
         };
 
-        let event_factory = EventFactory::new(true, true);
-        let mut eval_event = event_factory.new_eval_event(
+        let event_factory = EventFactory::new(true);
+        let mut feature_request_event = event_factory.new_eval_event(
             &flag.key.clone(),
             user,
             &flag,
@@ -661,10 +674,11 @@ mod tests {
             None,
         );
         // fix creation date so JSON is predictable
-        eval_event.base_mut().unwrap().creation_date = 1234;
+        feature_request_event.base_mut().unwrap().creation_date = 1234;
 
-        let eval_event_json = r#"
-{
+        if let InputEvent::FeatureRequest(feature_request_event) = feature_request_event {
+            let output_event = OutputEvent::FeatureRequest(feature_request_event.into_inline());
+            let event_json = r#"{
   "kind": "feature",
   "creationDate": 1234,
   "user": {
@@ -673,7 +687,6 @@ mod tests {
     "custom": {}
   },
   "key": "flag",
-  "userKey": "alice",
   "value": false,
   "variation": 1,
   "default": false,
@@ -684,10 +697,173 @@ mod tests {
   "contextKind": "anonymousUser"
 }
         "#
-        .trim();
+            .trim();
 
-        assert_that!(serde_json::to_string_pretty(&eval_event))
-            .is_ok_containing(eval_event_json.to_string());
+            assert_that!(serde_json::to_string_pretty(&output_event))
+                .is_ok_containing(event_json.to_string());
+        }
+    }
+
+    #[test]
+    fn serializes_feature_request_event_without_inlining_user() {
+        let flag = basic_flag("flag");
+        let default = FlagValue::from(false);
+        let user = User::with_key("alice".to_string()).anonymous(true).build();
+        let fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let event_factory = EventFactory::new(true);
+        let mut feature_request_event = event_factory.new_eval_event(
+            &flag.key.clone(),
+            user,
+            &flag,
+            fallthrough.clone(),
+            default.clone(),
+            None,
+        );
+        // fix creation date so JSON is predictable
+        feature_request_event.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::FeatureRequest(feature_request_event) = feature_request_event {
+            let output_event = OutputEvent::FeatureRequest(feature_request_event);
+            let event_json = r#"{
+  "kind": "feature",
+  "creationDate": 1234,
+  "userKey": "alice",
+  "key": "flag",
+  "value": false,
+  "variation": 1,
+  "default": false,
+  "reason": {
+    "kind": "FALLTHROUGH"
+  },
+  "version": 42,
+  "contextKind": "anonymousUser"
+}
+        "#
+            .trim();
+
+            assert_that!(serde_json::to_string_pretty(&output_event))
+                .is_ok_containing(event_json.to_string());
+        }
+    }
+
+    #[test]
+    fn serializes_identify_event() {
+        let user = User::with_key("alice".to_string()).anonymous(true).build();
+        let event_factory = EventFactory::new(true);
+        let mut identify = event_factory.new_identify(user);
+        identify.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::Identify(identify) = identify {
+            let output_event = OutputEvent::Identify(identify.into_inline());
+            let event_json = r#"{
+  "kind": "identify",
+  "creationDate": 1234,
+  "user": {
+    "key": "alice",
+    "anonymous": true,
+    "custom": {}
+  },
+  "key": "alice"
+}
+        "#
+            .trim();
+
+            assert_that!(serde_json::to_string_pretty(&output_event))
+                .is_ok_containing(event_json.to_string());
+        }
+    }
+
+    #[test]
+    fn serializes_alias_event() {
+        let user = User::with_key("alice".to_string()).anonymous(true).build();
+        let previous_user = User::with_key("bob".to_string()).anonymous(true).build();
+        let event_factory = EventFactory::new(true);
+        let alias = event_factory.new_alias(user, previous_user);
+
+        if let InputEvent::Alias(alias) = alias {
+            let output_event = OutputEvent::Alias(alias);
+            let event_json = r#"{
+  "kind": "alias",
+  "key": "alice",
+  "contextKind": "anonymousUser",
+  "previousKey": "bob",
+  "previousContextKind": "anonymousUser"
+}
+        "#
+            .trim();
+
+            assert_that!(serde_json::to_string_pretty(&output_event))
+                .is_ok_containing(event_json.to_string());
+        }
+    }
+
+    #[test]
+    fn serializes_custom_event() {
+        let user = User::with_key("alice".to_string()).anonymous(true).build();
+
+        let event_factory = EventFactory::new(true);
+        let mut custom_event = event_factory
+            .new_custom(user, "custom-key", Some(12345.0), serde_json::Value::Null)
+            .unwrap();
+        // fix creation date so JSON is predictable
+        custom_event.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::Custom(custom_event) = custom_event {
+            let output_event = OutputEvent::Custom(custom_event.into_inline());
+            let event_json = r#"{
+  "kind": "custom",
+  "creationDate": 1234,
+  "user": {
+    "key": "alice",
+    "anonymous": true,
+    "custom": {}
+  },
+  "key": "custom-key",
+  "metricValue": 12345.0,
+  "contextKind": "anonymousUser"
+}
+        "#
+            .trim();
+
+            assert_that!(serde_json::to_string_pretty(&output_event))
+                .is_ok_containing(event_json.to_string());
+        }
+    }
+
+    #[test]
+    fn serializes_custom_event_without_inlining_user() {
+        let user = User::with_key("alice".to_string()).anonymous(true).build();
+
+        let event_factory = EventFactory::new(true);
+        let mut custom_event = event_factory
+            .new_custom(user, "custom-key", Some(12345.0), serde_json::Value::Null)
+            .unwrap();
+        // fix creation date so JSON is predictable
+        custom_event.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::Custom(custom_event) = custom_event {
+            let output_event = OutputEvent::Custom(custom_event);
+            let event_json = r#"{
+  "kind": "custom",
+  "creationDate": 1234,
+  "userKey": "alice",
+  "key": "custom-key",
+  "metricValue": 12345.0,
+  "contextKind": "anonymousUser"
+}
+        "#
+            .trim();
+
+            assert_that!(serde_json::to_string_pretty(&output_event))
+                .is_ok_containing(event_json.to_string());
+        }
     }
 
     #[test]
@@ -699,9 +875,9 @@ mod tests {
                 VariationKey{flag_key: "f".into(), version: Some(2), variation: Some(1)} => VariationSummary{count: 1, value: true.into(), default: false.into()},
             },
         };
-        let summary_event = Event::Summary(summary);
+        let summary_event = OutputEvent::Summary(summary);
 
-        let summary_json = r#"
+        let event_json = r#"
 {
   "kind": "summary",
   "startDate": 1234,
@@ -724,7 +900,30 @@ mod tests {
         .trim();
 
         assert_that!(serde_json::to_string_pretty(&summary_event))
-            .is_ok_containing(summary_json.to_string());
+            .is_ok_containing(event_json.to_string());
+    }
+
+    #[test]
+    fn serializes_index_event() {
+        let user = User::with_key("alice".to_string()).anonymous(true).build();
+        let base_event = BaseEvent::new(1234, user);
+        let index_event = OutputEvent::Index(base_event.into());
+
+        let event_json = r#"
+{
+  "kind": "index",
+  "creationDate": 1234,
+  "user": {
+    "key": "alice",
+    "anonymous": true,
+    "custom": {}
+  }
+}
+        "#
+        .trim();
+
+        assert_that!(serde_json::to_string_pretty(&index_event))
+            .is_ok_containing(event_json.to_string());
     }
 
     #[test]
@@ -745,12 +944,8 @@ mod tests {
         let eval_at = 1234;
 
         let fallthrough_request = FeatureRequestEvent {
-            base: BaseEvent {
-                user: MaybeInlinedUser::Inlined(user.clone()),
-                creation_date: eval_at,
-            },
+            base: BaseEvent::new(eval_at, user.clone()),
             key: flag.key.clone(),
-            user_key: user.key().to_string(),
             value: value.clone(),
             variation: Some(variation_index),
             default: default.clone(),
@@ -790,7 +985,7 @@ mod tests {
 
     #[test]
     fn event_factory_unknown_flags_do_not_track_events() {
-        let event_factory = EventFactory::new(true, true);
+        let event_factory = EventFactory::new(true);
         let user = User::with_key("bob").build();
         let detail = Detail {
             value: Some(FlagValue::from(false)),
@@ -800,7 +995,7 @@ mod tests {
         let event =
             event_factory.new_unknown_flag_event("myFlag", user, detail, FlagValue::Bool(true));
 
-        if let Event::FeatureRequest(event) = event {
+        if let InputEvent::FeatureRequest(event) = event {
             assert!(!event.track_events);
         } else {
             panic!("Event should be a feature request type");
@@ -830,7 +1025,7 @@ mod tests {
         should_events_be_tracked: bool,
         should_include_reason: bool,
     ) {
-        let event_factory = EventFactory::new(event_factory_send_events, true);
+        let event_factory = EventFactory::new(event_factory_send_events);
         let mut flag = basic_flag("myFlag");
         flag.track_events = flag_track_events;
         flag.track_events_fallthrough = flag_track_events_fallthrough;
@@ -850,7 +1045,7 @@ mod tests {
             None,
         );
 
-        if let Event::FeatureRequest(event) = event {
+        if let InputEvent::FeatureRequest(event) = event {
             assert_eq!(event.track_events, should_events_be_tracked);
             assert_eq!(event.reason.is_some(), should_include_reason);
         } else {
@@ -873,7 +1068,7 @@ mod tests {
         should_events_be_tracked: bool,
         should_include_reason: bool,
     ) {
-        let event_factory = EventFactory::new(event_factory_send_events, true);
+        let event_factory = EventFactory::new(event_factory_send_events);
         let flag: Flag = serde_json::from_str(
             r#"{
                  "key": "with_rule",
@@ -937,7 +1132,7 @@ mod tests {
             None,
         );
 
-        if let Event::FeatureRequest(event) = event {
+        if let InputEvent::FeatureRequest(event) = event {
             assert_eq!(event.track_events, should_events_be_tracked);
             assert_eq!(event.reason.is_some(), should_include_reason);
         } else {

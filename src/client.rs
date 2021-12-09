@@ -9,6 +9,8 @@ use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
+use crate::events::InputEvent;
+
 use super::config::Config;
 use super::data_source::DataSource;
 use super::data_source_builders::BuildError as DataSourceError;
@@ -17,7 +19,7 @@ use super::data_store_builders::BuildError as DataStoreError;
 use super::evaluation::{FlagDetail, FlagDetailConfig};
 use super::event_processor::EventProcessor;
 use super::event_processor_builders::BuildError as EventProcessorError;
-use super::events::{Event, EventFactory};
+use super::events::EventFactory;
 
 struct EventsScope {
     disabled: bool,
@@ -169,9 +171,9 @@ impl Client {
         // TODO Once we support offline mode, we need to toggle the disabled flag
         let events_default = EventsScope {
             disabled: false,
-            event_factory: EventFactory::new(false, config.inline_users_in_events()),
+            event_factory: EventFactory::new(false),
             prerequisite_event_recorder: Box::new(PrerequisiteEventRecorder {
-                event_factory: EventFactory::new(false, config.inline_users_in_events()),
+                event_factory: EventFactory::new(false),
                 event_processor: event_processor.clone(),
             }),
         };
@@ -179,9 +181,9 @@ impl Client {
         // TODO Once we support offline mode, we need to toggle the disabled flag
         let events_with_reasons = EventsScope {
             disabled: false,
-            event_factory: EventFactory::new(true, config.inline_users_in_events()),
+            event_factory: EventFactory::new(true),
             prerequisite_event_recorder: Box::new(PrerequisiteEventRecorder {
-                event_factory: EventFactory::new(true, config.inline_users_in_events()),
+                event_factory: EventFactory::new(true),
                 event_processor: event_processor.clone(),
             }),
         };
@@ -544,7 +546,7 @@ impl Client {
         result
     }
 
-    fn send_internal(&self, event: Event) {
+    fn send_internal(&self, event: InputEvent) {
         let _ = self
             .event_processor
             .lock()
@@ -569,7 +571,7 @@ mod tests {
     use crate::data_store::PatchTarget;
     use crate::event_processor_builders::EventProcessorBuilder;
     use crate::event_sink::MockSink;
-    use crate::events::VariationKey;
+    use crate::events::{OutputEvent, VariationKey};
     use crate::test_common::{
         self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_off_flag,
     };
@@ -646,7 +648,7 @@ mod tests {
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[1].clone() {
+        if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
                 flag_key: "myFlag".into(),
                 version: Some(42),
@@ -674,7 +676,7 @@ mod tests {
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[1].clone() {
+        if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
                 flag_key: "non-existent-flag".into(),
                 version: None,
@@ -714,7 +716,7 @@ mod tests {
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[1].clone() {
+        if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
                 flag_key: "myFlag".into(),
                 version: Some(42),
@@ -751,7 +753,7 @@ mod tests {
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[1].clone() {
+        if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
                 flag_key: "myFlag".into(),
                 version: Some(42),
@@ -805,7 +807,7 @@ mod tests {
         assert_that!(events[2].kind()).is_equal_to("feature");
         assert_that!(events[3].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[3].clone() {
+        if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
                 flag_key: "myFlag".into(),
                 version: Some(42),
@@ -860,7 +862,7 @@ mod tests {
         assert_that!(events[2].kind()).is_equal_to("feature");
         assert_that!(events[3].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[3].clone() {
+        if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
                 flag_key: "myFlag".into(),
                 version: Some(42),
@@ -895,7 +897,7 @@ mod tests {
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[1].clone() {
+        if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
                 flag_key: "non-existent-flag".into(),
                 version: None,
@@ -926,7 +928,7 @@ mod tests {
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
-        if let Event::Summary(event_summary) = events[1].clone() {
+        if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
                 flag_key: "non-existent-flag".into(),
                 version: None,

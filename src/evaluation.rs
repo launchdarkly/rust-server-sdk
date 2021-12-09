@@ -152,7 +152,6 @@ impl FlagDetail {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_common::basic_flag_with_track_events;
     use rust_server_sdk_evaluation::User;
 
     use crate::data_store::PatchTarget;
@@ -260,12 +259,11 @@ mod tests {
     fn flag_detail_details_only_with_tracked_events_includes_version() {
         let user = User::with_key("bob").build();
         let mut store = InMemoryDataStore::new();
+        let mut flag = basic_flag("myFlag");
+        flag.track_events = true;
 
         store
-            .patch(
-                "/flags/myFlag",
-                PatchTarget::Flag(basic_flag_with_track_events("myFlag")),
-            )
+            .patch("/flags/myFlag", PatchTarget::Flag(flag))
             .expect("patch should apply");
 
         let mut config = FlagDetailConfig::new();
@@ -296,12 +294,11 @@ mod tests {
     fn flag_detail_with_default_config_but_tracked_event_should_include_version() {
         let user = User::with_key("bob").build();
         let mut store = InMemoryDataStore::new();
+        let mut flag = basic_flag("myFlag");
+        flag.track_events = true;
 
         store
-            .patch(
-                "/flags/myFlag",
-                PatchTarget::Flag(basic_flag_with_track_events("myFlag")),
-            )
+            .patch("/flags/myFlag", PatchTarget::Flag(flag))
             .expect("patch should apply");
 
         let mut flag_detail = FlagDetail::new(true);

@@ -4,14 +4,17 @@ use std::time::{Duration, Instant};
 
 use lru::LruCache;
 use reqwest as r;
+use rust_server_sdk_evaluation::User;
+
+use crate::events::OutputEvent;
 
 use super::event_sink as sink;
-use super::events::{Event, EventSummary, MaybeInlinedUser};
+use super::events::{EventSummary, InputEvent};
 
 type Error = String; // TODO(ch108607) use an error enum
 
 pub trait EventProcessor: Send {
-    fn send(&self, event: Event) -> Result<(), Error>;
+    fn send(&self, event: InputEvent) -> Result<(), Error>;
     fn flush(&self) -> Result<(), Error>;
 }
 
@@ -26,6 +29,7 @@ impl EventProcessorImpl {
         flush_interval: Duration,
         capacity: usize,
         user_keys_capacity: usize,
+        inline_users_in_events: bool,
     ) -> Result<Self, Error> {
         let sink = sink::ReqwestSink::new(&base_url, sdk_key)?;
         Self::new_with_sink(
@@ -33,6 +37,7 @@ impl EventProcessorImpl {
             flush_interval,
             capacity,
             user_keys_capacity,
+            inline_users_in_events,
         )
     }
 
@@ -41,12 +46,14 @@ impl EventProcessorImpl {
         flush_interval: Duration,
         capacity: usize,
         user_keys_capacity: usize,
+        inline_users_in_events: bool,
     ) -> Result<Self, Error> {
         // TODO(ch108609) make batcher params configurable
         let batcher = EventBatcher::start(
             sink,
             capacity,
             user_keys_capacity,
+            inline_users_in_events,
             1000,
             Duration::from_secs(30),
             flush_interval,
@@ -56,16 +63,9 @@ impl EventProcessorImpl {
 }
 
 impl EventProcessor for EventProcessorImpl {
-    fn send(&self, event: Event) -> Result<(), Error> {
+    fn send(&self, event: InputEvent) -> Result<(), Error> {
         debug!("Sending event: {}", event);
-
-        let index_result = match event.to_index_event() {
-            Some(index) => self.batcher.add(Event::Index(index)),
-            None => Ok(()),
-        };
-        // if failed to send index, still try to send event, but return an error
-
-        self.batcher.add(event).and(index_result)
+        self.batcher.add(event)
     }
 
     fn flush(&self) -> Result<(), Error> {
@@ -74,7 +74,7 @@ impl EventProcessor for EventProcessorImpl {
 }
 
 struct EventBatcher {
-    sender: mpsc::SyncSender<Event>,
+    sender: mpsc::SyncSender<InputEvent>,
     flusher: mpsc::SyncSender<mpsc::SyncSender<()>>,
 }
 
@@ -83,6 +83,7 @@ impl EventBatcher {
         sink: Arc<RwLock<dyn sink::EventSink>>,
         capacity: usize,
         user_keys_capacity: usize,
+        inline_users_in_events: bool,
         batch_size: usize,
         batch_timeout: Duration,
         flush_interval: Duration,
@@ -115,7 +116,13 @@ impl EventBatcher {
                     // TODO(ch108616) redo this using crossbeam-channel, or futures::channel and futures::select
                     let mut batch_ready = match receiver.recv_timeout(flush_interval) {
                         Ok(event) => {
-                            process_event(event, &mut user_cache, &mut batch, &mut summary);
+                            process_event(
+                                event,
+                                &mut user_cache,
+                                &mut batch,
+                                &mut summary,
+                                inline_users_in_events,
+                            );
 
                             batch.len() > batch_size
                         }
@@ -139,15 +146,20 @@ impl EventBatcher {
                     }
                 }
 
-                if !batch.is_empty() {
+                if !batch.is_empty() || !summary.is_empty() {
                     if !flushes.is_empty() {
                         // flush requested, just send everything left in the channel (even if the
                         // current batch was "full")
                         let mut extra = 0;
                         while let Ok(event) = receiver.try_recv() {
-                            if process_event(event, &mut user_cache, &mut batch, &mut summary) {
-                                extra += 1;
-                            }
+                            process_event(
+                                event,
+                                &mut user_cache,
+                                &mut batch,
+                                &mut summary,
+                                inline_users_in_events,
+                            );
+                            extra += 1;
                         }
                         if extra > 0 {
                             debug!("Sending {} extra events early due to flush", extra);
@@ -155,7 +167,7 @@ impl EventBatcher {
                     }
 
                     if !summary.is_empty() {
-                        batch.push(Event::Summary(summary));
+                        batch.push(OutputEvent::Summary(summary));
                     }
 
                     debug!("Sending batch of {} events", batch.len());
@@ -175,7 +187,11 @@ impl EventBatcher {
         Ok(EventBatcher { sender, flusher })
     }
 
-    pub fn add(&self, event: Event) -> Result<(), Error> {
+    pub fn add(&self, event: InputEvent) -> Result<(), Error> {
+        // TODO(non-blocking) If the input is full, we should not block. Instead, we should display an error
+        // the first time we start dropping events but we should return immediately.
+        //
+        // The spec does not require we return any result from this method either.
         self.sender.send(event).map_err(|e| e.to_string())
     }
 
@@ -191,38 +207,54 @@ impl EventBatcher {
 }
 
 fn process_event(
-    event: Event,
+    event: InputEvent,
     user_cache: &mut LruCache<String, ()>,
-    batch: &mut Vec<Event>,
+    batch: &mut Vec<OutputEvent>,
     summary: &mut EventSummary,
-) -> bool {
+    inline_users_in_events: bool,
+) {
     match event {
-        Event::Index(index) => {
-            if notice_user(user_cache, &index.user) {
-                batch.push(Event::Index(index));
-                true
-            } else {
-                false
-            }
-        }
-        Event::FeatureRequest(fre) => {
+        InputEvent::FeatureRequest(fre) => {
             summary.add(&fre);
 
-            if fre.track_events {
-                batch.push(Event::FeatureRequest(fre));
-                true
-            } else {
-                false
+            if notice_user(user_cache, &fre.base.user) && !inline_users_in_events {
+                batch.push(OutputEvent::Index(fre.to_index_event()));
             }
+
+            if fre.track_events {
+                let event = match inline_users_in_events {
+                    true => fre.into_inline(),
+                    false => fre,
+                };
+
+                batch.push(OutputEvent::FeatureRequest(event));
+            }
+
+            // TODO(mmk) Add support for debug events here
         }
-        _ => {
-            batch.push(event);
-            true
+        InputEvent::Identify(identify) => {
+            notice_user(user_cache, &identify.base.user);
+            batch.push(OutputEvent::Identify(identify.into_inline()));
+        }
+        InputEvent::Alias(alias) => {
+            batch.push(OutputEvent::Alias(alias));
+        }
+        InputEvent::Custom(custom) => {
+            if notice_user(user_cache, &custom.base.user) && !inline_users_in_events {
+                batch.push(OutputEvent::Index(custom.to_index_event()));
+            }
+
+            let event = match inline_users_in_events {
+                true => custom.into_inline(),
+                false => custom,
+            };
+
+            batch.push(OutputEvent::Custom(event));
         }
     }
 }
 
-fn notice_user(user_cache: &mut LruCache<String, ()>, user: &MaybeInlinedUser) -> bool {
+fn notice_user(user_cache: &mut LruCache<String, ()>, user: &User) -> bool {
     let key = user.key().to_string();
 
     if user_cache.get(&key).is_none() {
@@ -239,63 +271,39 @@ fn notice_user(user_cache: &mut LruCache<String, ()>, user: &MaybeInlinedUser) -
 mod tests {
     use rust_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User};
     use spectral::prelude::*;
+    use test_case::test_case;
 
     use super::*;
     use crate::{events::EventFactory, test_common::basic_flag};
 
-    fn make_test_sink(events: &Arc<RwLock<sink::MockSink>>) -> EventProcessorImpl {
-        EventProcessorImpl::new_with_sink(events.clone(), Duration::from_millis(100), 1000, 1000)
-            .expect("event processor should initialize")
+    fn make_test_sink(
+        events: &Arc<RwLock<sink::MockSink>>,
+        inline_users_in_events: bool,
+    ) -> EventProcessorImpl {
+        EventProcessorImpl::new_with_sink(
+            events.clone(),
+            Duration::from_millis(100),
+            1000,
+            1000,
+            inline_users_in_events,
+        )
+        .expect("event processor should initialize")
     }
 
-    #[test]
-    fn sending_feature_event_emits_only_index_and_summary() {
+    #[test_case(true, false, vec!["summary"])]
+    #[test_case(false, false, vec!["index", "summary"])]
+    #[test_case(true, true, vec!["feature", "summary"])]
+    #[test_case(false, true, vec!["index", "feature", "summary"])]
+    fn sending_feature_event_emits_correct_events(
+        inline_users_in_events: bool,
+        flag_track_events: bool,
+        expected_event_types: Vec<&str>,
+    ) {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = make_test_sink(&events);
-
-        let flag = basic_flag("flag");
-        let user = User::with_key("foo".to_string()).build();
-        let detail = Detail {
-            value: Some(FlagValue::from(false)),
-            variation_index: Some(1),
-            reason: Reason::Fallthrough {
-                in_experiment: false,
-            },
-        };
-
-        let event_factory = EventFactory::new(true, true);
-        let feature_request = event_factory.new_eval_event(
-            &flag.key,
-            user,
-            &flag,
-            detail.clone(),
-            FlagValue::from(false),
-            None,
-        );
-        ep.send(feature_request.clone())
-            .expect("send should succeed");
-
-        ep.flush().expect("flush should succeed");
-
-        let events = events.read().unwrap();
-        assert_that!(*events).has_length(2);
-
-        asserting!("emits index event")
-            .that(&*events)
-            .matching_contains(|event| event.kind() == "index");
-
-        asserting!("emits summary event")
-            .that(&*events)
-            .matching_contains(|event| event.kind() == "summary");
-    }
-
-    #[test]
-    fn sending_feature_event_with_track_events_emits_index_and_summary() {
-        let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = make_test_sink(&events);
+        let ep = make_test_sink(&events, inline_users_in_events);
 
         let mut flag = basic_flag("flag");
-        flag.track_events = true;
+        flag.track_events = flag_track_events;
         let user = User::with_key("foo".to_string()).build();
         let detail = Detail {
             value: Some(FlagValue::from(false)),
@@ -305,7 +313,7 @@ mod tests {
             },
         };
 
-        let event_factory = EventFactory::new(true, true);
+        let event_factory = EventFactory::new(true);
         let feature_request = event_factory.new_eval_event(
             &flag.key,
             user,
@@ -314,31 +322,22 @@ mod tests {
             FlagValue::from(false),
             None,
         );
-        ep.send(feature_request.clone())
-            .expect("send should succeed");
+        ep.send(feature_request).expect("send should succeed");
 
         ep.flush().expect("flush should succeed");
 
         let events = events.read().unwrap();
-        assert_that!(*events).has_length(3);
+        assert_that!(*events).has_length(expected_event_types.len());
 
-        asserting!("emits original feature event")
-            .that(&*events)
-            .contains(&feature_request);
-
-        asserting!("emits index event")
-            .that(&*events)
-            .matching_contains(|event| event.kind() == "index");
-
-        asserting!("emits summary event")
-            .that(&*events)
-            .matching_contains(|event| event.kind() == "summary");
+        for event_type in expected_event_types {
+            assert_that(&*events).matching_contains(|event| event.kind() == event_type);
+        }
     }
 
     #[test]
-    fn sending_feature_event_with_rule_track_events_emits_index_and_summary() {
+    fn sending_feature_event_with_rule_track_events_emits_feature_and_summary() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = make_test_sink(&events);
+        let ep = make_test_sink(&events, true);
 
         let flag: Flag = serde_json::from_str(
             r#"{
@@ -414,7 +413,7 @@ mod tests {
             },
         };
 
-        let event_factory = EventFactory::new(true, true);
+        let event_factory = EventFactory::new(true);
         let fre_track_rule = event_factory.new_eval_event(
             &flag.key,
             user_track_rule,
@@ -448,26 +447,17 @@ mod tests {
 
         let events = events.read().unwrap();
 
-        assert_that!(*events).has_length(2 + 3 + 1);
+        // detail_track_rule -> feature, detail_fallthrough -> feature, 1 summary
+        assert_that!(*events).has_length(1 + 1 + 1);
 
-        asserting!("emits tracked rule feature event")
-            .that(&*events)
-            .contains(&fre_track_rule);
-        asserting!("does not emit untracked rule feature event")
-            .that(&*events)
-            .does_not_contain(&fre_notrack_rule);
-        asserting!("emits fallthrough feature event (with trackEventsFallthrough)")
-            .that(&*events)
-            .contains(&fre_fallthrough);
-
-        asserting!("emits an index event for each")
+        asserting!("emits feature events for rules that have track events enabled")
             .that(
                 &events
                     .iter()
-                    .filter(|event| event.kind() == "index")
+                    .filter(|event| event.kind() == "feature")
                     .count(),
             )
-            .is_equal_to(3);
+            .is_equal_to(2);
 
         asserting!("emits summary event")
             .that(&*events)
@@ -477,7 +467,7 @@ mod tests {
     #[test]
     fn feature_events_dedupe_index_events() {
         let events = Arc::new(RwLock::new(sink::MockSink::new()));
-        let ep = make_test_sink(&events);
+        let ep = make_test_sink(&events, false);
 
         let flag = basic_flag("flag");
         let user = User::with_key("bar".to_string()).build();
@@ -489,7 +479,7 @@ mod tests {
             },
         };
 
-        let event_factory = EventFactory::new(true, true);
+        let event_factory = EventFactory::new(true);
         let feature_request = event_factory.new_eval_event(
             &flag.key,
             user,
@@ -500,8 +490,7 @@ mod tests {
         );
         ep.send(feature_request.clone())
             .expect("send should succeed");
-        ep.send(feature_request.clone())
-            .expect("send should succeed");
+        ep.send(feature_request).expect("send should succeed");
 
         ep.flush().expect("flush should succeed");
 

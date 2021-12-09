@@ -50,10 +50,9 @@ pub struct EventProcessorBuilder {
     flush_interval: Duration,
     event_sink: Option<Arc<RwLock<dyn sink::EventSink>>>,
     user_keys_capacity: usize,
-    // inline_user_in_events: bool,
+    inline_users_in_events: bool,
     // all_attributes_private: bool,
     // private_attributes: Vec<String>,
-    // user_keys_capacity: usize,
     // user_keys_flush_interval: Duration,
     // diagnostic_recording_interval: Duration,
 }
@@ -76,6 +75,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
                         self.flush_interval,
                         self.capacity,
                         self.user_keys_capacity,
+                        self.inline_users_in_events,
                     )
                     .map_err(|e| {
                         BuildError::InvalidConfig(format!("invalid events_base_url: {}", e))
@@ -85,6 +85,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
                         self.flush_interval,
                         self.capacity,
                         self.user_keys_capacity,
+                        self.inline_users_in_events,
                     )
                     .map_err(|e| {
                         BuildError::InvalidConfig(format!("invalid events_base_url: {}", e))
@@ -105,6 +106,7 @@ impl EventProcessorBuilder {
             flush_interval: DEFAULT_FLUSH_POLL_INTERVAL,
             user_keys_capacity: DEFAULT_USER_KEY_SIZE,
             event_sink: None,
+            inline_users_in_events: false,
         }
     }
 
@@ -133,6 +135,15 @@ impl EventProcessorBuilder {
     /// recently seen user keys.
     pub fn user_keys_capacity(&mut self, user_keys_capacity: usize) -> &mut Self {
         self.user_keys_capacity = user_keys_capacity;
+        self
+    }
+
+    /// Sets whether to include full user details in every analytics event.
+    ///
+    /// The default is false: events will only include the user key, except for one "index" event that provides
+    /// the full details for the user.
+    pub fn inline_users_in_events(&mut self, inline_users_in_events: bool) -> &mut Self {
+        self.inline_users_in_events = inline_users_in_events;
         self
     }
 
@@ -180,5 +191,12 @@ mod tests {
         let mut builder = EventProcessorBuilder::new();
         builder.user_keys_capacity(1234);
         assert_eq!(builder.user_keys_capacity, 1234);
+    }
+
+    #[test]
+    fn inline_users_in_events_can_be_adjusted() {
+        let mut builder = EventProcessorBuilder::new();
+        builder.inline_users_in_events(true);
+        assert!(builder.inline_users_in_events);
     }
 }

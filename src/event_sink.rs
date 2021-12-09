@@ -1,11 +1,11 @@
 use reqwest as r;
 
-use super::events::Event;
+use crate::events::OutputEvent;
 
 type Error = String; // TODO(ch108607) use an error enum
 
 pub trait EventSink: Send + Sync {
-    fn send(&mut self, events: Vec<Event>) -> Result<(), Error>;
+    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), Error>;
 }
 
 pub struct ReqwestSink {
@@ -30,7 +30,7 @@ impl ReqwestSink {
 }
 
 impl EventSink for ReqwestSink {
-    fn send(&mut self, events: Vec<Event>) -> Result<(), Error> {
+    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), Error> {
         debug!(
             "Sending: {}",
             serde_json::to_string_pretty(&events).unwrap_or_else(|e| e.to_string())
@@ -58,11 +58,11 @@ impl EventSink for ReqwestSink {
 }
 
 #[cfg(test)]
-pub type MockSink = Vec<Event>;
+pub type MockSink = Vec<OutputEvent>;
 
 #[cfg(test)]
 impl EventSink for MockSink {
-    fn send(&mut self, events: Vec<Event>) -> Result<(), Error> {
+    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), Error> {
         self.extend(events);
         Ok(())
     }
