@@ -41,6 +41,9 @@ pub(crate) struct DeleteData {
     version: u64,
 }
 
+/// Trait for the component that obtains feature flag data in some way and passes it to a data
+/// store. The built-in implementations of this are the client's standard streaming or polling
+/// behavior.
 pub trait DataSource: Send {
     fn subscribe(
         &mut self,
@@ -58,7 +61,7 @@ impl StreamingDataSource {
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
-    ) -> std::result::Result<StreamingDataSource, es::Error> {
+    ) -> std::result::Result<Self, es::Error> {
         let stream_url = format!("{}/all", base_url);
         let client_builder = es::Client::for_url(&stream_url)?;
         let es_client = client_builder
@@ -71,7 +74,7 @@ impl StreamingDataSource {
             .header("Authorization", sdk_key)?
             .header("User-Agent", &*crate::USER_AGENT)?
             .build();
-        Ok(StreamingDataSource { es_client })
+        Ok(Self { es_client })
     }
 }
 
@@ -124,6 +127,18 @@ impl DataSource for StreamingDataSource {
             }
         });
     }
+}
+
+pub struct NullDataSource {}
+
+impl NullDataSource {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl DataSource for NullDataSource {
+    fn subscribe(&mut self, _: Arc<Mutex<dyn DataStore>>, _: Arc<dyn Fn(bool) + Send + Sync>) {}
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use super::event_sink as sink;
-use crate::event_processor::{EventProcessor, EventProcessorImpl};
+use crate::event_processor::{EventProcessor, EventProcessorImpl, NullEventProcessor};
 use crate::service_endpoints;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -155,6 +155,35 @@ impl EventProcessorBuilder {
 }
 
 impl Default for EventProcessorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct NullEventProcessorBuilder {}
+
+impl EventProcessorFactory for NullEventProcessorBuilder {
+    fn build(
+        &self,
+        _: &service_endpoints::ServiceEndpoints,
+        _: &str,
+    ) -> Result<Arc<Mutex<dyn EventProcessor>>, BuildError> {
+        Ok(Arc::new(Mutex::new(NullEventProcessor::new())))
+    }
+
+    fn to_owned(&self) -> Box<dyn EventProcessorFactory> {
+        Box::new(self.clone())
+    }
+}
+
+impl NullEventProcessorBuilder {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Default for NullEventProcessorBuilder {
     fn default() -> Self {
         Self::new()
     }

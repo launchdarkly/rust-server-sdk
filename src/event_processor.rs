@@ -13,9 +13,29 @@ use super::events::{EventSummary, InputEvent};
 
 type Error = String; // TODO(ch108607) use an error enum
 
+/// Trait for the component that buffers analytics events and sends them to LaunchDarkly.
+/// This component can be replaced for testing purposes.
 pub trait EventProcessor: Send {
     fn send(&self, event: InputEvent) -> Result<(), Error>;
     fn flush(&self) -> Result<(), Error>;
+}
+
+pub struct NullEventProcessor {}
+
+impl NullEventProcessor {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl EventProcessor for NullEventProcessor {
+    fn send(&self, _: InputEvent) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 pub struct EventProcessorImpl {

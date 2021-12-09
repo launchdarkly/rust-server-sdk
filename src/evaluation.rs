@@ -5,7 +5,7 @@ use rust_server_sdk_evaluation::{evaluate, FlagValue, Reason, User};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-/// Configuration struct to control the type of data returned from the [Client::all_flags_detail]
+/// Configuration struct to control the type of data returned from the [crate::Client::all_flags_detail]
 /// method. By default, each of the options default to false. However, you can selectively enable
 /// them by calling the appropriate functions.
 ///

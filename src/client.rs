@@ -152,12 +152,17 @@ pub struct Client {
     init_notify: Arc<Semaphore>,
     init_state: Arc<AtomicUsize>,
     started: AtomicBool,
+    offline: bool,
     // TODO: Once we need the config for diagnostic events, then we should add this.
     // config: Arc<Mutex<Config>>
 }
 
 impl Client {
     pub fn build(config: Config) -> Result<Self, BuildError> {
+        if config.offline() {
+            info!("Started LaunchDarkly Client in offline mode");
+        }
+
         let endpoints = config.service_endpoints_builder().build()?;
         let event_processor = config
             .event_processor_builder()
@@ -167,9 +172,8 @@ impl Client {
             .build(&endpoints, config.sdk_key())?;
         let data_store = config.data_store_builder().build()?;
 
-        // TODO Once we support offline mode, we need to toggle the disabled flag
         let events_default = EventsScope {
-            disabled: false,
+            disabled: config.offline(),
             event_factory: EventFactory::new(false),
             prerequisite_event_recorder: Box::new(PrerequisiteEventRecorder {
                 event_factory: EventFactory::new(false),
@@ -177,9 +181,8 @@ impl Client {
             }),
         };
 
-        // TODO Once we support offline mode, we need to toggle the disabled flag
         let events_with_reasons = EventsScope {
-            disabled: false,
+            disabled: config.offline(),
             event_factory: EventFactory::new(true),
             prerequisite_event_recorder: Box::new(PrerequisiteEventRecorder {
                 event_factory: EventFactory::new(true),
@@ -196,6 +199,7 @@ impl Client {
             init_notify: Arc::new(Semaphore::new(0)),
             init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
             started: AtomicBool::new(false),
+            offline: config.offline(),
         })
     }
 
@@ -260,6 +264,10 @@ impl Client {
     /// Initialization being complete does not mean that initialization was a success.
     /// The return value from the method indicates if the client successfully initialized.
     pub async fn initialized_async(&self) -> bool {
+        if self.offline {
+            return true;
+        }
+
         // If the client is not initialized, then we need to wait for it to be initialized.
         // Because we are using atomic types, and not a lock, then there is still the possibility
         // that the value will change between the read and when we wait. We use a semaphore to wait,
@@ -275,7 +283,7 @@ impl Client {
     /// In the case of unrecoverable errors in establishing a connection it is possible for the
     /// SDK to never become initialized.
     pub fn initialized(&self) -> bool {
-        ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
+        self.offline || ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
     }
 
     pub fn flush(&self) -> Result<(), FlushError> {
@@ -415,15 +423,21 @@ impl Client {
     ///
     /// For more information, see the Reference Guide: <https://docs.launchdarkly.com/sdk/features/all-flags#rust>
     pub fn all_flags_detail(&self, user: &User, flag_state_config: FlagDetailConfig) -> FlagDetail {
-        // TODO Once we have an offline designation, we need to handle that here.
-
-        if !self.initialized() {
+        if self.offline {
+            warn!(
+                "all_flags_detail() called, but client is in offline mode. Returning empty state"
+            );
             return FlagDetail::new(false);
         }
 
-        let mut flag_detail = FlagDetail::new(true);
+        if !self.initialized() {
+            warn!("all_flags_detail() called before client has finished initializing! Feature store unavailable - returning empty state");
+            return FlagDetail::new(false);
+        }
 
         let data_store = self.data_store.lock().unwrap();
+
+        let mut flag_detail = FlagDetail::new(true);
         flag_detail.populate(&*data_store, user, flag_state_config);
 
         flag_detail
@@ -494,6 +508,10 @@ impl Client {
         default: T,
         events_scope: &EventsScope,
     ) -> Detail<FlagValue> {
+        if self.offline {
+            return Detail::err_default(eval::Error::ClientNotReady, default.into());
+        }
+
         let (flag, result) = match self.initialized() {
             false => (
                 None,
@@ -587,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes() {
-        let (client, _updates, _events) = make_mocked_client_with_delay(1000);
+        let (client, _updates, _events) = make_mocked_client_with_delay(1000, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -596,6 +614,20 @@ mod tests {
         assert!(initialized);
         // Give ourself a good margin for thread scheduling.
         assert!(elapsed_time.as_millis() > 500)
+    }
+
+    #[tokio::test]
+    async fn client_initializes_immediately_in_offline_mode() {
+        let (client, _updates, _events) = make_mocked_client_with_delay(1000, true);
+        client.start_with_default_executor();
+
+        assert!(client.initialized());
+
+        let now = Instant::now();
+        let initialized = client.initialized_async().await;
+        let elapsed_time = now.elapsed();
+        assert!(initialized);
+        assert!(elapsed_time.as_millis() < 500)
     }
 
     #[test_case(basic_flag("myFlag"), false.into(), true.into())]
@@ -667,6 +699,21 @@ mod tests {
     }
 
     #[test]
+    fn variation_handles_offline_mode() {
+        let (client, _, events) = make_mocked_offline_client();
+        client.start_with_default_executor();
+
+        let user = User::with_key("bob").build();
+        let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&flag_value.as_bool().unwrap()).is_false();
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(0);
+    }
+
+    #[test]
     fn variation_handles_unknown_flags() {
         let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
@@ -732,6 +779,25 @@ mod tests {
         } else {
             panic!("Event should be a summary type");
         }
+    }
+
+    #[test]
+    fn variation_detail_handles_offline_mode() {
+        let (client, _, events) = make_mocked_offline_client();
+        client.start_with_default_executor();
+
+        let user = User::with_key("bob").build();
+
+        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
+        assert_that(&detail.reason).is_equal_to(Reason::Error {
+            error: eval::Error::ClientNotReady,
+        });
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(0);
     }
 
     #[test]
@@ -917,7 +983,7 @@ mod tests {
 
     #[tokio::test]
     async fn variation_detail_handles_client_not_ready() {
-        let (client, _updates, events) = make_mocked_client_with_delay(u64::MAX);
+        let (client, _updates, events) = make_mocked_client_with_delay(u64::MAX, false);
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -962,6 +1028,20 @@ mod tests {
     }
 
     #[test]
+    fn identify_sends_sends_nothing_in_offline_mode() {
+        let (client, _updates, events) = make_mocked_offline_client();
+        client.start_with_default_executor();
+
+        let user = User::with_key("bob").build();
+
+        client.identify(user);
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(0);
+    }
+
+    #[test]
     fn alias_sends_alias_event() {
         let (client, _updates, events) = make_mocked_client();
         client.start_with_default_executor();
@@ -975,6 +1055,21 @@ mod tests {
         let events = events.read().unwrap();
         assert_that!(*events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("alias");
+    }
+
+    #[test]
+    fn alias_sends_nothing_in_offline_mode() {
+        let (client, _updates, events) = make_mocked_offline_client();
+        client.start_with_default_executor();
+
+        let user = User::with_key("bob").build();
+        let previous_user = User::with_key("previous-bob").build();
+
+        client.alias(user, previous_user);
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(0);
     }
 
     #[derive(Serialize)]
@@ -1018,13 +1113,40 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn track_sends_nothing_in_offline_mode() -> serde_json::Result<()> {
+        let (client, _updates, events) = make_mocked_offline_client();
+        client.start_with_default_executor();
+
+        let user = User::with_key("bob").build();
+
+        client.track_event(user.clone(), "event-with-null");
+        client.track_data(user.clone(), "event-with-string", "string-data")?;
+        client.track_data(user.clone(), "event-with-json", json!({"answer": 42}))?;
+        client.track_data(
+            user.clone(),
+            "event-with-struct",
+            MyCustomData { answer: 42 },
+        )?;
+        client.track_metric(user.clone(), "event-with-metric", 42.0);
+
+        client.flush().expect("flush should succeed");
+
+        let events = events.read().unwrap();
+        assert_that!(*events).has_length(0);
+
+        Ok(())
+    }
+
     fn make_mocked_client_with_delay(
         delay: u64,
+        offline: bool,
     ) -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
         let updates = Arc::new(Mutex::new(MockDataSource::new_with_init_delay(delay)));
         let events = Arc::new(RwLock::new(MockSink::new()));
 
         let config = ConfigBuilder::new("sdk-key")
+            .offline(offline)
             .data_source(MockDataSourceBuilder::new().data_source(updates.clone()))
             .event_processor(EventProcessorBuilder::new().event_sink(events.clone()))
             .build();
@@ -1034,7 +1156,11 @@ mod tests {
         (client, updates, events)
     }
 
+    fn make_mocked_offline_client() -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
+        make_mocked_client_with_delay(0, true)
+    }
+
     fn make_mocked_client() -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
-        make_mocked_client_with_delay(0)
+        make_mocked_client_with_delay(0, false)
     }
 }

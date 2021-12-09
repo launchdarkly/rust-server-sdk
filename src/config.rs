@@ -1,6 +1,8 @@
-use crate::data_source_builders::DataSourceFactory;
+use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
 use crate::data_store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
-use crate::event_processor_builders::{EventProcessorBuilder, EventProcessorFactory};
+use crate::event_processor_builders::{
+    EventProcessorBuilder, EventProcessorFactory, NullEventProcessorBuilder,
+};
 use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};
 
 use std::borrow::Borrow;
@@ -15,6 +17,7 @@ pub struct Config {
     data_source_builder: Box<dyn DataSourceFactory>,
     event_processor_builder: Box<dyn EventProcessorFactory>,
     inline_users_in_events: bool,
+    offline: bool,
 }
 
 impl Config {
@@ -41,6 +44,10 @@ impl Config {
     pub fn inline_users_in_events(&self) -> bool {
         self.inline_users_in_events
     }
+
+    pub fn offline(&self) -> bool {
+        self.offline
+    }
 }
 
 /// Used to create a [Config] struct for creating [crate::Client] instances.
@@ -56,6 +63,7 @@ pub struct ConfigBuilder {
     data_source_builder: Option<Box<dyn DataSourceFactory>>,
     event_processor_builder: Option<Box<dyn EventProcessorFactory>>,
     inline_users_in_events: bool,
+    offline: bool,
     sdk_key: String,
 }
 
@@ -67,6 +75,7 @@ impl ConfigBuilder {
             data_source_builder: None,
             event_processor_builder: None,
             inline_users_in_events: false,
+            offline: false,
             sdk_key: sdk_key.to_string(),
         }
     }
@@ -84,13 +93,17 @@ impl ConfigBuilder {
 
     /// Set the data source to use for this client.
     /// For usage see [crate::data_source_builders::StreamingDataSourceBuilder]
+    ///
+    /// If offline mode is enabled, this data source will be ignored.
     pub fn data_source(mut self, builder: &dyn DataSourceFactory) -> Self {
         self.data_source_builder = Some(builder.to_owned());
         self
     }
 
-    /// Set the data source to use for this client.
+    /// Set the event processor to use for this client.
     /// For usage see [crate::event_processor_builders::EventProcessorBuilder]
+    ///
+    /// If offline mode is enabled, this event processor will be ignored.
     pub fn event_processor(mut self, builder: &dyn EventProcessorFactory) -> Self {
         self.event_processor_builder = Some(builder.to_owned());
         self
@@ -105,6 +118,15 @@ impl ConfigBuilder {
         self
     }
 
+    /// Whether the client should be initialized in offline mode.
+    ///
+    /// In offline mode, default values are returned for all flags and no remote network requests
+    /// are made. By default, this is false.
+    pub fn offline(mut self, offline: bool) -> Self {
+        self.offline = offline;
+        self
+    }
+
     pub fn build(self) -> Config {
         let service_endpoints_builder = match &self.service_endpoints_builder {
             None => ServiceEndpointsBuilder::new(),
@@ -115,14 +137,27 @@ impl ConfigBuilder {
             None => Box::new(InMemoryDataStoreBuilder::new()),
             Some(_data_store_builder) => self.data_store_builder.unwrap(),
         };
-        let data_source_builder = match &self.data_source_builder {
+
+        let data_source_builder: Box<dyn DataSourceFactory> = match &self.data_source_builder {
+            None if self.offline => Box::new(NullDataSourceBuilder::new()),
+            Some(_) if self.offline => {
+                warn!("Custom data source builders will be ignored when in offline mode");
+                Box::new(NullDataSourceBuilder::new())
+            }
             None => Box::new(StreamingDataSourceBuilder::new()),
             Some(_data_source_builder) => self.data_source_builder.unwrap(),
         };
-        let event_processor_builder = match &self.event_processor_builder {
-            None => Box::new(EventProcessorBuilder::new()),
-            Some(_event_processor_builder) => self.event_processor_builder.unwrap(),
-        };
+
+        let event_processor_builder: Box<dyn EventProcessorFactory> =
+            match &self.event_processor_builder {
+                None if self.offline => Box::new(NullEventProcessorBuilder::new()),
+                Some(_) if self.offline => {
+                    warn!("Custom event processor builders will be ignored when in offline mode");
+                    Box::new(NullEventProcessorBuilder::new())
+                }
+                None => Box::new(EventProcessorBuilder::new()),
+                Some(_event_processor_builder) => self.event_processor_builder.unwrap(),
+            };
 
         Config {
             sdk_key: self.sdk_key,
@@ -131,6 +166,7 @@ impl ConfigBuilder {
             data_source_builder,
             event_processor_builder,
             inline_users_in_events: self.inline_users_in_events,
+            offline: self.offline,
         }
     }
 }

@@ -1,5 +1,5 @@
 use super::service_endpoints;
-use crate::data_source::{DataSource, StreamingDataSource};
+use crate::data_source::{DataSource, NullDataSource, StreamingDataSource};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -86,6 +86,35 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
 impl Default for StreamingDataSourceBuilder {
     fn default() -> Self {
         StreamingDataSourceBuilder::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct NullDataSourceBuilder {}
+
+impl NullDataSourceBuilder {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl DataSourceFactory for NullDataSourceBuilder {
+    fn build(
+        &self,
+        _: &service_endpoints::ServiceEndpoints,
+        _: &str,
+    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError> {
+        Ok(Arc::new(Mutex::new(NullDataSource::new())))
+    }
+
+    fn to_owned(&self) -> Box<dyn DataSourceFactory> {
+        Box::new(self.clone())
+    }
+}
+
+impl Default for NullDataSourceBuilder {
+    fn default() -> Self {
+        NullDataSourceBuilder::new()
     }
 }
 
