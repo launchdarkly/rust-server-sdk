@@ -1,6 +1,6 @@
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use lru::LruCache;
 use reqwest as r;
@@ -142,6 +142,7 @@ impl EventBatcher {
                                 &mut batch,
                                 &mut summary,
                                 inline_users_in_events,
+                                sink.read().unwrap().last_known_time(),
                             );
 
                             batch.len() > batch_size
@@ -178,6 +179,7 @@ impl EventBatcher {
                                 &mut batch,
                                 &mut summary,
                                 inline_users_in_events,
+                                sink.read().unwrap().last_known_time(),
                             );
                             extra += 1;
                         }
@@ -232,6 +234,7 @@ fn process_event(
     batch: &mut Vec<OutputEvent>,
     summary: &mut EventSummary,
     inline_users_in_events: bool,
+    last_known_time: u128,
 ) {
     match event {
         InputEvent::FeatureRequest(fre) => {
@@ -239,6 +242,19 @@ fn process_event(
 
             if notice_user(user_cache, &fre.base.user) && !inline_users_in_events {
                 batch.push(OutputEvent::Index(fre.to_index_event()));
+            }
+
+            let now = match SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(time) => time.as_millis(),
+                _ => 0,
+            };
+
+            if let Some(debug_events_until_date) = fre.debug_events_until_date {
+                let time = u128::from(debug_events_until_date);
+                if time > now && time > last_known_time {
+                    let event = fre.clone().into_inline();
+                    batch.push(OutputEvent::Debug(event));
+                }
             }
 
             if fre.track_events {
@@ -249,8 +265,6 @@ fn process_event(
 
                 batch.push(OutputEvent::FeatureRequest(event));
             }
-
-            // TODO(mmk) Add support for debug events here
         }
         InputEvent::Identify(identify) => {
             notice_user(user_cache, &identify.base.user);
@@ -319,7 +333,7 @@ mod tests {
         flag_track_events: bool,
         expected_event_types: Vec<&str>,
     ) {
-        let events = Arc::new(RwLock::new(sink::MockSink::new()));
+        let events = Arc::new(RwLock::new(sink::MockSink::new(0)));
         let ep = make_test_sink(&events, inline_users_in_events);
 
         let mut flag = basic_flag("flag");
@@ -346,17 +360,60 @@ mod tests {
 
         ep.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(expected_event_types.len());
 
         for event_type in expected_event_types {
-            assert_that(&*events).matching_contains(|event| event.kind() == event_type);
+            assert_that(events).matching_contains(|event| event.kind() == event_type);
+        }
+    }
+
+    #[test_case(0, 64_060_606_800_000, vec!["debug", "summary"])]
+    #[test_case(64_060_606_800_000, 64_060_606_800_000, vec!["summary"])]
+    #[test_case(64_060_606_800_001, 64_060_606_800_000, vec!["summary"])]
+    fn sending_feature_event_emits_debug_event_correctly(
+        last_known_time: u128,
+        debug_events_until_date: u64,
+        expected_event_types: Vec<&str>,
+    ) {
+        let events = Arc::new(RwLock::new(sink::MockSink::new(last_known_time)));
+        let ep = make_test_sink(&events, true);
+
+        let mut flag = basic_flag("flag");
+        flag.debug_events_until_date = Some(debug_events_until_date);
+        let user = User::with_key("foo".to_string()).build();
+        let detail = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let event_factory = EventFactory::new(true);
+        let feature_request = event_factory.new_eval_event(
+            &flag.key,
+            user,
+            &flag,
+            detail.clone(),
+            FlagValue::from(false),
+            None,
+        );
+        ep.send(feature_request).expect("send should succeed");
+
+        ep.flush().expect("flush should succeed");
+
+        let events = &events.read().unwrap().events;
+        assert_that!(*events).has_length(expected_event_types.len());
+
+        for event_type in expected_event_types {
+            assert_that(events).matching_contains(|event| event.kind() == event_type);
         }
     }
 
     #[test]
     fn sending_feature_event_with_rule_track_events_emits_feature_and_summary() {
-        let events = Arc::new(RwLock::new(sink::MockSink::new()));
+        let events = Arc::new(RwLock::new(sink::MockSink::new(0)));
         let ep = make_test_sink(&events, true);
 
         let flag: Flag = serde_json::from_str(
@@ -465,7 +522,7 @@ mod tests {
 
         ep.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
 
         // detail_track_rule -> feature, detail_fallthrough -> feature, 1 summary
         assert_that!(*events).has_length(1 + 1 + 1);
@@ -480,13 +537,13 @@ mod tests {
             .is_equal_to(2);
 
         asserting!("emits summary event")
-            .that(&*events)
+            .that(events)
             .matching_contains(|event| event.kind() == "summary");
     }
 
     #[test]
     fn feature_events_dedupe_index_events() {
-        let events = Arc::new(RwLock::new(sink::MockSink::new()));
+        let events = Arc::new(RwLock::new(sink::MockSink::new(0)));
         let ep = make_test_sink(&events, false);
 
         let flag = basic_flag("flag");
@@ -514,7 +571,7 @@ mod tests {
 
         ep.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
 
         asserting!("emits index event only once")

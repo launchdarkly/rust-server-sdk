@@ -91,6 +91,9 @@ pub struct FeatureRequestEvent {
 
     #[serde(skip)]
     pub(crate) track_events: bool,
+
+    #[serde(skip)]
+    pub(crate) debug_events_until_date: Option<u64>,
 }
 
 impl FeatureRequestEvent {
@@ -182,6 +185,9 @@ pub enum OutputEvent {
     #[serde(rename = "index")]
     Index(IndexEvent),
 
+    #[serde(rename = "debug")]
+    Debug(FeatureRequestEvent),
+
     #[serde(rename = "feature")]
     FeatureRequest(FeatureRequestEvent),
 
@@ -203,6 +209,7 @@ impl OutputEvent {
     pub fn kind(&self) -> &'static str {
         match self {
             OutputEvent::Index { .. } => "index",
+            OutputEvent::Debug { .. } => "debug",
             OutputEvent::FeatureRequest { .. } => "feature",
             OutputEvent::Identify { .. } => "identify",
             OutputEvent::Alias { .. } => "alias",
@@ -296,13 +303,16 @@ impl EventFactory {
 
         let flag_track_events;
         let require_experiment_data;
+        let debug_events_until_date;
 
         if let Some(f) = flag {
             flag_track_events = f.track_events;
             require_experiment_data = f.is_experimentation_enabled(&detail.reason);
+            debug_events_until_date = f.debug_events_until_date;
         } else {
             flag_track_events = false;
             require_experiment_data = false;
+            debug_events_until_date = None
         }
 
         let reason = if self.send_reason || require_experiment_data {
@@ -322,6 +332,7 @@ impl EventFactory {
             prereq_of,
             context_kind: user.into(),
             track_events: flag_track_events || require_experiment_data,
+            debug_events_until_date,
         })
     }
 
@@ -954,6 +965,7 @@ mod tests {
             prereq_of: None,
             context_kind: user.into(),
             track_events: false,
+            debug_events_until_date: None,
         };
 
         summary.add(&fallthrough_request);

@@ -681,7 +681,7 @@ mod tests {
         assert_that(&flag_value.as_bool().unwrap()).is_true();
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
@@ -724,7 +724,7 @@ mod tests {
         assert_that(&flag_value.as_bool().unwrap()).is_false();
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
@@ -734,6 +734,49 @@ mod tests {
                 flag_key: "non-existent-flag".into(),
                 version: None,
                 variation: None,
+            };
+            assert_that!(event_summary.features).contains_key(variation_key);
+        } else {
+            panic!("Event should be a summary type");
+        }
+    }
+
+    #[test]
+    fn variation_detail_handles_debug_events_correctly() {
+        let (client, updates, events) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let updates = updates.lock().unwrap();
+        let mut flag = basic_flag("myFlag");
+        flag.debug_events_until_date = Some(64_060_606_800_000); // Jan. 1st, 4000
+
+        updates
+            .patch(PatchData {
+                path: "/flags/myFlag".to_string(),
+                data: PatchTarget::Flag(flag),
+            })
+            .expect("patch should apply");
+        let user = User::with_key("bob").build();
+
+        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
+
+        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
+        assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
+            in_experiment: false,
+        });
+        client.flush().expect("flush should succeed");
+
+        let events = &events.read().unwrap().events;
+        assert_that!(*events).has_length(3);
+        assert_that!(events[0].kind()).is_equal_to("index");
+        assert_that!(events[1].kind()).is_equal_to("debug");
+        assert_that!(events[2].kind()).is_equal_to("summary");
+
+        if let OutputEvent::Summary(event_summary) = events[2].clone() {
+            let variation_key = VariationKey {
+                flag_key: "myFlag".into(),
+                version: Some(42),
+                variation: Some(1),
             };
             assert_that!(event_summary.features).contains_key(variation_key);
         } else {
@@ -764,7 +807,7 @@ mod tests {
         });
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
@@ -820,7 +863,7 @@ mod tests {
         assert_that(&result.as_bool().unwrap()).is_false();
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
@@ -872,7 +915,7 @@ mod tests {
         });
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(4);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("feature");
@@ -927,7 +970,7 @@ mod tests {
         assert_that(&detail.as_bool().unwrap()).is_false();
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(4);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("feature");
@@ -964,7 +1007,7 @@ mod tests {
         });
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
@@ -995,7 +1038,7 @@ mod tests {
         });
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
@@ -1022,7 +1065,7 @@ mod tests {
         client.identify(user);
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("identify");
     }
@@ -1052,7 +1095,7 @@ mod tests {
         client.alias(user, previous_user);
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("alias");
     }
@@ -1096,7 +1139,7 @@ mod tests {
 
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(6);
 
         let mut events_by_type: HashMap<&str, usize> = HashMap::new();
@@ -1143,7 +1186,7 @@ mod tests {
         offline: bool,
     ) -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
         let updates = Arc::new(Mutex::new(MockDataSource::new_with_init_delay(delay)));
-        let events = Arc::new(RwLock::new(MockSink::new()));
+        let events = Arc::new(RwLock::new(MockSink::new(0)));
 
         let config = ConfigBuilder::new("sdk-key")
             .offline(offline)
