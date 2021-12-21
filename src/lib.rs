@@ -24,6 +24,7 @@ pub use evaluation::FlagDetailConfig;
 pub use event_processor::EventProcessor;
 pub use event_processor_builders::{BuildError as EventProcessorBuildError, EventProcessorBuilder};
 pub use service_endpoints::ServiceEndpointsBuilder;
+pub use version::version_string;
 
 mod client;
 mod config;
@@ -38,6 +39,7 @@ mod event_sink;
 mod events;
 mod service_endpoints;
 mod test_common;
+mod version;
 
 lazy_static! {
     pub(crate) static ref USER_AGENT: String =
