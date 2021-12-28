@@ -709,7 +709,7 @@ mod tests {
         assert_that(&flag_value.as_bool().unwrap()).is_false();
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
 
@@ -839,7 +839,7 @@ mod tests {
         });
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
 
@@ -1080,7 +1080,7 @@ mod tests {
         client.identify(user);
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
 
@@ -1111,7 +1111,7 @@ mod tests {
         client.alias(user, previous_user);
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
 
@@ -1175,7 +1175,7 @@ mod tests {
 
         client.flush().expect("flush should succeed");
 
-        let events = events.read().unwrap();
+        let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
 
         Ok(())
