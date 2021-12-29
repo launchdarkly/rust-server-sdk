@@ -2,9 +2,9 @@ use std::sync::{mpsc, Arc, Once, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
+use launchdarkly_server_sdk_evaluation::User;
 use lru::LruCache;
 use reqwest as r;
-use rust_server_sdk_evaluation::User;
 
 use crate::events::OutputEvent;
 
@@ -288,7 +288,7 @@ fn notice_user(user_cache: &mut LruCache<String, ()>, user: &User) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use rust_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User};
+    use launchdarkly_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User};
     use spectral::prelude::*;
     use test_case::test_case;
 

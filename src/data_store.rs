@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rust_server_sdk_evaluation::{Flag, Segment, Store};
+use launchdarkly_server_sdk_evaluation::{Flag, Segment, Store};
 use serde::Deserialize;
 
 const FLAGS_PREFIX: &str = "/flags/";

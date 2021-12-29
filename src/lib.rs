@@ -8,11 +8,11 @@ extern crate spectral;
 #[macro_use]
 extern crate serde_json;
 
-use lazy_static::lazy_static;
-pub use rust_server_sdk_evaluation::Error as EvalError;
-pub use rust_server_sdk_evaluation::{
+pub use launchdarkly_server_sdk_evaluation::Error as EvalError;
+pub use launchdarkly_server_sdk_evaluation::{
     AttributeValue, Detail, FlagValue, Reason, TypeError, User, UserBuilder,
 };
+use lazy_static::lazy_static;
 
 pub use client::Client;
 

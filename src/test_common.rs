@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use rust_server_sdk_evaluation::{Flag, Segment};
+use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 
 pub const FLOAT_TO_INT_MAX: i64 = 9007199254740991;
 

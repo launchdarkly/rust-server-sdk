@@ -2,7 +2,7 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
-use rust_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User, VariationIndex};
+use launchdarkly_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User, VariationIndex};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 

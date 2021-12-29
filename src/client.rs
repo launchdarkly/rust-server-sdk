@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{io, thread};
 
-use rust_server_sdk_evaluation::{self as eval, Detail, FlagValue, PrerequisiteEvent, User};
+use launchdarkly_server_sdk_evaluation::{
+    self as eval, Detail, FlagValue, PrerequisiteEvent, User,
+};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -580,7 +582,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use crate::ConfigBuilder;
-    use rust_server_sdk_evaluation::{Reason, User};
+    use launchdarkly_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
     use std::collections::HashMap;
     use std::sync::mpsc::Receiver;

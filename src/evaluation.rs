@@ -1,7 +1,7 @@
 use super::data_store::DataStore;
 use serde::Serialize;
 
-use rust_server_sdk_evaluation::{evaluate, FlagValue, Reason, User};
+use launchdarkly_server_sdk_evaluation::{evaluate, FlagValue, Reason, User};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -152,7 +152,7 @@ impl FlagDetail {
 
 #[cfg(test)]
 mod tests {
-    use rust_server_sdk_evaluation::User;
+    use launchdarkly_server_sdk_evaluation::User;
 
     use crate::data_store::PatchTarget;
     use crate::data_store::{DataStore, InMemoryDataStore};
