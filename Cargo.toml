@@ -16,15 +16,15 @@ lru = { version = "0.5.3", default_features = false }
 reqwest = "0.9.11"
 ring = "0.16.20"
 launchdarkly-server-sdk-evaluation = { git = "https://github.com/launchdarkly/rust-server-sdk-evaluation-private", branch = "master" }
-serde = { version = "1.0.89", features = ["derive"] }
-serde_json = "1.0.39"
+serde = { version = "1.0.132", features = ["derive"] }
+serde_json = { version = "1.0.73", features = ["float_roundtrip"] }
 thiserror = "1.0"
 tokio = { version = "1.2.0", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 maplit = "1.0.1"
 env_logger = "0.7.1"
-serde_json = { version = "1.0.39", features = ["preserve_order"] } # for deterministic JSON testing
+serde_json = { version = "1.0.73", features = ["preserve_order"] } # for deterministic JSON testing
 spectral = "0.6.0"
 cursive = "0.11"
 tokio = { version = "1.2.0", features = ["macros", "time"] }

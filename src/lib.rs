@@ -50,3 +50,16 @@ lazy_static! {
 mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
+
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    #[test_case("130.65331632653061", 130.65331632653061)]
+    #[test_case("130.65331632653062", 130.65331632653061)]
+    #[test_case("130.65331632653063", 130.65331632653064)]
+    fn json_float_serialization_matches_go(float_as_string: &str, expected: f64) {
+        let parsed: f64 = serde_json::from_str(float_as_string).unwrap();
+        assert_eq!(expected, parsed);
+    }
+}
