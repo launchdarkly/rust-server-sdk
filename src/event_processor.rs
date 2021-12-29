@@ -1,6 +1,6 @@
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Once, RwLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use lru::LruCache;
 use reqwest as r;
@@ -11,13 +11,18 @@ use crate::events::OutputEvent;
 use super::event_sink as sink;
 use super::events::{EventSummary, InputEvent};
 
+enum EventDispatcherMessage {
+    EventMessage(InputEvent),
+    Flush,
+}
+
 type Error = String; // TODO(ch108607) use an error enum
 
 /// Trait for the component that buffers analytics events and sends them to LaunchDarkly.
 /// This component can be replaced for testing purposes.
 pub trait EventProcessor: Send {
-    fn send(&self, event: InputEvent) -> Result<(), Error>;
-    fn flush(&self) -> Result<(), Error>;
+    fn send(&self, event: InputEvent);
+    fn flush(&self);
 }
 
 pub struct NullEventProcessor {}
@@ -29,13 +34,8 @@ impl NullEventProcessor {
 }
 
 impl EventProcessor for NullEventProcessor {
-    fn send(&self, _: InputEvent) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn flush(&self) -> Result<(), Error> {
-        Ok(())
-    }
+    fn send(&self, _: InputEvent) {}
+    fn flush(&self) {}
 }
 
 pub struct EventProcessorImpl {
@@ -68,14 +68,11 @@ impl EventProcessorImpl {
         user_keys_capacity: usize,
         inline_users_in_events: bool,
     ) -> Result<Self, Error> {
-        // TODO(ch108609) make batcher params configurable
         let batcher = EventBatcher::start(
             sink,
             capacity,
             user_keys_capacity,
             inline_users_in_events,
-            1000,
-            Duration::from_secs(30),
             flush_interval,
         )?;
         Ok(EventProcessorImpl { batcher })
@@ -83,19 +80,19 @@ impl EventProcessorImpl {
 }
 
 impl EventProcessor for EventProcessorImpl {
-    fn send(&self, event: InputEvent) -> Result<(), Error> {
+    fn send(&self, event: InputEvent) {
         debug!("Sending event: {}", event);
-        self.batcher.add(event)
+        self.batcher.add(event);
     }
 
-    fn flush(&self) -> Result<(), Error> {
-        self.batcher.flush()
+    fn flush(&self) {
+        self.batcher.flush();
     }
 }
 
 struct EventBatcher {
-    sender: mpsc::SyncSender<InputEvent>,
-    flusher: mpsc::SyncSender<mpsc::SyncSender<()>>,
+    sender: mpsc::SyncSender<EventDispatcherMessage>,
+    inbox_full_once: Once,
 }
 
 impl EventBatcher {
@@ -104,27 +101,20 @@ impl EventBatcher {
         capacity: usize,
         user_keys_capacity: usize,
         inline_users_in_events: bool,
-        batch_size: usize,
-        batch_timeout: Duration,
         flush_interval: Duration,
     ) -> Result<Self, Error> {
         let (sender, receiver) = mpsc::sync_channel(capacity);
-
-        let (flusher, flush_receiver) = mpsc::sync_channel::<mpsc::SyncSender<()>>(10); // TODO(ch108609) make flush buffer size configurable
 
         let _worker_handle = thread::Builder::new()
             // TODO(ch108616) make this an object with methods, this is confusing
             .spawn(move || loop {
                 debug!("waiting for a batch to send");
 
-                let batch_deadline: Instant = Instant::now() + batch_timeout;
-
                 let mut batch = Vec::new();
                 let mut summary = EventSummary::new();
-                let mut flushes = Vec::new();
+                let mut flush_requested = false;
 
                 // Dedupe users per batch.
-                // This restricts us to only deduping users within the batch_timeout.
                 // TODO(ch108616) support configuring the deduping period separately (probably after redoing
                 // this using crossbeam so we can select on multiple channels)
                 let mut user_cache = LruCache::<String, ()>::new(user_keys_capacity);
@@ -134,8 +124,8 @@ impl EventBatcher {
                     // contort a bit to support flush without blocking flush requesters until the
                     // batch deadline.
                     // TODO(ch108616) redo this using crossbeam-channel, or futures::channel and futures::select
-                    let mut batch_ready = match receiver.recv_timeout(flush_interval) {
-                        Ok(event) => {
+                    let batch_ready = match receiver.recv_timeout(flush_interval) {
+                        Ok(EventDispatcherMessage::EventMessage(event)) => {
                             process_event(
                                 event,
                                 &mut user_cache,
@@ -144,10 +134,14 @@ impl EventBatcher {
                                 inline_users_in_events,
                                 sink.read().unwrap().last_known_time(),
                             );
-
-                            batch.len() > batch_size
+                            false
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => Instant::now() >= batch_deadline,
+                        Ok(EventDispatcherMessage::Flush) => {
+                            debug!("flush requested");
+                            flush_requested = true;
+                            true
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => true,
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
                             debug!("batch sender disconnected");
                             // TODO(ch108616) terminate this thread
@@ -155,33 +149,28 @@ impl EventBatcher {
                         }
                     };
 
-                    // check if anyone asked us to flush
-                    while let Ok(flush) = flush_receiver.try_recv() {
-                        debug!("flush requested");
-                        flushes.push(flush);
-                        batch_ready = true;
-                    }
-
                     if batch_ready {
                         break 'event;
                     }
                 }
 
                 if !batch.is_empty() || !summary.is_empty() {
-                    if !flushes.is_empty() {
+                    if flush_requested {
                         // flush requested, just send everything left in the channel (even if the
                         // current batch was "full")
                         let mut extra = 0;
-                        while let Ok(event) = receiver.try_recv() {
-                            process_event(
-                                event,
-                                &mut user_cache,
-                                &mut batch,
-                                &mut summary,
-                                inline_users_in_events,
-                                sink.read().unwrap().last_known_time(),
-                            );
-                            extra += 1;
+                        while let Ok(dispatch_message) = receiver.try_recv() {
+                            if let EventDispatcherMessage::EventMessage(event) = dispatch_message {
+                                process_event(
+                                    event,
+                                    &mut user_cache,
+                                    &mut batch,
+                                    &mut summary,
+                                    inline_users_in_events,
+                                    sink.read().unwrap().last_known_time(),
+                                );
+                                extra += 1;
+                            }
                         }
                         if extra > 0 {
                             debug!("Sending {} extra events early due to flush", extra);
@@ -198,33 +187,29 @@ impl EventBatcher {
                         warn!("failed to send event: {}", e);
                     }
                 }
-
-                for flush in flushes {
-                    debug!("flush completed");
-                    let _ = flush.try_send(());
-                }
             })
             .map_err(|e| e.to_string())?;
 
-        Ok(EventBatcher { sender, flusher })
+        Ok(EventBatcher {
+            sender,
+            inbox_full_once: Once::new(),
+        })
     }
 
-    pub fn add(&self, event: InputEvent) -> Result<(), Error> {
-        // TODO(non-blocking) If the input is full, we should not block. Instead, we should display an error
-        // the first time we start dropping events but we should return immediately.
-        //
-        // The spec does not require we return any result from this method either.
-        self.sender.send(event).map_err(|e| e.to_string())
+    pub fn add(&self, event: InputEvent) {
+        if self
+            .sender
+            .try_send(EventDispatcherMessage::EventMessage(event))
+            .is_err()
+        {
+            self.inbox_full_once.call_once(|| {
+                warn!("Events are being produced faster than they can be processed; some events will be dropped")
+            });
+        }
     }
 
-    pub fn flush(&self) -> Result<(), Error> {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        self.flusher
-            .send(sender)
-            .map_err(|e| format!("failed to request flush: {}", e))?;
-        receiver
-            .recv()
-            .map_err(|e| format!("failed to wait for flush: {}", e))
+    pub fn flush(&self) {
+        let _ = self.sender.try_send(EventDispatcherMessage::Flush);
     }
 }
 
@@ -333,7 +318,8 @@ mod tests {
         flag_track_events: bool,
         expected_event_types: Vec<&str>,
     ) {
-        let events = Arc::new(RwLock::new(sink::MockSink::new(0)));
+        let (sink, sink_receiver) = sink::MockSink::new(0);
+        let events = Arc::new(RwLock::new(sink));
         let ep = make_test_sink(&events, inline_users_in_events);
 
         let mut flag = basic_flag("flag");
@@ -356,10 +342,10 @@ mod tests {
             FlagValue::from(false),
             None,
         );
-        ep.send(feature_request).expect("send should succeed");
+        ep.send(feature_request);
+        ep.flush();
 
-        ep.flush().expect("flush should succeed");
-
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(expected_event_types.len());
 
@@ -376,7 +362,8 @@ mod tests {
         debug_events_until_date: u64,
         expected_event_types: Vec<&str>,
     ) {
-        let events = Arc::new(RwLock::new(sink::MockSink::new(last_known_time)));
+        let (sink, sink_receiver) = sink::MockSink::new(last_known_time);
+        let events = Arc::new(RwLock::new(sink));
         let ep = make_test_sink(&events, true);
 
         let mut flag = basic_flag("flag");
@@ -399,10 +386,10 @@ mod tests {
             FlagValue::from(false),
             None,
         );
-        ep.send(feature_request).expect("send should succeed");
+        ep.send(feature_request);
+        ep.flush();
 
-        ep.flush().expect("flush should succeed");
-
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(expected_event_types.len());
 
@@ -413,7 +400,8 @@ mod tests {
 
     #[test]
     fn sending_feature_event_with_rule_track_events_emits_feature_and_summary() {
-        let events = Arc::new(RwLock::new(sink::MockSink::new(0)));
+        let (sink, sink_receiver) = sink::MockSink::new(0);
+        let events = Arc::new(RwLock::new(sink));
         let ep = make_test_sink(&events, true);
 
         let flag: Flag = serde_json::from_str(
@@ -517,11 +505,12 @@ mod tests {
         );
 
         for fre in vec![&fre_track_rule, &fre_notrack_rule, &fre_fallthrough] {
-            ep.send(fre.clone()).expect("send should succeed");
+            ep.send(fre.clone());
         }
 
-        ep.flush().expect("flush should succeed");
+        ep.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
 
         // detail_track_rule -> feature, detail_fallthrough -> feature, 1 summary
@@ -543,7 +532,8 @@ mod tests {
 
     #[test]
     fn feature_events_dedupe_index_events() {
-        let events = Arc::new(RwLock::new(sink::MockSink::new(0)));
+        let (sink, sink_receiver) = sink::MockSink::new(0);
+        let events = Arc::new(RwLock::new(sink));
         let ep = make_test_sink(&events, false);
 
         let flag = basic_flag("flag");
@@ -565,13 +555,13 @@ mod tests {
             FlagValue::from(false),
             None,
         );
-        ep.send(feature_request.clone())
-            .expect("send should succeed");
-        ep.send(feature_request).expect("send should succeed");
+        ep.send(feature_request.clone());
+        ep.send(feature_request);
+        ep.flush();
 
-        ep.flush().expect("flush should succeed");
-
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
+
         assert_that!(*events).has_length(2);
 
         asserting!("emits index event only once")

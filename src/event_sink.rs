@@ -86,14 +86,22 @@ impl EventSink for ReqwestSink {
 pub struct MockSink {
     pub events: Vec<OutputEvent>,
     last_known_time: u128,
+    sender: std::sync::mpsc::SyncSender<()>,
 }
+
 #[cfg(test)]
 impl MockSink {
-    pub fn new(last_known_time: u128) -> Self {
-        Self {
-            events: Vec::new(),
-            last_known_time,
-        }
+    pub fn new(last_known_time: u128) -> (Self, std::sync::mpsc::Receiver<()>) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+
+        (
+            Self {
+                events: Vec::new(),
+                last_known_time,
+                sender,
+            },
+            receiver,
+        )
     }
 }
 
@@ -101,6 +109,7 @@ impl MockSink {
 impl EventSink for MockSink {
     fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), Error> {
         self.events.extend(events);
+        let _ = self.sender.send(());
         Ok(())
     }
 

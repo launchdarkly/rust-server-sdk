@@ -42,12 +42,13 @@ impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
             Some(event.target_flag_key),
         );
 
-        let _ = self
-            .event_processor
-            .lock()
-            .unwrap()
-            .send(evt)
-            .map_err(|e| warn!("failed to send event: {}", e));
+        match self.event_processor.lock() {
+            Ok(ep) => ep.send(evt),
+            Err(e) => error!(
+                "Failed to record prerequisite event. Could not acquire event processor lock: {:?}",
+                e
+            ),
+        }
     }
 }
 
@@ -286,12 +287,14 @@ impl Client {
         self.offline || ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
     }
 
-    pub fn flush(&self) -> Result<(), FlushError> {
-        self.event_processor
-            .lock()
-            .unwrap()
-            .flush()
-            .map_err(FlushError::FlushFailed)
+    pub fn flush(&self) {
+        match self.event_processor.lock() {
+            Ok(ep) => ep.flush(),
+            Err(e) => error!(
+                "Unable to acquire event processor lock. Cannot flush. {:?}",
+                e
+            ),
+        }
     }
 
     pub fn identify(&self, user: User) {
@@ -564,12 +567,13 @@ impl Client {
     }
 
     fn send_internal(&self, event: InputEvent) {
-        let _ = self
-            .event_processor
-            .lock()
-            .unwrap()
-            .send(event)
-            .map_err(|e| warn!("failed to send event: {}", e));
+        match self.event_processor.lock() {
+            Ok(ep) => ep.send(event),
+            Err(e) => error!(
+                "Unable to acquire event processor lock. Cannot send input event. {:?}",
+                e
+            ),
+        }
     }
 }
 
@@ -579,7 +583,9 @@ mod tests {
     use rust_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
     use std::collections::HashMap;
+    use std::sync::mpsc::Receiver;
     use std::sync::RwLock;
+    use std::time::Duration;
 
     use tokio::time::Instant;
 
@@ -605,7 +611,8 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes() {
-        let (client, _updates, _events) = make_mocked_client_with_delay(1000, false);
+        let (client, _updates, _events, _sink_receiver) =
+            make_mocked_client_with_delay(1000, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -618,7 +625,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_initializes_immediately_in_offline_mode() {
-        let (client, _updates, _events) = make_mocked_client_with_delay(1000, true);
+        let (client, _updates, _events, _sink_receiver) = make_mocked_client_with_delay(1000, true);
         client.start_with_default_executor();
 
         assert!(client.initialized());
@@ -639,7 +646,7 @@ mod tests {
     ) {
         let user = User::with_key("foo".to_string()).build();
 
-        let (client, updates, _events) = make_mocked_client();
+        let (client, updates, _events, _sink_receiver) = make_mocked_client();
 
         let result = client.variation_detail(&user, "myFlag", default.clone());
         assert_that!(result.value).contains_value(default.clone());
@@ -663,7 +670,7 @@ mod tests {
 
     #[test]
     fn variation_tracks_events_correctly() {
-        let (client, updates, events) = make_mocked_client();
+        let (client, updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -679,8 +686,9 @@ mod tests {
         let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&flag_value.as_bool().unwrap()).is_true();
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -700,30 +708,32 @@ mod tests {
 
     #[test]
     fn variation_handles_offline_mode() {
-        let (client, _, events) = make_mocked_offline_client();
+        let (client, _, events, sink_receiver) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
         let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&flag_value.as_bool().unwrap()).is_false();
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
 
     #[test]
     fn variation_handles_unknown_flags() {
-        let (client, _updates, events) = make_mocked_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
         let flag_value = client.variation(&user, "non-existent-flag", FlagValue::Bool(false));
 
         assert_that(&flag_value.as_bool().unwrap()).is_false();
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -743,7 +753,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_debug_events_correctly() {
-        let (client, updates, events) = make_mocked_client();
+        let (client, updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -764,8 +774,9 @@ mod tests {
         assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
             in_experiment: false,
         });
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(3);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -786,7 +797,7 @@ mod tests {
 
     #[test]
     fn variation_detail_tracks_events_correctly() {
-        let (client, updates, events) = make_mocked_client();
+        let (client, updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -805,8 +816,9 @@ mod tests {
         assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
             in_experiment: false,
         });
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -826,7 +838,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_offline_mode() {
-        let (client, _, events) = make_mocked_offline_client();
+        let (client, _, events, sink_receiver) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -837,15 +849,16 @@ mod tests {
         assert_that(&detail.reason).is_equal_to(Reason::Error {
             error: eval::Error::ClientNotReady,
         });
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
 
     #[test]
     fn variation_handles_off_flag_without_variation() {
-        let (client, updates, events) = make_mocked_client();
+        let (client, updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -861,8 +874,9 @@ mod tests {
         let result = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&result.as_bool().unwrap()).is_false();
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -882,7 +896,7 @@ mod tests {
 
     #[test]
     fn variation_detail_tracks_prereq_events_correctly() {
-        let (client, updates, events) = make_mocked_client();
+        let (client, updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -913,8 +927,9 @@ mod tests {
         assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
             in_experiment: false,
         });
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(4);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -940,7 +955,7 @@ mod tests {
 
     #[test]
     fn variation_handles_failed_prereqs_correctly() {
-        let (client, updates, events) = make_mocked_client();
+        let (client, updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -968,8 +983,9 @@ mod tests {
         let detail = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
         assert_that(&detail.as_bool().unwrap()).is_false();
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(4);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -995,7 +1011,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_flag_not_found() {
-        let (client, _updates, events) = make_mocked_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1005,8 +1021,9 @@ mod tests {
         assert_that(&detail.reason).is_equal_to(Reason::Error {
             error: eval::Error::FlagNotFound,
         });
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -1026,7 +1043,8 @@ mod tests {
 
     #[tokio::test]
     async fn variation_detail_handles_client_not_ready() {
-        let (client, _updates, events) = make_mocked_client_with_delay(u64::MAX, false);
+        let (client, _updates, events, sink_receiver) =
+            make_mocked_client_with_delay(u64::MAX, false);
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -1036,8 +1054,9 @@ mod tests {
         assert_that(&detail.reason).is_equal_to(Reason::Error {
             error: eval::Error::ClientNotReady,
         });
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
@@ -1057,14 +1076,15 @@ mod tests {
 
     #[test]
     fn identify_sends_identify_event() {
-        let (client, _updates, events) = make_mocked_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
 
         client.identify(user);
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("identify");
@@ -1072,29 +1092,31 @@ mod tests {
 
     #[test]
     fn identify_sends_sends_nothing_in_offline_mode() {
-        let (client, _updates, events) = make_mocked_offline_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
 
         client.identify(user);
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
 
     #[test]
     fn alias_sends_alias_event() {
-        let (client, _updates, events) = make_mocked_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
         let previous_user = User::with_key("previous-bob").build();
 
         client.alias(user, previous_user);
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("alias");
@@ -1102,15 +1124,16 @@ mod tests {
 
     #[test]
     fn alias_sends_nothing_in_offline_mode() {
-        let (client, _updates, events) = make_mocked_offline_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
         let previous_user = User::with_key("previous-bob").build();
 
         client.alias(user, previous_user);
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
     }
@@ -1122,7 +1145,7 @@ mod tests {
 
     #[test]
     fn track_sends_track_and_index_events() -> serde_json::Result<()> {
-        let (client, _updates, events) = make_mocked_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1137,8 +1160,9 @@ mod tests {
         )?;
         client.track_metric(user.clone(), "event-with-metric", 42.0);
 
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(6);
 
@@ -1158,7 +1182,7 @@ mod tests {
 
     #[test]
     fn track_sends_nothing_in_offline_mode() -> serde_json::Result<()> {
-        let (client, _updates, events) = make_mocked_offline_client();
+        let (client, _updates, events, sink_receiver) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1173,8 +1197,9 @@ mod tests {
         )?;
         client.track_metric(user.clone(), "event-with-metric", 42.0);
 
-        client.flush().expect("flush should succeed");
+        client.flush();
 
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
 
@@ -1184,9 +1209,15 @@ mod tests {
     fn make_mocked_client_with_delay(
         delay: u64,
         offline: bool,
-    ) -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
+    ) -> (
+        Client,
+        Arc<Mutex<MockDataSource>>,
+        Arc<RwLock<MockSink>>,
+        Receiver<()>,
+    ) {
         let updates = Arc::new(Mutex::new(MockDataSource::new_with_init_delay(delay)));
-        let events = Arc::new(RwLock::new(MockSink::new(0)));
+        let (sink, sink_receiver) = MockSink::new(0);
+        let events = Arc::new(RwLock::new(sink));
 
         let config = ConfigBuilder::new("sdk-key")
             .offline(offline)
@@ -1196,14 +1227,24 @@ mod tests {
 
         let client = Client::build(config).expect("Should be built.");
 
-        (client, updates, events)
+        (client, updates, events, sink_receiver)
     }
 
-    fn make_mocked_offline_client() -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
+    fn make_mocked_offline_client() -> (
+        Client,
+        Arc<Mutex<MockDataSource>>,
+        Arc<RwLock<MockSink>>,
+        Receiver<()>,
+    ) {
         make_mocked_client_with_delay(0, true)
     }
 
-    fn make_mocked_client() -> (Client, Arc<Mutex<MockDataSource>>, Arc<RwLock<MockSink>>) {
+    fn make_mocked_client() -> (
+        Client,
+        Arc<Mutex<MockDataSource>>,
+        Arc<RwLock<MockSink>>,
+        Receiver<()>,
+    ) {
         make_mocked_client_with_delay(0, false)
     }
 }

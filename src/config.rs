@@ -16,7 +16,6 @@ pub struct Config {
     data_store_builder: Box<dyn DataStoreFactory>,
     data_source_builder: Box<dyn DataSourceFactory>,
     event_processor_builder: Box<dyn EventProcessorFactory>,
-    inline_users_in_events: bool,
     offline: bool,
 }
 
@@ -41,10 +40,6 @@ impl Config {
         self.event_processor_builder.borrow()
     }
 
-    pub fn inline_users_in_events(&self) -> bool {
-        self.inline_users_in_events
-    }
-
     pub fn offline(&self) -> bool {
         self.offline
     }
@@ -62,7 +57,6 @@ pub struct ConfigBuilder {
     data_store_builder: Option<Box<dyn DataStoreFactory>>,
     data_source_builder: Option<Box<dyn DataSourceFactory>>,
     event_processor_builder: Option<Box<dyn EventProcessorFactory>>,
-    inline_users_in_events: bool,
     offline: bool,
     sdk_key: String,
 }
@@ -74,7 +68,6 @@ impl ConfigBuilder {
             data_store_builder: None,
             data_source_builder: None,
             event_processor_builder: None,
-            inline_users_in_events: false,
             offline: false,
             sdk_key: sdk_key.to_string(),
         }
@@ -106,15 +99,6 @@ impl ConfigBuilder {
     /// If offline mode is enabled, this event processor will be ignored.
     pub fn event_processor(mut self, builder: &dyn EventProcessorFactory) -> Self {
         self.event_processor_builder = Some(builder.to_owned());
-        self
-    }
-
-    /// Sets whether to include full user details in every analytics event.
-    ///
-    /// The default is `false`: events will only include the user key, except for one "index" event
-    /// that provides the full details for the user).
-    pub fn inline_users_in_events(mut self, inline: bool) -> Self {
-        self.inline_users_in_events = inline;
         self
     }
 
@@ -165,7 +149,6 @@ impl ConfigBuilder {
             data_store_builder,
             data_source_builder,
             event_processor_builder,
-            inline_users_in_events: self.inline_users_in_events,
             offline: self.offline,
         }
     }
