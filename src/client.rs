@@ -156,6 +156,7 @@ pub struct Client {
     init_state: Arc<AtomicUsize>,
     started: AtomicBool,
     offline: bool,
+    sdk_key: String,
     // TODO: Once we need the config for diagnostic events, then we should add this.
     // config: Arc<Mutex<Config>>
 }
@@ -203,6 +204,7 @@ impl Client {
             init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
             started: AtomicBool::new(false),
             offline: config.offline(),
+            sdk_key: config.sdk_key().into(),
         })
     }
 
@@ -416,6 +418,16 @@ impl Client {
     ) -> Detail<serde_json::Value> {
         self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_json(), eval::Error::Exception)
+    }
+
+    /// secure_mode_hash generates the secure mode hash value for a user.
+    ///
+    /// For more information, see the Reference Guide: https://docs.launchdarkly.com/sdk/features/secure-mode#rust
+    pub fn secure_mode_hash(&self, user: &User) -> String {
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
+        let tag = ring::hmac::sign(&key, user.key().as_bytes());
+
+        data_encoding::HEXLOWER.encode(tag.as_ref())
     }
 
     /// all_flags_detail returns an object that encapsulates the state of all feature flags for a given user.
@@ -1105,6 +1117,18 @@ mod tests {
         let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
         let events = &events.read().unwrap().events;
         assert_that!(*events).has_length(0);
+    }
+
+    #[test]
+    fn secure_mode_hash() {
+        let config = ConfigBuilder::new("secret").offline(true).build();
+        let client = Client::build(config).expect("Should be built.");
+        let user = User::with_key("Message").build();
+
+        assert_eq!(
+            client.secure_mode_hash(&user),
+            "aa747c502a898200f9e4fa21bac68136f886a0e27aec70ba06daf2e2a5cb5597"
+        );
     }
 
     #[test]
