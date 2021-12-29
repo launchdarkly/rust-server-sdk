@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 use launchdarkly_server_sdk_evaluation::User;
 use lru::LruCache;
 use reqwest as r;
+use thiserror::Error;
 
 use crate::events::OutputEvent;
 
@@ -16,7 +17,15 @@ enum EventDispatcherMessage {
     Flush,
 }
 
-type Error = String; // TODO(ch108607) use an error enum
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum EventProcessorError {
+    #[error(transparent)]
+    DispatcherFailed(#[from] EventBatcherError),
+
+    #[error("unable to build event processor: {0}")]
+    BuildFailure(String),
+}
 
 /// Trait for the component that buffers analytics events and sends them to LaunchDarkly.
 /// This component can be replaced for testing purposes.
@@ -50,8 +59,9 @@ impl EventProcessorImpl {
         capacity: usize,
         user_keys_capacity: usize,
         inline_users_in_events: bool,
-    ) -> Result<Self, Error> {
-        let sink = sink::ReqwestSink::new(&base_url, sdk_key)?;
+    ) -> Result<Self, EventProcessorError> {
+        let sink = sink::ReqwestSink::new(&base_url, sdk_key)
+            .map_err(|e| EventProcessorError::BuildFailure(e.to_string()))?;
         Self::new_with_sink(
             Arc::new(RwLock::new(sink)),
             flush_interval,
@@ -67,7 +77,7 @@ impl EventProcessorImpl {
         capacity: usize,
         user_keys_capacity: usize,
         inline_users_in_events: bool,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, EventProcessorError> {
         let batcher = EventBatcher::start(
             sink,
             capacity,
@@ -90,6 +100,13 @@ impl EventProcessor for EventProcessorImpl {
     }
 }
 
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum EventBatcherError {
+    #[error("dispatcher failed to start")]
+    StartFailure,
+}
+
 struct EventBatcher {
     sender: mpsc::SyncSender<EventDispatcherMessage>,
     inbox_full_once: Once,
@@ -102,7 +119,7 @@ impl EventBatcher {
         user_keys_capacity: usize,
         inline_users_in_events: bool,
         flush_interval: Duration,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, EventBatcherError> {
         let (sender, receiver) = mpsc::sync_channel(capacity);
 
         let _worker_handle = thread::Builder::new()
@@ -188,7 +205,7 @@ impl EventBatcher {
                     }
                 }
             })
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| EventBatcherError::StartFailure)?;
 
         Ok(EventBatcher {
             sender,

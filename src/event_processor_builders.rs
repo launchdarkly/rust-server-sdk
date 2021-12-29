@@ -77,9 +77,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
                         self.user_keys_capacity,
                         self.inline_users_in_events,
                     )
-                    .map_err(|e| {
-                        BuildError::InvalidConfig(format!("invalid events_base_url: {}", e))
-                    }),
+                    .map_err(|e| BuildError::InvalidConfig(e.to_string())),
                     Some(event_sink) => EventProcessorImpl::new_with_sink(
                         event_sink.clone(),
                         self.flush_interval,
@@ -87,9 +85,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
                         self.user_keys_capacity,
                         self.inline_users_in_events,
                     )
-                    .map_err(|e| {
-                        BuildError::InvalidConfig(format!("invalid events_base_url: {}", e))
-                    }),
+                    .map_err(|e| BuildError::InvalidConfig(e.to_string())),
                 })?,
         )))
     }

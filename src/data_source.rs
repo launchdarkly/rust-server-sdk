@@ -7,6 +7,8 @@ use futures::TryStreamExt;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use serde::Deserialize;
 
+use crate::data_store::UpdateError;
+
 use super::data_store::{AllData, DataStore, PatchTarget};
 
 #[derive(Debug)]
@@ -16,7 +18,7 @@ pub enum Error {
         error: Box<dyn std::error::Error + Send>,
     },
     InvalidPutPath(String),
-    InvalidUpdate(String),
+    InvalidUpdate(UpdateError),
     InvalidEventType(String),
     MissingEventField(String, String),
 }

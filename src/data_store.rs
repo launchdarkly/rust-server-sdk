@@ -2,11 +2,23 @@ use std::collections::HashMap;
 
 use launchdarkly_server_sdk_evaluation::{Flag, Segment, Store};
 use serde::Deserialize;
+use thiserror::Error;
 
 const FLAGS_PREFIX: &str = "/flags/";
 const SEGMENTS_PREFIX: &str = "/segments/";
 
-type Error = String; // TODO(ch108607) use an error enum
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum UpdateError {
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
+
+    #[error("expected a {0}, got a {0}")]
+    InvalidTarget(String, String),
+
+    #[error("couldn't parse json as a flag: {0}")]
+    ParseError(String),
+}
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -85,8 +97,8 @@ impl From<AllData<Flag, Segment>> for AllData<StorageItem<Flag>, StorageItem<Seg
 pub trait DataStore: Store + Send {
     fn init(&mut self, new_data: AllData<Flag, Segment>);
     fn all_flags(&self) -> HashMap<String, &Flag>;
-    fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error>;
-    fn delete(&mut self, path: &str, version: u64) -> Result<(), Error>;
+    fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), UpdateError>;
+    fn delete(&mut self, path: &str, version: u64) -> Result<(), UpdateError>;
     fn to_store(&self) -> &dyn Store;
 }
 
@@ -106,11 +118,14 @@ impl InMemoryDataStore {
         }
     }
 
-    fn patch_flag(&mut self, flag_key: &str, data: PatchTarget) -> Result<(), Error> {
+    fn patch_flag(&mut self, flag_key: &str, data: PatchTarget) -> Result<(), UpdateError> {
         let flag = match data {
             PatchTarget::Flag(f) => Ok(f),
-            PatchTarget::Segment(_) => Err("expected a flag, got a segment".to_string()),
-            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a flag: {}", json)),
+            PatchTarget::Segment(_) => Err(UpdateError::InvalidTarget(
+                String::from("flag"),
+                String::from("segment"),
+            )),
+            PatchTarget::Other(json) => Err(UpdateError::ParseError(json.to_string())),
         }?;
 
         match self.data.flags.get(flag_key) {
@@ -121,11 +136,14 @@ impl InMemoryDataStore {
         Ok(())
     }
 
-    fn patch_segment(&mut self, segment_key: &str, data: PatchTarget) -> Result<(), Error> {
+    fn patch_segment(&mut self, segment_key: &str, data: PatchTarget) -> Result<(), UpdateError> {
         let segment = match data {
             PatchTarget::Segment(s) => Ok(s),
-            PatchTarget::Flag(_) => Err("expected a segment, got a flag".to_string()),
-            PatchTarget::Other(json) => Err(format!("couldn't parse JSON as a segment: {}", json)),
+            PatchTarget::Flag(_) => Err(UpdateError::InvalidTarget(
+                String::from("segment"),
+                String::from("flag"),
+            )),
+            PatchTarget::Other(json) => Err(UpdateError::ParseError(json.to_string())),
         }?;
 
         match self.data.segments.get(segment_key) {
@@ -192,23 +210,23 @@ impl DataStore for InMemoryDataStore {
             .collect()
     }
 
-    fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), Error> {
+    fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), UpdateError> {
         if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
             self.patch_flag(flag_key, data)
         } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
             self.patch_segment(segment_key, data)
         } else {
-            Err(format!("can't patch {}", path))
+            Err(UpdateError::InvalidPath(path.to_string()))
         }
     }
 
-    fn delete(&mut self, path: &str, version: u64) -> Result<(), Error> {
+    fn delete(&mut self, path: &str, version: u64) -> Result<(), UpdateError> {
         if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
             self.delete_flag(flag_key, version);
         } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
             self.delete_segment(segment_key, version);
         } else {
-            return Err(format!("can't delete {}", path));
+            return Err(UpdateError::InvalidPath(path.to_string()));
         };
 
         Ok(())

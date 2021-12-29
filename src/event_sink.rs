@@ -2,13 +2,25 @@ use chrono::DateTime;
 
 use r::header::HeaderValue;
 use reqwest as r;
+use thiserror::Error;
+
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum EventSinkError {
+    #[error("unable to create sink: {0}")]
+    SinkFailed(String),
+
+    #[error(transparent)]
+    SerializationFailure(#[from] serde_json::Error),
+
+    #[error("unable to send events upstream: {0}")]
+    SendFailure(String),
+}
 
 use crate::events::OutputEvent;
 
-type Error = String; // TODO(ch108607) use an error enum
-
 pub trait EventSink: Send + Sync {
-    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), Error>;
+    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), EventSinkError>;
     fn last_known_time(&self) -> u128;
 }
 
@@ -20,11 +32,13 @@ pub struct ReqwestSink {
 }
 
 impl ReqwestSink {
-    pub fn new(base_url: &r::Url, sdk_key: &str) -> Result<Self, Error> {
+    pub fn new(base_url: &r::Url, sdk_key: &str) -> Result<Self, EventSinkError> {
         let mut url = base_url.clone();
         url.set_path("/bulk");
 
-        let http = r::Client::builder().build().map_err(|e| e.to_string())?;
+        let http = r::Client::builder()
+            .build()
+            .map_err(|e| EventSinkError::SinkFailed(e.to_string()))?;
 
         Ok(ReqwestSink {
             http,
@@ -36,14 +50,13 @@ impl ReqwestSink {
 }
 
 impl EventSink for ReqwestSink {
-    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), Error> {
+    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), EventSinkError> {
         debug!(
             "Sending: {}",
             serde_json::to_string_pretty(&events).unwrap_or_else(|e| e.to_string())
         );
 
-        let json =
-            serde_json::to_vec(&events).map_err(|e| format!("error serializing event: {}", e))?;
+        let json = serde_json::to_vec(&events).map_err(EventSinkError::SerializationFailure)?;
 
         let request = self
             .http
@@ -56,7 +69,7 @@ impl EventSink for ReqwestSink {
         let resp = request
             .send()
             .map(|resp| resp.error_for_status())
-            .map_err(|e| format!("error sending event: {}", e))?;
+            .map_err(|e| EventSinkError::SendFailure(e.to_string()))?;
 
         debug!("sent event: {:?}", resp);
 
@@ -107,7 +120,7 @@ impl MockSink {
 
 #[cfg(test)]
 impl EventSink for MockSink {
-    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), Error> {
+    fn send(&mut self, events: Vec<OutputEvent>) -> Result<(), EventSinkError> {
         self.events.extend(events);
         let _ = self.sender.send(());
         Ok(())
