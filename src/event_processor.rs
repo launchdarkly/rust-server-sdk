@@ -1,4 +1,5 @@
-use std::sync::{mpsc, Arc, Once, RwLock};
+use crossbeam_channel::{bounded, select, tick, Sender};
+use std::sync::{Arc, Once, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -58,6 +59,7 @@ impl EventProcessorImpl {
         flush_interval: Duration,
         capacity: usize,
         user_keys_capacity: usize,
+        user_keys_flush_interval: Duration,
         inline_users_in_events: bool,
     ) -> Result<Self, EventProcessorError> {
         let sink = sink::ReqwestSink::new(&base_url, sdk_key)
@@ -67,6 +69,7 @@ impl EventProcessorImpl {
             flush_interval,
             capacity,
             user_keys_capacity,
+            user_keys_flush_interval,
             inline_users_in_events,
         )
     }
@@ -76,12 +79,14 @@ impl EventProcessorImpl {
         flush_interval: Duration,
         capacity: usize,
         user_keys_capacity: usize,
+        user_keys_flush_interval: Duration,
         inline_users_in_events: bool,
     ) -> Result<Self, EventProcessorError> {
         let batcher = EventBatcher::start(
             sink,
             capacity,
             user_keys_capacity,
+            user_keys_flush_interval,
             inline_users_in_events,
             flush_interval,
         )?;
@@ -108,7 +113,7 @@ pub enum EventBatcherError {
 }
 
 struct EventBatcher {
-    sender: mpsc::SyncSender<EventDispatcherMessage>,
+    sender: Sender<EventDispatcherMessage>,
     inbox_full_once: Once,
 }
 
@@ -117,67 +122,57 @@ impl EventBatcher {
         sink: Arc<RwLock<dyn sink::EventSink>>,
         capacity: usize,
         user_keys_capacity: usize,
+        user_keys_flush_interval: Duration,
         inline_users_in_events: bool,
         flush_interval: Duration,
     ) -> Result<Self, EventBatcherError> {
-        let (sender, receiver) = mpsc::sync_channel(capacity);
+        let (sender, receiver) = bounded(capacity);
+
+        let mut user_cache = LruCache::<String, ()>::new(user_keys_capacity);
+        let reset_user_cache_ticker = tick(user_keys_flush_interval);
+        let flush_ticker = tick(flush_interval);
 
         let _worker_handle = thread::Builder::new()
             // TODO(ch108616) make this an object with methods, this is confusing
             .spawn(move || loop {
                 debug!("waiting for a batch to send");
 
+                let mut flush_requested = false;
                 let mut batch = Vec::new();
                 let mut summary = EventSummary::new();
-                let mut flush_requested = false;
 
-                // Dedupe users per batch.
-                // TODO(ch108616) support configuring the deduping period separately (probably after redoing
-                // this using crossbeam so we can select on multiple channels)
-                let mut user_cache = LruCache::<String, ()>::new(user_keys_capacity);
-
-                'event: loop {
-                    // This was written without access to a (stable) select on multiple channels, so we have to
-                    // contort a bit to support flush without blocking flush requesters until the
-                    // batch deadline.
-                    // TODO(ch108616) redo this using crossbeam-channel, or futures::channel and futures::select
-                    let batch_ready = match receiver.recv_timeout(flush_interval) {
-                        Ok(EventDispatcherMessage::EventMessage(event)) => {
-                            process_event(
-                                event,
-                                &mut user_cache,
-                                &mut batch,
-                                &mut summary,
-                                inline_users_in_events,
-                                sink.read().unwrap().last_known_time(),
-                            );
-                            false
+                loop {
+                    select! {
+                        recv(reset_user_cache_ticker) -> _ => user_cache.clear(),
+                        recv(flush_ticker) -> _ => break,
+                        recv(receiver) -> result => match result {
+                            Ok(EventDispatcherMessage::EventMessage(event)) => {
+                                process_event(
+                                    event,
+                                    &mut user_cache,
+                                    &mut batch,
+                                    &mut summary,
+                                    inline_users_in_events,
+                                    sink.read().unwrap().last_known_time(),
+                                );
+                            }
+                            Ok(EventDispatcherMessage::Flush) => {
+                                flush_requested = true;
+                                break;
+                            },
+                            Err(_) => todo!(),
                         }
-                        Ok(EventDispatcherMessage::Flush) => {
-                            debug!("flush requested");
-                            flush_requested = true;
-                            true
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => true,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            debug!("batch sender disconnected");
-                            // TODO(ch108616) terminate this thread
-                            true
-                        }
-                    };
-
-                    if batch_ready {
-                        break 'event;
                     }
                 }
 
-                if !batch.is_empty() || !summary.is_empty() {
-                    if flush_requested {
-                        // flush requested, just send everything left in the channel (even if the
-                        // current batch was "full")
-                        let mut extra = 0;
-                        while let Ok(dispatch_message) = receiver.try_recv() {
-                            if let EventDispatcherMessage::EventMessage(event) = dispatch_message {
+                if flush_requested {
+                    let mut extra = 0;
+                    receiver
+                        .try_iter()
+                        .collect::<Vec<EventDispatcherMessage>>()
+                        .into_iter()
+                        .for_each(|message| {
+                            if let EventDispatcherMessage::EventMessage(event) = message {
                                 process_event(
                                     event,
                                     &mut user_cache,
@@ -188,18 +183,20 @@ impl EventBatcher {
                                 );
                                 extra += 1;
                             }
-                        }
-                        if extra > 0 {
-                            debug!("Sending {} extra events early due to flush", extra);
-                        }
+                        });
+
+                    if extra > 0 {
+                        debug!("Sending {} extra events early due to flush", extra);
                     }
+                }
 
-                    if !summary.is_empty() {
-                        batch.push(OutputEvent::Summary(summary));
-                    }
+                if !summary.is_empty() {
+                    batch.push(OutputEvent::Summary(summary));
+                }
 
-                    debug!("Sending batch of {} events", batch.len());
+                debug!("Sending batch of {} events", batch.len());
 
+                if !batch.is_empty() {
                     if let Err(e) = sink.write().unwrap().send(batch) {
                         warn!("failed to send event: {}", e);
                     }
@@ -307,6 +304,7 @@ fn notice_user(user_cache: &mut LruCache<String, ()>, user: &User) -> bool {
 mod tests {
     use launchdarkly_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User};
     use spectral::prelude::*;
+    use std::thread::sleep;
     use test_case::test_case;
 
     use super::*;
@@ -321,6 +319,7 @@ mod tests {
             Duration::from_millis(100),
             1000,
             1000,
+            Duration::from_millis(100),
             inline_users_in_events,
         )
         .expect("event processor should initialize")
@@ -598,5 +597,70 @@ mod tests {
                     .count(),
             )
             .is_equal_to(1);
+    }
+
+    #[test]
+    fn flush_interval_does_not_include_pending_events() {
+        let user = User::with_key("user".to_string()).build();
+        let previous = User::with_key("previous".to_string()).build();
+        let event_factory = EventFactory::new(true);
+        let alias_event = event_factory.new_alias(user, previous);
+
+        let (sink, sink_receiver) = sink::MockSink::new(0);
+        let sink = Arc::new(RwLock::new(sink));
+
+        let batcher = EventBatcher::start(
+            sink.clone(),
+            10,
+            10,
+            Duration::from_secs(100),
+            false,
+            Duration::from_millis(100),
+        )
+        .expect("Batcher failed to start");
+
+        batcher.add(alias_event.clone());
+
+        // Wait long enough for the flush interval to kick off
+        sleep(Duration::from_millis(110));
+
+        // These events shouldn't be included in the sink yet
+        batcher.add(alias_event.clone());
+        batcher.add(alias_event.clone());
+        batcher.add(alias_event);
+
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
+        let events = &sink.read().unwrap().events;
+
+        assert_that!(*events).has_length(1);
+    }
+
+    #[test]
+    fn batcher_flushes_periodically() {
+        let user = User::with_key("user".to_string()).build();
+        let previous = User::with_key("previous".to_string()).build();
+        let event_factory = EventFactory::new(true);
+        let alias_event = event_factory.new_alias(user, previous);
+
+        let (sink, sink_receiver) = sink::MockSink::new(0);
+        let sink = Arc::new(RwLock::new(sink));
+
+        let batcher = EventBatcher::start(
+            sink.clone(),
+            10,
+            10,
+            Duration::from_secs(100),
+            false,
+            Duration::from_millis(100),
+        )
+        .expect("Batcher failed to start");
+
+        batcher.add(alias_event.clone());
+        assert!(sink_receiver.try_recv().is_err());
+
+        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
+        let events = &sink.read().unwrap().events;
+
+        assert_that!(*events).has_length(1);
     }
 }

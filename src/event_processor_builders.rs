@@ -8,6 +8,7 @@ use thiserror::Error;
 const DEFAULT_FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_EVENT_CAPACITY: usize = 500;
 const DEFAULT_USER_KEY_SIZE: usize = 1000;
+const DEFAULT_USER_KEYS_FLUSH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -50,10 +51,10 @@ pub struct EventProcessorBuilder {
     flush_interval: Duration,
     event_sink: Option<Arc<RwLock<dyn sink::EventSink>>>,
     user_keys_capacity: usize,
+    user_keys_flush_interval: Duration,
     inline_users_in_events: bool,
     // all_attributes_private: bool,
     // private_attributes: Vec<String>,
-    // user_keys_flush_interval: Duration,
     // diagnostic_recording_interval: Duration,
 }
 
@@ -75,6 +76,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
                         self.flush_interval,
                         self.capacity,
                         self.user_keys_capacity,
+                        self.user_keys_flush_interval,
                         self.inline_users_in_events,
                     )
                     .map_err(|e| BuildError::InvalidConfig(e.to_string())),
@@ -83,6 +85,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
                         self.flush_interval,
                         self.capacity,
                         self.user_keys_capacity,
+                        self.user_keys_flush_interval,
                         self.inline_users_in_events,
                     )
                     .map_err(|e| BuildError::InvalidConfig(e.to_string())),
@@ -101,6 +104,7 @@ impl EventProcessorBuilder {
             capacity: DEFAULT_EVENT_CAPACITY,
             flush_interval: DEFAULT_FLUSH_POLL_INTERVAL,
             user_keys_capacity: DEFAULT_USER_KEY_SIZE,
+            user_keys_flush_interval: DEFAULT_USER_KEYS_FLUSH_INTERVAL,
             event_sink: None,
             inline_users_in_events: false,
         }
@@ -131,6 +135,12 @@ impl EventProcessorBuilder {
     /// recently seen user keys.
     pub fn user_keys_capacity(&mut self, user_keys_capacity: usize) -> &mut Self {
         self.user_keys_capacity = user_keys_capacity;
+        self
+    }
+
+    /// Sets the interval at which the event processor will reset its cache of known user keys.
+    pub fn user_keys_flush_interval(&mut self, user_keys_flush_interval: Duration) -> &mut Self {
+        self.user_keys_flush_interval = user_keys_flush_interval;
         self
     }
 
@@ -216,6 +226,13 @@ mod tests {
         let mut builder = EventProcessorBuilder::new();
         builder.user_keys_capacity(1234);
         assert_eq!(builder.user_keys_capacity, 1234);
+    }
+
+    #[test]
+    fn user_keys_flush_interval_can_be_adjusted() {
+        let mut builder = EventProcessorBuilder::new();
+        builder.user_keys_flush_interval(Duration::from_secs(1000));
+        assert_eq!(builder.user_keys_flush_interval, Duration::from_secs(1000));
     }
 
     #[test]
