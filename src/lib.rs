@@ -19,11 +19,16 @@ pub use client::Client;
 // Re-export
 pub use client::{BuildError, FlushError, StartError};
 pub use config::{Config, ConfigBuilder};
-pub use data_source_builders::{BuildError as DataSourceBuildError, StreamingDataSourceBuilder};
+pub use data_source_builders::{
+    BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
+};
 pub use evaluation::FlagDetailConfig;
 pub use events::processor::EventProcessor;
 pub use events::processor_builders::{
     BuildError as EventProcessorBuildError, EventProcessorBuilder,
+};
+pub use feature_requester_builders::{
+    BuildError as FeatureRequestBuilderError, FeatureRequesterFactory,
 };
 pub use service_endpoints::ServiceEndpointsBuilder;
 pub use version::version_string;
@@ -36,6 +41,9 @@ mod data_store;
 mod data_store_builders;
 mod evaluation;
 mod events;
+mod feature_requester;
+mod feature_requester_builders;
+mod reqwest;
 mod service_endpoints;
 mod test_common;
 mod version;

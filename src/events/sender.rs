@@ -1,7 +1,8 @@
+use crate::reqwest::is_http_error_recoverable;
 use crossbeam_channel::Sender;
 
 use chrono::DateTime;
-use r::{header::HeaderValue, Response, StatusCode};
+use r::{header::HeaderValue, Response};
 use reqwest as r;
 
 use super::event::OutputEvent;
@@ -123,17 +124,6 @@ impl EventSender for ReqwestEventSender {
     }
 }
 
-fn is_http_error_recoverable(status: StatusCode) -> bool {
-    if !status.is_client_error() {
-        return true;
-    }
-
-    matches!(
-        status,
-        StatusCode::BAD_REQUEST | StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
-    )
-}
-
 #[cfg(test)]
 pub(crate) struct InMemoryEventSender {
     event_tx: Sender<OutputEvent>,
@@ -167,6 +157,7 @@ mod tests {
     use super::*;
     use crossbeam_channel::bounded;
     use mockito::mock;
+    use reqwest::StatusCode;
     use test_case::test_case;
 
     #[test_case(StatusCode::CONTINUE, true)]

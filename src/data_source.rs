@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
 use eventsource_client as es;
@@ -8,6 +8,8 @@ use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use serde::Deserialize;
 
 use crate::data_store::UpdateError;
+use crate::feature_requester::FeatureRequesterError;
+use crate::feature_requester_builders::FeatureRequesterFactory;
 
 use super::data_store::{AllData, DataStore, PatchTarget};
 
@@ -87,9 +89,9 @@ impl DataSource for StreamingDataSource {
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
     ) {
         let mut event_stream = Box::pin(self.es_client.stream());
+        let notify_init = Once::new();
 
         tokio::spawn(async move {
-            let mut first_pass = true;
             let mut init_success = true;
             loop {
                 let event = match event_stream.try_next().await {
@@ -119,12 +121,76 @@ impl DataSource for StreamingDataSource {
                     init_success = false;
                     error!("error processing update: {:?}", e);
                 }
+
                 // Only want to notify for the first event.
                 // TODO: When error handling is added this should happen once we are successful,
                 // or if we have encountered an unrecoverable error.
-                if first_pass {
-                    (init_complete)(init_success);
-                    first_pass = false;
+                notify_init.call_once(|| (init_complete)(init_success));
+            }
+        });
+    }
+}
+
+pub struct PollingDataSource {
+    feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>>,
+    poll_interval: Duration,
+}
+
+impl PollingDataSource {
+    pub fn new(
+        feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>>,
+        poll_interval: Duration,
+    ) -> Self {
+        Self {
+            feature_requester_factory,
+            poll_interval,
+        }
+    }
+}
+
+impl DataSource for PollingDataSource {
+    fn subscribe(
+        &mut self,
+        data_store: Arc<Mutex<dyn DataStore>>,
+        init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+    ) {
+        let notify_init = Once::new();
+
+        let poll_interval = self.poll_interval;
+
+        let mut feature_requester = match self.feature_requester_factory.lock() {
+            Ok(factory) => match factory.build() {
+                Ok(requester) => requester,
+                Err(e) => {
+                    error!("{:?}", e);
+                    return;
+                }
+            },
+            Err(e) => {
+                error!("{:?}", e);
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(poll_interval);
+
+            loop {
+                interval.tick().await;
+
+                match feature_requester.get_all() {
+                    Ok(all_data) => {
+                        let mut data_store = data_store.lock().unwrap();
+                        data_store.init(all_data);
+                        notify_init.call_once(|| init_complete(true));
+                    }
+                    Err(FeatureRequesterError::Temporary) => {
+                        notify_init.call_once(|| init_complete(false))
+                    }
+                    Err(FeatureRequesterError::Permanent) => {
+                        notify_init.call_once(|| init_complete(false));
+                        break;
+                    }
                 }
             }
         });
