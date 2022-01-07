@@ -427,6 +427,10 @@ impl EventSummary {
             }
         }
     }
+
+    pub fn reset(&mut self) {
+        self.features.clear();
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

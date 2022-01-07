@@ -10,17 +10,16 @@ use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
-use crate::events::InputEvent;
-
 use super::config::Config;
 use super::data_source::DataSource;
 use super::data_source_builders::BuildError as DataSourceError;
 use super::data_store::DataStore;
 use super::data_store_builders::BuildError as DataStoreError;
 use super::evaluation::{FlagDetail, FlagDetailConfig};
-use super::event_processor::EventProcessor;
-use super::event_processor_builders::BuildError as EventProcessorError;
-use super::events::EventFactory;
+use crate::events::event::EventFactory;
+use crate::events::event::InputEvent;
+use crate::events::processor::EventProcessor;
+use crate::events::processor_builders::BuildError as EventProcessorError;
 
 struct EventsScope {
     disabled: bool,
@@ -289,6 +288,19 @@ impl Client {
     /// SDK to never become initialized.
     pub fn initialized(&self) -> bool {
         self.offline || ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
+    }
+
+    /// Close shuts down the LaunchDarkly client. After calling this, the LaunchDarkly client
+    /// should no longer be used. The method will block until all pending analytics events (if any)
+    /// been sent.
+    pub fn close(&self) {
+        match self.event_processor.lock() {
+            Ok(ep) => ep.close(),
+            Err(e) => error!(
+                "Unable to acquire event processor lock. Cannot close. {:?}",
+                e
+            ),
+        }
     }
 
     pub fn flush(&self) {
@@ -593,25 +605,23 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use crate::ConfigBuilder;
+    use crossbeam_channel::Receiver;
     use launchdarkly_server_sdk_evaluation::{Reason, User};
     use spectral::prelude::*;
     use std::collections::HashMap;
-    use std::sync::mpsc::Receiver;
-    use std::sync::RwLock;
-    use std::time::Duration;
 
     use tokio::time::Instant;
 
     use crate::data_source::{MockDataSource, PatchData};
     use crate::data_source_builders::MockDataSourceBuilder;
     use crate::data_store::PatchTarget;
-    use crate::event_processor_builders::EventProcessorBuilder;
-    use crate::event_sink::MockSink;
-    use crate::events::{OutputEvent, VariationKey};
+    use crate::events::create_event_sender;
+    use crate::events::event::{OutputEvent, VariationKey};
+    use crate::events::processor_builders::EventProcessorBuilder;
     use crate::test_common::{
         self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_off_flag,
     };
+    use crate::ConfigBuilder;
     use test_case::test_case;
 
     use super::*;
@@ -625,8 +635,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes() {
-        let (client, _updates, _events, _sink_receiver) =
-            make_mocked_client_with_delay(1000, false);
+        let (client, _updates, _event_rx) = make_mocked_client_with_delay(1000, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -639,7 +648,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_initializes_immediately_in_offline_mode() {
-        let (client, _updates, _events, _sink_receiver) = make_mocked_client_with_delay(1000, true);
+        let (client, _updates, _event_rx) = make_mocked_client_with_delay(1000, true);
         client.start_with_default_executor();
 
         assert!(client.initialized());
@@ -660,7 +669,7 @@ mod tests {
     ) {
         let user = User::with_key("foo".to_string()).build();
 
-        let (client, updates, _events, _sink_receiver) = make_mocked_client();
+        let (client, updates, _event_rx) = make_mocked_client();
 
         let result = client.variation_detail(&user, "myFlag", default.clone());
         assert_that!(result.value).contains_value(default.clone());
@@ -684,7 +693,7 @@ mod tests {
 
     #[test]
     fn variation_tracks_events_correctly() {
-        let (client, updates, events, sink_receiver) = make_mocked_client();
+        let (client, updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -701,10 +710,10 @@ mod tests {
 
         assert_that(&flag_value.as_bool().unwrap()).is_true();
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(2);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
@@ -722,7 +731,7 @@ mod tests {
 
     #[test]
     fn variation_handles_offline_mode() {
-        let (client, _, events, sink_receiver) = make_mocked_offline_client();
+        let (client, _, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -730,15 +739,15 @@ mod tests {
 
         assert_that(&flag_value.as_bool().unwrap()).is_false();
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(0);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(0);
     }
 
     #[test]
     fn variation_handles_unknown_flags() {
-        let (client, _updates, events, sink_receiver) = make_mocked_client();
+        let (client, _updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -746,10 +755,10 @@ mod tests {
 
         assert_that(&flag_value.as_bool().unwrap()).is_false();
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(2);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
@@ -767,7 +776,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_debug_events_correctly() {
-        let (client, updates, events, sink_receiver) = make_mocked_client();
+        let (client, updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -789,10 +798,10 @@ mod tests {
             in_experiment: false,
         });
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(3);
+        let events = event_rx.try_iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(3);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("debug");
         assert_that!(events[2].kind()).is_equal_to("summary");
@@ -811,7 +820,7 @@ mod tests {
 
     #[test]
     fn variation_detail_tracks_events_correctly() {
-        let (client, updates, events, sink_receiver) = make_mocked_client();
+        let (client, updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -831,10 +840,10 @@ mod tests {
             in_experiment: false,
         });
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(2);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
@@ -852,7 +861,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_offline_mode() {
-        let (client, _, events, sink_receiver) = make_mocked_offline_client();
+        let (client, _, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -864,15 +873,15 @@ mod tests {
             error: eval::Error::ClientNotReady,
         });
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(0);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(0);
     }
 
     #[test]
     fn variation_handles_off_flag_without_variation() {
-        let (client, updates, events, sink_receiver) = make_mocked_client();
+        let (client, updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -889,10 +898,10 @@ mod tests {
 
         assert_that(&result.as_bool().unwrap()).is_false();
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(2);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
@@ -910,7 +919,7 @@ mod tests {
 
     #[test]
     fn variation_detail_tracks_prereq_events_correctly() {
-        let (client, updates, events, sink_receiver) = make_mocked_client();
+        let (client, updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -942,10 +951,10 @@ mod tests {
             in_experiment: false,
         });
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(4);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(4);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("feature");
         assert_that!(events[2].kind()).is_equal_to("feature");
@@ -969,7 +978,7 @@ mod tests {
 
     #[test]
     fn variation_handles_failed_prereqs_correctly() {
-        let (client, updates, events, sink_receiver) = make_mocked_client();
+        let (client, updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let updates = updates.lock().unwrap();
@@ -998,10 +1007,10 @@ mod tests {
 
         assert_that(&detail.as_bool().unwrap()).is_false();
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(4);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(4);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("feature");
         assert_that!(events[2].kind()).is_equal_to("feature");
@@ -1025,7 +1034,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_flag_not_found() {
-        let (client, _updates, events, sink_receiver) = make_mocked_client();
+        let (client, _updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1036,10 +1045,10 @@ mod tests {
             error: eval::Error::FlagNotFound,
         });
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(2);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
@@ -1057,8 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn variation_detail_handles_client_not_ready() {
-        let (client, _updates, events, sink_receiver) =
-            make_mocked_client_with_delay(u64::MAX, false);
+        let (client, _updates, event_rx) = make_mocked_client_with_delay(u64::MAX, false);
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -1069,10 +1077,10 @@ mod tests {
             error: eval::Error::ClientNotReady,
         });
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(2);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(2);
         assert_that!(events[0].kind()).is_equal_to("index");
         assert_that!(events[1].kind()).is_equal_to("summary");
 
@@ -1090,33 +1098,33 @@ mod tests {
 
     #[test]
     fn identify_sends_identify_event() {
-        let (client, _updates, events, sink_receiver) = make_mocked_client();
+        let (client, _updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
 
         client.identify(user);
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(1);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("identify");
     }
 
     #[test]
     fn identify_sends_sends_nothing_in_offline_mode() {
-        let (client, _updates, events, sink_receiver) = make_mocked_offline_client();
+        let (client, _updates, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
 
         client.identify(user);
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(0);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(0);
     }
 
     #[test]
@@ -1133,7 +1141,7 @@ mod tests {
 
     #[test]
     fn alias_sends_alias_event() {
-        let (client, _updates, events, sink_receiver) = make_mocked_client();
+        let (client, _updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1141,16 +1149,16 @@ mod tests {
 
         client.alias(user, previous_user);
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(1);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(1);
         assert_that!(events[0].kind()).is_equal_to("alias");
     }
 
     #[test]
     fn alias_sends_nothing_in_offline_mode() {
-        let (client, _updates, events, sink_receiver) = make_mocked_offline_client();
+        let (client, _updates, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1158,10 +1166,10 @@ mod tests {
 
         client.alias(user, previous_user);
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(0);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(0);
     }
 
     #[derive(Serialize)]
@@ -1171,7 +1179,7 @@ mod tests {
 
     #[test]
     fn track_sends_track_and_index_events() -> serde_json::Result<()> {
-        let (client, _updates, events, sink_receiver) = make_mocked_client();
+        let (client, _updates, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1187,10 +1195,10 @@ mod tests {
         client.track_metric(user.clone(), "event-with-metric", 42.0);
 
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(6);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(6);
 
         let mut events_by_type: HashMap<&str, usize> = HashMap::new();
         for event in &*events {
@@ -1208,7 +1216,7 @@ mod tests {
 
     #[test]
     fn track_sends_nothing_in_offline_mode() -> serde_json::Result<()> {
-        let (client, _updates, events, sink_receiver) = make_mocked_offline_client();
+        let (client, _updates, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1224,10 +1232,10 @@ mod tests {
         client.track_metric(user.clone(), "event-with-metric", 42.0);
 
         client.flush();
+        client.close();
 
-        let _ = sink_receiver.recv_timeout(Duration::from_secs(1));
-        let events = &events.read().unwrap().events;
-        assert_that!(*events).has_length(0);
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_that!(&events).has_length(0);
 
         Ok(())
     }
@@ -1235,42 +1243,26 @@ mod tests {
     fn make_mocked_client_with_delay(
         delay: u64,
         offline: bool,
-    ) -> (
-        Client,
-        Arc<Mutex<MockDataSource>>,
-        Arc<RwLock<MockSink>>,
-        Receiver<()>,
-    ) {
+    ) -> (Client, Arc<Mutex<MockDataSource>>, Receiver<OutputEvent>) {
         let updates = Arc::new(Mutex::new(MockDataSource::new_with_init_delay(delay)));
-        let (sink, sink_receiver) = MockSink::new(0);
-        let events = Arc::new(RwLock::new(sink));
+        let (event_sender, event_rx) = create_event_sender();
 
         let config = ConfigBuilder::new("sdk-key")
             .offline(offline)
             .data_source(MockDataSourceBuilder::new().data_source(updates.clone()))
-            .event_processor(EventProcessorBuilder::new().event_sink(events.clone()))
+            .event_processor(EventProcessorBuilder::new().event_sender(Arc::new(event_sender)))
             .build();
 
         let client = Client::build(config).expect("Should be built.");
 
-        (client, updates, events, sink_receiver)
+        (client, updates, event_rx)
     }
 
-    fn make_mocked_offline_client() -> (
-        Client,
-        Arc<Mutex<MockDataSource>>,
-        Arc<RwLock<MockSink>>,
-        Receiver<()>,
-    ) {
+    fn make_mocked_offline_client() -> (Client, Arc<Mutex<MockDataSource>>, Receiver<OutputEvent>) {
         make_mocked_client_with_delay(0, true)
     }
 
-    fn make_mocked_client() -> (
-        Client,
-        Arc<Mutex<MockDataSource>>,
-        Arc<RwLock<MockSink>>,
-        Receiver<()>,
-    ) {
+    fn make_mocked_client() -> (Client, Arc<Mutex<MockDataSource>>, Receiver<OutputEvent>) {
         make_mocked_client_with_delay(0, false)
     }
 }

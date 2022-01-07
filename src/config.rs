@@ -1,6 +1,6 @@
 use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
 use crate::data_store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
-use crate::event_processor_builders::{
+use crate::events::processor_builders::{
     EventProcessorBuilder, EventProcessorFactory, NullEventProcessorBuilder,
 };
 use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};

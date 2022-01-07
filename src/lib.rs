@@ -21,8 +21,10 @@ pub use client::{BuildError, FlushError, StartError};
 pub use config::{Config, ConfigBuilder};
 pub use data_source_builders::{BuildError as DataSourceBuildError, StreamingDataSourceBuilder};
 pub use evaluation::FlagDetailConfig;
-pub use event_processor::EventProcessor;
-pub use event_processor_builders::{BuildError as EventProcessorBuildError, EventProcessorBuilder};
+pub use events::processor::EventProcessor;
+pub use events::processor_builders::{
+    BuildError as EventProcessorBuildError, EventProcessorBuilder,
+};
 pub use service_endpoints::ServiceEndpointsBuilder;
 pub use version::version_string;
 
@@ -33,9 +35,6 @@ mod data_source_builders;
 mod data_store;
 mod data_store_builders;
 mod evaluation;
-mod event_processor;
-mod event_processor_builders;
-mod event_sink;
 mod events;
 mod service_endpoints;
 mod test_common;

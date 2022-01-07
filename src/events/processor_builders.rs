@@ -1,7 +1,11 @@
-use super::event_sink as sink;
-use crate::event_processor::{EventProcessor, EventProcessorImpl, NullEventProcessor};
+use super::processor::{
+    EventProcessor, EventProcessorError, EventProcessorImpl, NullEventProcessor,
+};
+use super::sender::{EventSender, ReqwestEventSender};
+use super::EventsConfiguration;
+
 use crate::service_endpoints;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -15,6 +19,9 @@ const DEFAULT_USER_KEYS_FLUSH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 pub enum BuildError {
     #[error("event processor factory failed to build: {0}")]
     InvalidConfig(String),
+
+    #[error(transparent)]
+    FailedToStart(EventProcessorError),
 }
 
 /// Trait which allows creation of event processors. Should be implemented by event processor
@@ -49,13 +56,13 @@ pub trait EventProcessorFactory {
 pub struct EventProcessorBuilder {
     capacity: usize,
     flush_interval: Duration,
-    event_sink: Option<Arc<RwLock<dyn sink::EventSink>>>,
     user_keys_capacity: usize,
     user_keys_flush_interval: Duration,
     inline_users_in_events: bool,
+    event_sender: Option<Arc<dyn EventSender>>,
     // all_attributes_private: bool,
     // private_attributes: Vec<String>,
-    // diagnostic_recording_interval: Duration,
+    // diagnostic_recording_interval: Duration
 }
 
 impl EventProcessorFactory for EventProcessorBuilder {
@@ -64,33 +71,32 @@ impl EventProcessorFactory for EventProcessorBuilder {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
     ) -> Result<Arc<Mutex<dyn EventProcessor>>, BuildError> {
-        Ok(Arc::new(Mutex::new(
-            reqwest::Url::parse(endpoints.events_base_url())
-                .map_err(|e| {
-                    BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
-                })
-                .and_then(|base_url| match &self.event_sink {
-                    None => EventProcessorImpl::new(
-                        base_url,
-                        sdk_key,
-                        self.flush_interval,
-                        self.capacity,
-                        self.user_keys_capacity,
-                        self.user_keys_flush_interval,
-                        self.inline_users_in_events,
-                    )
-                    .map_err(|e| BuildError::InvalidConfig(e.to_string())),
-                    Some(event_sink) => EventProcessorImpl::new_with_sink(
-                        event_sink.clone(),
-                        self.flush_interval,
-                        self.capacity,
-                        self.user_keys_capacity,
-                        self.user_keys_flush_interval,
-                        self.inline_users_in_events,
-                    )
-                    .map_err(|e| BuildError::InvalidConfig(e.to_string())),
-                })?,
-        )))
+        let url = reqwest::Url::parse(endpoints.events_base_url()).map_err(|e| {
+            BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
+        })?;
+
+        let http = reqwest::Client::builder().build().map_err(|e| {
+            BuildError::InvalidConfig(format!("unable to build reqwest client: {}", e))
+        })?;
+
+        let event_sender = match &self.event_sender {
+            Some(event_sender) => event_sender.clone(),
+            _ => Arc::new(ReqwestEventSender::new(http, url, sdk_key)),
+        };
+
+        let events_configuration = EventsConfiguration {
+            event_sender,
+            capacity: self.capacity,
+            flush_interval: self.flush_interval,
+            inline_users_in_events: self.inline_users_in_events,
+            user_keys_capacity: self.user_keys_capacity,
+            user_keys_flush_interval: self.user_keys_flush_interval,
+        };
+
+        let events_processor =
+            EventProcessorImpl::new(events_configuration).map_err(BuildError::FailedToStart)?;
+
+        Ok(Arc::new(Mutex::new(events_processor)))
     }
 
     fn to_owned(&self) -> Box<dyn EventProcessorFactory> {
@@ -105,8 +111,8 @@ impl EventProcessorBuilder {
             flush_interval: DEFAULT_FLUSH_POLL_INTERVAL,
             user_keys_capacity: DEFAULT_USER_KEY_SIZE,
             user_keys_flush_interval: DEFAULT_USER_KEYS_FLUSH_INTERVAL,
-            event_sink: None,
             inline_users_in_events: false,
+            event_sender: None,
         }
     }
 
@@ -153,9 +159,9 @@ impl EventProcessorBuilder {
         self
     }
 
-    #[cfg(test)] //TODO: Should we make this not just for test?
-    pub fn event_sink(&mut self, event_sink: Arc<RwLock<dyn sink::EventSink>>) -> &mut Self {
-        self.event_sink = Some(event_sink);
+    #[cfg(test)]
+    pub fn event_sender(&mut self, event_sender: Arc<dyn EventSender>) -> &mut Self {
+        self.event_sender = Some(event_sender);
         self
     }
 }
@@ -204,7 +210,6 @@ mod tests {
         let builder = EventProcessorBuilder::new();
         assert_eq!(builder.capacity, DEFAULT_EVENT_CAPACITY);
         assert_eq!(builder.flush_interval, DEFAULT_FLUSH_POLL_INTERVAL);
-        assert!(builder.event_sink.is_none());
     }
 
     #[test]
