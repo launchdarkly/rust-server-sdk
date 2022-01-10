@@ -1,6 +1,7 @@
 use futures::future;
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{io, thread};
 
 use launchdarkly_server_sdk_evaluation::{
@@ -29,7 +30,7 @@ struct EventsScope {
 
 struct PrerequisiteEventRecorder {
     event_factory: EventFactory,
-    event_processor: Arc<Mutex<dyn EventProcessor>>,
+    event_processor: Arc<dyn EventProcessor>,
 }
 
 impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
@@ -43,13 +44,7 @@ impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
             Some(event.target_flag_key),
         );
 
-        match self.event_processor.lock() {
-            Ok(ep) => ep.send(evt),
-            Err(e) => error!(
-                "Failed to record prerequisite event. Could not acquire event processor lock: {:?}",
-                e
-            ),
-        }
+        self.event_processor.send(evt);
     }
 }
 
@@ -146,9 +141,9 @@ impl From<usize> for ClientInitState {
 ///
 /// Each builder type includes usage examples for the builder.
 pub struct Client {
-    event_processor: Arc<Mutex<dyn EventProcessor>>,
-    data_source: Arc<Mutex<dyn DataSource>>,
-    data_store: Arc<Mutex<dyn DataStore>>,
+    event_processor: Arc<dyn EventProcessor>,
+    data_source: Arc<dyn DataSource>,
+    data_store: Arc<RwLock<dyn DataStore>>,
     events_default: EventsScope,
     events_with_reasons: EventsScope,
     init_notify: Arc<Semaphore>,
@@ -223,7 +218,7 @@ impl Client {
         let notify = self.init_notify.clone();
         let init_state = self.init_state.clone();
 
-        self.data_source.lock().unwrap().subscribe(
+        self.data_source.subscribe(
             self.data_store.clone(),
             Arc::new(move |success| {
                 init_state.store(
@@ -294,23 +289,11 @@ impl Client {
     /// should no longer be used. The method will block until all pending analytics events (if any)
     /// been sent.
     pub fn close(&self) {
-        match self.event_processor.lock() {
-            Ok(ep) => ep.close(),
-            Err(e) => error!(
-                "Unable to acquire event processor lock. Cannot close. {:?}",
-                e
-            ),
-        }
+        self.event_processor.close();
     }
 
     pub fn flush(&self) {
-        match self.event_processor.lock() {
-            Ok(ep) => ep.flush(),
-            Err(e) => error!(
-                "Unable to acquire event processor lock. Cannot flush. {:?}",
-                e
-            ),
-        }
+        self.event_processor.flush();
     }
 
     pub fn identify(&self, user: User) {
@@ -464,7 +447,7 @@ impl Client {
             return FlagDetail::new(false);
         }
 
-        let data_store = self.data_store.lock().unwrap();
+        let data_store = self.data_store.read();
 
         let mut flag_detail = FlagDetail::new(true);
         flag_detail.populate(&*data_store, user, flag_state_config);
@@ -547,7 +530,7 @@ impl Client {
                 Detail::err_default(eval::Error::ClientNotReady, default.clone().into()),
             ),
             true => {
-                let data_store = self.data_store.lock().unwrap();
+                let data_store = self.data_store.read();
                 match data_store.flag(flag_key) {
                     Some(flag) => {
                         let result = eval::evaluate(
@@ -593,13 +576,7 @@ impl Client {
     }
 
     fn send_internal(&self, event: InputEvent) {
-        match self.event_processor.lock() {
-            Ok(ep) => ep.send(event),
-            Err(e) => error!(
-                "Unable to acquire event processor lock. Cannot send input event. {:?}",
-                e
-            ),
-        }
+        self.event_processor.send(event);
     }
 }
 
@@ -612,7 +589,7 @@ mod tests {
 
     use tokio::time::Instant;
 
-    use crate::data_source::{MockDataSource, PatchData};
+    use crate::data_source::MockDataSource;
     use crate::data_source_builders::MockDataSourceBuilder;
     use crate::data_store::PatchTarget;
     use crate::events::create_event_sender;
@@ -635,7 +612,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes() {
-        let (client, _updates, _event_rx) = make_mocked_client_with_delay(1000, false);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -648,7 +625,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_initializes_immediately_in_offline_mode() {
-        let (client, _updates, _event_rx) = make_mocked_client_with_delay(1000, true);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, true);
         client.start_with_default_executor();
 
         assert!(client.initialized());
@@ -669,19 +646,16 @@ mod tests {
     ) {
         let user = User::with_key("foo".to_string()).build();
 
-        let (client, updates, _event_rx) = make_mocked_client();
+        let (client, _event_rx) = make_mocked_client();
 
         let result = client.variation_detail(&user, "myFlag", default.clone());
         assert_that!(result.value).contains_value(default.clone());
 
         client.start_with_default_executor();
-
-        let updates = updates.lock().unwrap();
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(flag),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/myFlag", PatchTarget::Flag(flag))
             .expect("patch should apply");
 
         let result = client.variation_detail(&user, "myFlag", default);
@@ -693,16 +667,12 @@ mod tests {
 
     #[test]
     fn variation_tracks_events_correctly() {
-        let (client, updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
-
-        let updates = updates.lock().unwrap();
-
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(basic_flag("myFlag")),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -731,7 +701,7 @@ mod tests {
 
     #[test]
     fn variation_handles_offline_mode() {
-        let (client, _, event_rx) = make_mocked_offline_client();
+        let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -747,7 +717,7 @@ mod tests {
 
     #[test]
     fn variation_handles_unknown_flags() {
-        let (client, _updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -776,18 +746,16 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_debug_events_correctly() {
-        let (client, updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
-        let updates = updates.lock().unwrap();
         let mut flag = basic_flag("myFlag");
         flag.debug_events_until_date = Some(64_060_606_800_000); // Jan. 1st, 4000
 
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(flag),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/myFlag", PatchTarget::Flag(flag))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -820,16 +788,13 @@ mod tests {
 
     #[test]
     fn variation_detail_tracks_events_correctly() {
-        let (client, updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
-        let updates = updates.lock().unwrap();
-
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(basic_flag("myFlag")),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -861,7 +826,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_offline_mode() {
-        let (client, _, event_rx) = make_mocked_offline_client();
+        let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -881,16 +846,13 @@ mod tests {
 
     #[test]
     fn variation_handles_off_flag_without_variation() {
-        let (client, updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
-        let updates = updates.lock().unwrap();
-
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(basic_off_flag("myFlag")),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/myFlag", PatchTarget::Flag(basic_off_flag("myFlag")))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -919,28 +881,24 @@ mod tests {
 
     #[test]
     fn variation_detail_tracks_prereq_events_correctly() {
-        let (client, updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
-
-        let updates = updates.lock().unwrap();
 
         let mut basic_preqreq_flag = basic_flag("prereqFlag");
         basic_preqreq_flag.track_events = true;
 
-        updates
-            .patch(PatchData {
-                path: "/flags/prereqFlag".to_string(),
-                data: PatchTarget::Flag(basic_preqreq_flag),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/prereqFlag", PatchTarget::Flag(basic_preqreq_flag))
             .expect("patch should apply");
 
         let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
         basic_flag.track_events = true;
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(basic_flag),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -978,28 +936,24 @@ mod tests {
 
     #[test]
     fn variation_handles_failed_prereqs_correctly() {
-        let (client, updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
-
-        let updates = updates.lock().unwrap();
 
         let mut basic_preqreq_flag = basic_off_flag("prereqFlag");
         basic_preqreq_flag.track_events = true;
 
-        updates
-            .patch(PatchData {
-                path: "/flags/prereqFlag".to_string(),
-                data: PatchTarget::Flag(basic_preqreq_flag),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/prereqFlag", PatchTarget::Flag(basic_preqreq_flag))
             .expect("patch should apply");
 
         let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
         basic_flag.track_events = true;
-        updates
-            .patch(PatchData {
-                path: "/flags/myFlag".to_string(),
-                data: PatchTarget::Flag(basic_flag),
-            })
+        client
+            .data_store
+            .write()
+            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -1034,7 +988,7 @@ mod tests {
 
     #[test]
     fn variation_detail_handles_flag_not_found() {
-        let (client, _updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1066,7 +1020,7 @@ mod tests {
 
     #[tokio::test]
     async fn variation_detail_handles_client_not_ready() {
-        let (client, _updates, event_rx) = make_mocked_client_with_delay(u64::MAX, false);
+        let (client, event_rx) = make_mocked_client_with_delay(u64::MAX, false);
         client.start_with_default_executor();
         let user = User::with_key("bob").build();
 
@@ -1098,7 +1052,7 @@ mod tests {
 
     #[test]
     fn identify_sends_identify_event() {
-        let (client, _updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1114,7 +1068,7 @@ mod tests {
 
     #[test]
     fn identify_sends_sends_nothing_in_offline_mode() {
-        let (client, _updates, event_rx) = make_mocked_offline_client();
+        let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1141,7 +1095,7 @@ mod tests {
 
     #[test]
     fn alias_sends_alias_event() {
-        let (client, _updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1158,7 +1112,7 @@ mod tests {
 
     #[test]
     fn alias_sends_nothing_in_offline_mode() {
-        let (client, _updates, event_rx) = make_mocked_offline_client();
+        let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1179,7 +1133,7 @@ mod tests {
 
     #[test]
     fn track_sends_track_and_index_events() -> serde_json::Result<()> {
-        let (client, _updates, event_rx) = make_mocked_client();
+        let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1216,7 +1170,7 @@ mod tests {
 
     #[test]
     fn track_sends_nothing_in_offline_mode() -> serde_json::Result<()> {
-        let (client, _updates, event_rx) = make_mocked_offline_client();
+        let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
         let user = User::with_key("bob").build();
@@ -1240,11 +1194,8 @@ mod tests {
         Ok(())
     }
 
-    fn make_mocked_client_with_delay(
-        delay: u64,
-        offline: bool,
-    ) -> (Client, Arc<Mutex<MockDataSource>>, Receiver<OutputEvent>) {
-        let updates = Arc::new(Mutex::new(MockDataSource::new_with_init_delay(delay)));
+    fn make_mocked_client_with_delay(delay: u64, offline: bool) -> (Client, Receiver<OutputEvent>) {
+        let updates = Arc::new(MockDataSource::new_with_init_delay(delay));
         let (event_sender, event_rx) = create_event_sender();
 
         let config = ConfigBuilder::new("sdk-key")
@@ -1255,14 +1206,14 @@ mod tests {
 
         let client = Client::build(config).expect("Should be built.");
 
-        (client, updates, event_rx)
+        (client, event_rx)
     }
 
-    fn make_mocked_offline_client() -> (Client, Arc<Mutex<MockDataSource>>, Receiver<OutputEvent>) {
+    fn make_mocked_offline_client() -> (Client, Receiver<OutputEvent>) {
         make_mocked_client_with_delay(0, true)
     }
 
-    fn make_mocked_client() -> (Client, Arc<Mutex<MockDataSource>>, Receiver<OutputEvent>) {
+    fn make_mocked_client() -> (Client, Receiver<OutputEvent>) {
         make_mocked_client_with_delay(0, false)
     }
 }

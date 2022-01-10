@@ -24,7 +24,7 @@ pub trait DataSourceFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError>;
+    ) -> Result<Arc<dyn DataSource>, BuildError>;
     fn to_owned(&self) -> Box<dyn DataSourceFactory>;
 }
 
@@ -70,14 +70,14 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError> {
+    ) -> Result<Arc<dyn DataSource>, BuildError> {
         let data_source = StreamingDataSource::new(
             endpoints.streaming_base_url(),
             sdk_key,
             self.initial_reconnect_delay,
         )
         .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
-        Ok(Arc::new(Mutex::new(data_source)))
+        Ok(Arc::new(data_source))
     }
 
     fn to_owned(&self) -> Box<dyn DataSourceFactory> {
@@ -105,8 +105,8 @@ impl DataSourceFactory for NullDataSourceBuilder {
         &self,
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError> {
-        Ok(Arc::new(Mutex::new(NullDataSource::new())))
+    ) -> Result<Arc<dyn DataSource>, BuildError> {
+        Ok(Arc::new(NullDataSource::new()))
     }
 
     fn to_owned(&self) -> Box<dyn DataSourceFactory> {
@@ -181,7 +181,7 @@ impl DataSourceFactory for PollingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError> {
+    ) -> Result<Arc<dyn DataSource>, BuildError> {
         let feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>> =
             match &self.feature_requester_factory {
                 Some(factory) => factory.clone(),
@@ -192,7 +192,7 @@ impl DataSourceFactory for PollingDataSourceBuilder {
             };
 
         let data_source = PollingDataSource::new(feature_requester_factory, self.poll_interval);
-        Ok(Arc::new(Mutex::new(data_source)))
+        Ok(Arc::new(data_source))
     }
 
     fn to_owned(&self) -> Box<dyn DataSourceFactory> {
@@ -210,7 +210,7 @@ impl Default for PollingDataSourceBuilder {
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct MockDataSourceBuilder {
-    data_source: Option<Arc<Mutex<data_source::MockDataSource>>>,
+    data_source: Option<Arc<data_source::MockDataSource>>,
 }
 
 #[cfg(test)]
@@ -221,7 +221,7 @@ impl MockDataSourceBuilder {
 
     pub fn data_source(
         &mut self,
-        data_source: Arc<Mutex<data_source::MockDataSource>>,
+        data_source: Arc<data_source::MockDataSource>,
     ) -> &mut MockDataSourceBuilder {
         self.data_source = Some(data_source);
         self
@@ -235,7 +235,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         &self,
         _endpoints: &service_endpoints::ServiceEndpoints,
         _sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn DataSource>>, BuildError> {
+    ) -> Result<Arc<dyn DataSource>, BuildError> {
         return Ok(self.data_source.as_ref().unwrap().clone());
     }
 

@@ -16,7 +16,7 @@ pub enum EventProcessorError {
 
 /// Trait for the component that buffers analytics events and sends them to LaunchDarkly.
 /// This component can be replaced for testing purposes.
-pub trait EventProcessor: Send {
+pub trait EventProcessor: Send + Sync {
     fn send(&self, event: InputEvent);
     fn flush(&self);
     fn close(&self);

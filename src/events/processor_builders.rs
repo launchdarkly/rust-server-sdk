@@ -5,7 +5,7 @@ use super::sender::{EventSender, ReqwestEventSender};
 use super::EventsConfiguration;
 
 use crate::service_endpoints;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -31,7 +31,7 @@ pub trait EventProcessorFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn EventProcessor>>, BuildError>;
+    ) -> Result<Arc<dyn EventProcessor>, BuildError>;
     fn to_owned(&self) -> Box<dyn EventProcessorFactory>;
 }
 
@@ -70,7 +70,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
-    ) -> Result<Arc<Mutex<dyn EventProcessor>>, BuildError> {
+    ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         let url = reqwest::Url::parse(endpoints.events_base_url()).map_err(|e| {
             BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
         })?;
@@ -96,7 +96,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
         let events_processor =
             EventProcessorImpl::new(events_configuration).map_err(BuildError::FailedToStart)?;
 
-        Ok(Arc::new(Mutex::new(events_processor)))
+        Ok(Arc::new(events_processor))
     }
 
     fn to_owned(&self) -> Box<dyn EventProcessorFactory> {
@@ -180,8 +180,8 @@ impl EventProcessorFactory for NullEventProcessorBuilder {
         &self,
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
-    ) -> Result<Arc<Mutex<dyn EventProcessor>>, BuildError> {
-        Ok(Arc::new(Mutex::new(NullEventProcessor::new())))
+    ) -> Result<Arc<dyn EventProcessor>, BuildError> {
+        Ok(Arc::new(NullEventProcessor::new()))
     }
 
     fn to_owned(&self) -> Box<dyn EventProcessorFactory> {

@@ -1,5 +1,6 @@
 use super::data_store::{DataStore, InMemoryDataStore};
-use std::sync::{Arc, Mutex};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[non_exhaustive]
@@ -11,7 +12,7 @@ pub enum BuildError {
 
 /// Trait which allows creation of data stores. Should be implemented by data store builder types.
 pub trait DataStoreFactory {
-    fn build(&self) -> Result<Arc<Mutex<dyn DataStore>>, BuildError>;
+    fn build(&self) -> Result<Arc<RwLock<dyn DataStore>>, BuildError>;
     fn to_owned(&self) -> Box<dyn DataStoreFactory>;
 }
 
@@ -28,8 +29,8 @@ impl InMemoryDataStoreBuilder {
 }
 
 impl DataStoreFactory for InMemoryDataStoreBuilder {
-    fn build(&self) -> Result<Arc<Mutex<dyn DataStore>>, BuildError> {
-        Ok(Arc::new(Mutex::new(InMemoryDataStore::new())))
+    fn build(&self) -> Result<Arc<RwLock<dyn DataStore>>, BuildError> {
+        Ok(Arc::new(RwLock::new(InMemoryDataStore::new())))
     }
 
     fn to_owned(&self) -> Box<dyn DataStoreFactory> {

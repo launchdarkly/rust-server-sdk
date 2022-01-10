@@ -1,3 +1,4 @@
+use parking_lot::RwLock;
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
@@ -48,10 +49,10 @@ pub(crate) struct DeleteData {
 /// Trait for the component that obtains feature flag data in some way and passes it to a data
 /// store. The built-in implementations of this are the client's standard streaming or polling
 /// behavior.
-pub trait DataSource: Send {
+pub trait DataSource: Send + Sync {
     fn subscribe(
-        &mut self,
-        data_store: Arc<Mutex<dyn DataStore>>,
+        &self,
+        data_store: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
     );
 }
@@ -84,8 +85,8 @@ impl StreamingDataSource {
 
 impl DataSource for StreamingDataSource {
     fn subscribe(
-        &mut self,
-        data_store: Arc<Mutex<dyn DataStore>>,
+        &self,
+        data_store: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
     ) {
         let mut event_stream = Box::pin(self.es_client.stream());
@@ -107,7 +108,8 @@ impl DataSource for StreamingDataSource {
                     }
                 };
 
-                let mut data_store = data_store.lock().unwrap();
+                let data_store = data_store.clone();
+                let mut data_store = data_store.write();
 
                 debug!("data source got an event: {}", event.event_type);
 
@@ -150,8 +152,8 @@ impl PollingDataSource {
 
 impl DataSource for PollingDataSource {
     fn subscribe(
-        &mut self,
-        data_store: Arc<Mutex<dyn DataStore>>,
+        &self,
+        data_store: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
     ) {
         let notify_init = Once::new();
@@ -180,7 +182,7 @@ impl DataSource for PollingDataSource {
 
                 match feature_requester.get_all() {
                     Ok(all_data) => {
-                        let mut data_store = data_store.lock().unwrap();
+                        let mut data_store = data_store.write();
                         data_store.init(all_data);
                         notify_init.call_once(|| init_complete(true));
                     }
@@ -206,43 +208,28 @@ impl NullDataSource {
 }
 
 impl DataSource for NullDataSource {
-    fn subscribe(&mut self, _: Arc<Mutex<dyn DataStore>>, _: Arc<dyn Fn(bool) + Send + Sync>) {}
+    fn subscribe(&self, _: Arc<RwLock<dyn DataStore>>, _: Arc<dyn Fn(bool) + Send + Sync>) {}
 }
 
 #[cfg(test)]
 pub(crate) struct MockDataSource {
-    data_store: Option<Arc<Mutex<dyn DataStore>>>,
     delay_init: u64,
 }
 
 #[cfg(test)]
 impl MockDataSource {
     pub fn new_with_init_delay(delay_init: u64) -> Self {
-        return MockDataSource {
-            data_store: None,
-            delay_init,
-        };
-    }
-
-    pub fn patch(&self, patch: PatchData) -> Result<()> {
-        self.data_store
-            .as_ref()
-            .expect("not subscribed")
-            .lock()
-            .unwrap()
-            .patch(&patch.path, patch.data)
-            .map_err(Error::InvalidUpdate)
+        return MockDataSource { delay_init };
     }
 }
 
 #[cfg(test)]
 impl DataSource for MockDataSource {
     fn subscribe(
-        &mut self,
-        datastore: Arc<Mutex<dyn DataStore>>,
+        &self,
+        _datastore: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
     ) {
-        self.data_store = Some(datastore);
         let delay_init = self.delay_init;
         if self.delay_init != 0 {
             tokio::spawn(async move {

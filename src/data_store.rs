@@ -94,7 +94,7 @@ impl From<AllData<Flag, Segment>> for AllData<StorageItem<Flag>, StorageItem<Seg
 
 /// Trait for a data store that holds and updates feature flags and related data received by the
 /// SDK.
-pub trait DataStore: Store + Send {
+pub trait DataStore: Store + Send + Sync {
     fn init(&mut self, new_data: AllData<Flag, Segment>);
     fn all_flags(&self) -> HashMap<String, &Flag>;
     fn patch(&mut self, path: &str, data: PatchTarget) -> Result<(), UpdateError>;
