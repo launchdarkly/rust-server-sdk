@@ -123,7 +123,16 @@ impl EventDispatcher {
                         }
                         Ok(EventDispatcherMessage::Close(sender)) => {
                             self.flush_pool.join();
+
+                            // We call drop here to make sure this receiver is completely
+                            // disconnected. This ensures the event processor cannot send another
+                            // message. We could rely on Rust to drop this during the normal course
+                            // of operation, but there is a small chance for a deadlock issue if we
+                            // call EventProcessor::close twice in rapid succession.
+                            drop(inbox_rx);
+
                             let _ = sender.send(());
+
                             return;
                         }
                         Err(e) => {
