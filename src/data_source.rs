@@ -1,10 +1,13 @@
 use parking_lot::RwLock;
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
+use tokio::sync::broadcast;
+use tokio::time;
+use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 
 use eventsource_client as es;
 use eventsource_client::ReconnectOptionsBuilder;
-use futures::TryStreamExt;
+use futures::StreamExt;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use serde::Deserialize;
 
@@ -54,6 +57,7 @@ pub trait DataSource: Send + Sync {
         &self,
         data_store: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+        shutdown_receiver: broadcast::Receiver<()>,
     );
 }
 
@@ -79,6 +83,7 @@ impl StreamingDataSource {
             .header("Authorization", sdk_key)?
             .header("User-Agent", &*crate::USER_AGENT)?
             .build();
+
         Ok(Self { es_client })
     }
 }
@@ -88,46 +93,55 @@ impl DataSource for StreamingDataSource {
         &self,
         data_store: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+        shutdown_receiver: broadcast::Receiver<()>,
     ) {
-        let mut event_stream = Box::pin(self.es_client.stream());
-        let notify_init = Once::new();
+        let mut event_stream = Box::pin(self.es_client.stream()).fuse();
 
         tokio::spawn(async move {
+            let shutdown_stream = BroadcastStream::new(shutdown_receiver);
+            let mut shutdown_future = shutdown_stream.into_future();
+            let notify_init = Once::new();
             let mut init_success = true;
+
             loop {
-                let event = match event_stream.try_next().await {
-                    Ok(Some(event)) => event,
-                    Ok(None) => {
-                        error!("unexpected end of event stream");
-                        break;
-                    }
-                    Err(e) => {
-                        error!("error on event stream: {:?}", e);
-                        // TODO reconnect?
-                        break;
-                    }
+                futures::select! {
+                    _ = shutdown_future => break,
+                    event = event_stream.next() => {
+                        let event = match event {
+                            Some(Ok(event)) => event,
+                            Some(Err(e)) => {
+                                error!("error on event stream: {:?}", e);
+                                // TODO reconnect?
+                                break;
+                            },
+                            None => {
+                                error!("unexpected end of event stream");
+                                break;
+                            }
+                        };
+
+                        let data_store = data_store.clone();
+                        let mut data_store = data_store.write();
+
+                        debug!("data source got an event: {}", event.event_type);
+
+                        let stored = match event.event_type.as_str() {
+                            "put" => process_put(&mut *data_store, event),
+                            "patch" => process_patch(&mut *data_store, event),
+                            "delete" => process_delete(&mut *data_store, event),
+                            _ => Err(Error::InvalidEventType(event.event_type)),
+                        };
+                        if let Err(e) = stored {
+                            init_success = false;
+                            error!("error processing update: {:?}", e);
+                        }
+
+                        // Only want to notify for the first event.
+                        // TODO: When error handling is added this should happen once we are successful,
+                        // or if we have encountered an unrecoverable error.
+                        notify_init.call_once(|| (init_complete)(init_success));
+                    },
                 };
-
-                let data_store = data_store.clone();
-                let mut data_store = data_store.write();
-
-                debug!("data source got an event: {}", event.event_type);
-
-                let stored = match event.event_type.as_str() {
-                    "put" => process_put(&mut *data_store, event),
-                    "patch" => process_patch(&mut *data_store, event),
-                    "delete" => process_delete(&mut *data_store, event),
-                    _ => Err(Error::InvalidEventType(event.event_type)),
-                };
-                if let Err(e) = stored {
-                    init_success = false;
-                    error!("error processing update: {:?}", e);
-                }
-
-                // Only want to notify for the first event.
-                // TODO: When error handling is added this should happen once we are successful,
-                // or if we have encountered an unrecoverable error.
-                notify_init.call_once(|| (init_complete)(init_success));
             }
         });
     }
@@ -155,11 +169,8 @@ impl DataSource for PollingDataSource {
         &self,
         data_store: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+        shutdown_receiver: broadcast::Receiver<()>,
     ) {
-        let notify_init = Once::new();
-
-        let poll_interval = self.poll_interval;
-
         let mut feature_requester = match self.feature_requester_factory.lock() {
             Ok(factory) => match factory.build() {
                 Ok(requester) => requester,
@@ -174,26 +185,35 @@ impl DataSource for PollingDataSource {
             }
         };
 
+        let poll_interval = self.poll_interval;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(poll_interval);
+            let notify_init = Once::new();
+
+            let mut interval = IntervalStream::new(time::interval(poll_interval)).fuse();
+
+            let shutdown_stream = BroadcastStream::new(shutdown_receiver);
+            let mut shutdown_future = shutdown_stream.into_future();
 
             loop {
-                interval.tick().await;
-
-                match feature_requester.get_all() {
-                    Ok(all_data) => {
-                        let mut data_store = data_store.write();
-                        data_store.init(all_data);
-                        notify_init.call_once(|| init_complete(true));
-                    }
-                    Err(FeatureRequesterError::Temporary) => {
-                        notify_init.call_once(|| init_complete(false))
-                    }
-                    Err(FeatureRequesterError::Permanent) => {
-                        notify_init.call_once(|| init_complete(false));
-                        break;
-                    }
-                }
+                futures::select! {
+                    _ = interval.next() => {
+                        match feature_requester.get_all() {
+                            Ok(all_data) => {
+                                let mut data_store = data_store.write();
+                                data_store.init(all_data);
+                                notify_init.call_once(|| init_complete(true));
+                            }
+                            Err(FeatureRequesterError::Temporary) => {
+                                notify_init.call_once(|| init_complete(false))
+                            }
+                            Err(FeatureRequesterError::Permanent) => {
+                                notify_init.call_once(|| init_complete(false));
+                                break;
+                            }
+                        };
+                    },
+                    _ = shutdown_future => break
+                };
             }
         });
     }
@@ -208,7 +228,13 @@ impl NullDataSource {
 }
 
 impl DataSource for NullDataSource {
-    fn subscribe(&self, _: Arc<RwLock<dyn DataStore>>, _: Arc<dyn Fn(bool) + Send + Sync>) {}
+    fn subscribe(
+        &self,
+        _datastore: Arc<RwLock<dyn DataStore>>,
+        _init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+        _shutdown_receiver: broadcast::Receiver<()>,
+    ) {
+    }
 }
 
 #[cfg(test)]
@@ -229,6 +255,7 @@ impl DataSource for MockDataSource {
         &self,
         _datastore: Arc<RwLock<dyn DataStore>>,
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+        _shutdown_receiver: broadcast::Receiver<()>,
     ) {
         let delay_init = self.delay_init;
         if self.delay_init != 0 {

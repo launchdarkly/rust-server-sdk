@@ -62,6 +62,7 @@ fn main() {
             fake_load(&client, user, counter);
 
             cb.send(Box::new(display_done)).unwrap();
+            client.close();
         })
         .full_width();
 

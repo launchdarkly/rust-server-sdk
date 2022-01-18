@@ -90,5 +90,7 @@ fn main() {
             counter.inc();
         }
     }
+
+    client.close();
     counter.finish();
 }

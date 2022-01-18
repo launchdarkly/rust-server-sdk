@@ -1,15 +1,15 @@
-use futures::future;
 use parking_lot::RwLock;
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::{io, thread};
+use tokio::runtime::Runtime;
 
 use launchdarkly_server_sdk_evaluation::{
     self as eval, Detail, FlagValue, PrerequisiteEvent, User,
 };
 use serde::Serialize;
 use thiserror::Error;
-use tokio::sync::Semaphore;
+use tokio::sync::{broadcast, Semaphore};
 
 use super::config::Config;
 use super::data_source::DataSource;
@@ -151,6 +151,8 @@ pub struct Client {
     started: AtomicBool,
     offline: bool,
     sdk_key: String,
+    shutdown_broadcast: broadcast::Sender<()>,
+    runtime: RwLock<Option<Runtime>>,
     // TODO: Once we need the config for diagnostic events, then we should add this.
     // config: Arc<Mutex<Config>>
 }
@@ -188,6 +190,8 @@ impl Client {
             }),
         };
 
+        let (shutdown_tx, _) = broadcast::channel(1);
+
         Ok(Client {
             event_processor,
             data_source,
@@ -199,6 +203,8 @@ impl Client {
             started: AtomicBool::new(false),
             offline: config.offline(),
             sdk_key: config.sdk_key().into(),
+            shutdown_broadcast: shutdown_tx,
+            runtime: RwLock::new(None),
         })
     }
 
@@ -231,6 +237,7 @@ impl Client {
                 );
                 notify.add_permits(1);
             }),
+            self.shutdown_broadcast.subscribe(),
         );
     }
 
@@ -247,14 +254,9 @@ impl Client {
 
         let runtime = tokio::runtime::Runtime::new().map_err(StartError::SpawnFailed)?;
         let _guard = runtime.enter();
+        self.runtime.write().replace(runtime);
 
         self.start_with_default_executor_internal();
-
-        thread::spawn(move || {
-            // this thread takes ownership of runtime and prevents it from being dropped before the
-            // client initialises
-            runtime.block_on(future::pending::<()>())
-        });
 
         Ok(true)
     }
@@ -290,6 +292,14 @@ impl Client {
     /// been sent.
     pub fn close(&self) {
         self.event_processor.close();
+
+        if let Err(e) = self.shutdown_broadcast.send(()) {
+            error!("Failed to shutdown client appropriately: {}", e);
+        }
+
+        // Potentially take the runtime we created when starting the client and do nothing with it
+        // so it drops, closing out all spawned tasks.
+        self.runtime.write().take();
     }
 
     pub fn flush(&self) {
