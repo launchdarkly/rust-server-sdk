@@ -100,7 +100,7 @@ impl FlagDetail {
         let mut flag_state = HashMap::new();
 
         for (key, flag) in store.all_flags() {
-            if config.client_side_only && !flag.client_side_availability.using_environment_id {
+            if config.client_side_only && !flag.using_environment_id() {
                 continue;
             }
 
