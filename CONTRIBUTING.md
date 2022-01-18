@@ -9,3 +9,35 @@ The LaunchDarkly SDK team monitors the [issue tracker](https://github.com/launch
 ## Submitting pull requests
 
 We encourage pull requests and other contributions from the community. Before submitting pull requests, ensure that all temporary or unintended code is removed. Don't worry about adding reviewers to the pull request; the LaunchDarkly SDK team will add themselves. The SDK team will acknowledge all pull requests within two business days.
+
+## Build instructions
+
+This SDK uses the standard `cargo` build system.
+
+### Building
+
+To build the SDK without running any tests:
+
+```sh
+cargo build
+```
+
+To check and report errors without compiling object files, run:
+
+```sh
+cargo check
+```
+
+### Testing
+
+To run all tests (unit, doc, etc), run:
+
+```sh
+cargo test
+```
+
+If you want to only run the much faster unit tests, run:
+
+```sh
+cargo test --lib
+```
