@@ -1,8 +1,20 @@
 [package]
 name = "launchdarkly-server-sdk"
+description = "LaunchDarkly Server-Side SDK"
 version = "0.1.0"
-authors = ["Sam Stokes <sstokes@launchdarkly.com>"]
+authors = ["LaunchDarkly"]
 edition = "2018"
+license = "Apache-2.0"
+homepage = "https://docs.launchdarkly.com/sdk/server-side/rust"
+repository = "https://github.com/launchdarkly/rust-server-sdk-evaluation"
+keywords = ["launchdarkly", "launchdarkly-server-sdk", "feature-flags", "feature-toggles"]
+exclude = [
+    ".circleci",
+    ".github",
+    ".ldrelease",
+    ".pre-commit-config.yaml",
+    "coverage.sh"
+]
 
 [dependencies]
 chrono = "0.4.19"

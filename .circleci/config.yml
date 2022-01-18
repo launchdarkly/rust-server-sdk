@@ -38,9 +38,6 @@ jobs:
           path: target/doc
           destination: doc
 
-
-  # TODO publish crate
-
 workflows:
   version: 2
   build:
