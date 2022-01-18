@@ -17,8 +17,19 @@ pub enum EventProcessorError {
 /// Trait for the component that buffers analytics events and sends them to LaunchDarkly.
 /// This component can be replaced for testing purposes.
 pub trait EventProcessor: Send + Sync {
+    /// Records an InputEvent asynchronously. Depending on the feature flag properties and event
+    /// properties, this may be transmitted to the events service as an individual event, or may
+    /// only be added into summary data.
     fn send(&self, event: InputEvent);
+
+    /// Specifies that any buffered events should be sent as soon as possible, rather than waiting
+    /// for the next flush interval. This method is asynchronous, so events still may not be sent
+    /// until a later time.
     fn flush(&self);
+
+    /// Shuts down all event processor activity, after first ensuring that all events have been
+    /// delivered. Subsequent calls to [EventProcessor::send] or [EventProcessor::flush] will be
+    /// ignored.
     fn close(&self);
 }
 

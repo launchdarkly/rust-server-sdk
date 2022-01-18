@@ -8,9 +8,11 @@ use thiserror::Error;
 #[cfg(test)]
 use super::data_source;
 
+/// Error type used to represent failures when building a DataSource instance.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum BuildError {
+    /// Error used when a configuration setting is invalid. This typically invalids an invalid URL.
     #[error("data source factory failed to build: {0}")]
     InvalidConfig(String),
 }
@@ -52,6 +54,7 @@ pub struct StreamingDataSourceBuilder {
 }
 
 impl StreamingDataSourceBuilder {
+    /// Create a new instance of the [StreamingDataSourceBuilder] with default values.
     pub fn new() -> Self {
         Self {
             initial_reconnect_delay: DEFAULT_INITIAL_RECONNECT_DELAY,
@@ -147,7 +150,30 @@ pub struct PollingDataSourceBuilder {
     feature_requester_factory: Option<Arc<Mutex<Box<dyn FeatureRequesterFactory>>>>,
 }
 
+/// Contains methods for configuring the polling data source.
+///
+/// Polling is not the default behavior; by default, the SDK uses a streaming connection to receive
+/// feature flag data from LaunchDarkly. In polling mode, the SDK instead makes a new HTTP request
+/// to LaunchDarkly at regular intervals. HTTP caching allows it to avoid redundantly downloading
+/// data if there have been no changes, but polling is still less efficient than streaming and
+/// should only be used on the advice of LaunchDarkly support.
+///
+/// To use polling mode, create a builder with [PollingDataSourceBuilder::new], set its properties
+/// with the methods of this class, and pass it to [crate::ConfigBuilder::data_source].
+///
+/// # Examples
+///
+/// Adjust the poll interval.
+/// ```
+/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
+/// # use std::time::Duration;
+/// # fn main() {
+///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::new()
+///         .poll_interval(Duration::from_secs(60)));
+/// # }
+/// ```
 impl PollingDataSourceBuilder {
+    /// Create a new instance of the [PollingDataSourceBuilder] with default values.
     pub fn new() -> Self {
         Self {
             poll_interval: MINIMUM_POLL_INTERVAL,

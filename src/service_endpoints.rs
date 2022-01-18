@@ -72,6 +72,7 @@ pub struct ServiceEndpointsBuilder {
 }
 
 impl ServiceEndpointsBuilder {
+    /// Create a new instance of [ServiceEndpointsBuilder] with no URLs specified.
     pub fn new() -> ServiceEndpointsBuilder {
         ServiceEndpointsBuilder {
             polling_base_url: None,

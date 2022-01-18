@@ -1,3 +1,14 @@
+//! launchdarkly-server-sdk is the main crate for the LaunchDarkly SDK.
+//!
+//! This package contains the types and methods for the SDK client [Client] and its overall
+//! configuration.
+//!
+//! For more information and code examples, see the Rust SDK Reference:
+//! <https://docs.launchdarkly.com/sdk/server-side/rust>
+
+#![deny(rustdoc::missing_crate_level_docs)]
+#![deny(missing_docs)]
+
 #[macro_use]
 extern crate log;
 
@@ -17,7 +28,7 @@ use lazy_static::lazy_static;
 pub use client::Client;
 
 // Re-export
-pub use client::{BuildError, FlushError, StartError};
+pub use client::{BuildError, StartError};
 pub use config::{Config, ConfigBuilder};
 pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,

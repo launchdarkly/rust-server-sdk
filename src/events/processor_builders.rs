@@ -14,12 +14,15 @@ const DEFAULT_EVENT_CAPACITY: usize = 500;
 const DEFAULT_USER_KEY_SIZE: usize = 1000;
 const DEFAULT_USER_KEYS_FLUSH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
+/// Error type used to represent failures when building an [EventProcessor] instance.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum BuildError {
+    /// Error used when a configuration setting is invalid.
     #[error("event processor factory failed to build: {0}")]
     InvalidConfig(String),
 
+    /// Error used when the event processor's thread fails to start
     #[error(transparent)]
     FailedToStart(EventProcessorError),
 }
@@ -105,6 +108,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
 }
 
 impl EventProcessorBuilder {
+    /// Create a new [EventProcessorBuilder] with all default values.
     pub fn new() -> Self {
         Self {
             capacity: DEFAULT_EVENT_CAPACITY,

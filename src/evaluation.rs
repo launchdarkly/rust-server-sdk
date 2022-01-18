@@ -26,6 +26,9 @@ pub struct FlagDetailConfig {
 }
 
 impl FlagDetailConfig {
+    /// Create a [FlagDetailConfig] with default values.
+    ///
+    /// By default, this config will include al flags and will not include reasons.
     pub fn new() -> Self {
         Self {
             client_side_only: false,

@@ -32,7 +32,7 @@ jobs:
           destination: coverage
       - run:
           name: Generate Docs
-          command: cargo doc --no-deps
+          command: RUSTDOCFLAGS="-Dwarnings" cargo doc --no-deps
       - store_artifacts:
           name: Upload Docs
           path: target/doc

@@ -3,9 +3,11 @@ use crate::feature_requester::ReqwestFeatureRequester;
 use reqwest as r;
 use thiserror::Error;
 
+/// Error type used to represent failures when building a [FeatureRequesterFactory] instance.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum BuildError {
+    /// Error used when a configuration setting is invalid.
     #[error("feature requester factory failed to build: {0}")]
     InvalidConfig(String),
 }
@@ -15,6 +17,7 @@ pub enum BuildError {
 /// Feature requesters are used by the polling data source (see [crate::PollingDataSourceBuilder])
 /// to retrieve state information from an external resource such as the LaunchDarkly API.
 pub trait FeatureRequesterFactory: Send {
+    /// Create an instance of FeatureRequester.
     fn build(&self) -> Result<Box<dyn FeatureRequester>, BuildError>;
 }
 

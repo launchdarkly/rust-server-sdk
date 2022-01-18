@@ -48,9 +48,11 @@ impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
     }
 }
 
+/// Error type used to represent failures when building a [Client] instance.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum BuildError {
+    /// Error used when a configuration setting is invalid. This typically invalids an invalid URL.
     #[error("invalid client config: {0}")]
     InvalidConfig(String),
 }
@@ -73,18 +75,13 @@ impl From<EventProcessorError> for BuildError {
     }
 }
 
+/// Error type used to represent failures when starting the [Client].
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum StartError {
+    /// Error used when spawning a background there fails.
     #[error("couldn't spawn background thread for client: {0}")]
     SpawnFailed(io::Error),
-}
-
-#[non_exhaustive]
-#[derive(Debug, Error)]
-pub enum FlushError {
-    #[error("failed to flush events: {0}")]
-    FlushFailed(String),
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -158,6 +155,7 @@ pub struct Client {
 }
 
 impl Client {
+    /// Create a new instance of a [Client] based on the provided [Config] parameter.
     pub fn build(config: Config) -> Result<Self, BuildError> {
         if config.offline() {
             info!("Started LaunchDarkly Client in offline mode");
@@ -302,16 +300,36 @@ impl Client {
         self.runtime.write().take();
     }
 
+    /// Flush tells the client that all pending analytics events (if any) should be delivered as
+    /// soon as possible. Flushing is asynchronous, so this method will return before it is
+    /// complete. However, if you call [Client::close], events are guaranteed to be sent before
+    /// that method returns.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/flush#rust>.
     pub fn flush(&self) {
         self.event_processor.flush();
     }
 
+    /// Identify reports details about a user.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/identify#rust>
     pub fn identify(&self, user: User) {
         if !self.events_default.disabled {
             self.send_internal(self.events_default.event_factory.new_identify(user));
         }
     }
 
+    /// Alias associates two users for analytics purposes.
+    ///
+    /// This can be helpful in the situation where a person is represented by multiple LaunchDarkly
+    /// users. This may happen, for example, when a person initially logs into an application-- the
+    /// person might be represented by an anonymous user prior to logging in and a different user
+    /// after logging in, as denoted by a different user key.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/aliasing-users#rust>.
     pub fn alias(&self, user: User, previous_user: User) {
         if !self.events_default.disabled {
             self.send_internal(
@@ -322,6 +340,13 @@ impl Client {
         }
     }
 
+    /// Returns the value of a boolean feature flag for a given user.
+    ///
+    /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
+    /// off and has no off variation.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn bool_variation(&self, user: &User, flag_key: &str, default: bool) -> bool {
         let val = self.variation(user, flag_key, default);
         if let Some(b) = val.as_bool() {
@@ -335,6 +360,13 @@ impl Client {
         }
     }
 
+    /// Returns the value of a string feature flag for a given user.
+    ///
+    /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
+    /// off and has no off variation.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn str_variation(&self, user: &User, flag_key: &str, default: String) -> String {
         let val = self.variation(user, flag_key, default.clone());
         if let Some(s) = val.as_string() {
@@ -348,6 +380,13 @@ impl Client {
         }
     }
 
+    /// Returns the value of a float feature flag for a given user.
+    ///
+    /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
+    /// off and has no off variation.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn float_variation(&self, user: &User, flag_key: &str, default: f64) -> f64 {
         let val = self.variation(user, flag_key, default);
         if let Some(f) = val.as_float() {
@@ -361,6 +400,13 @@ impl Client {
         }
     }
 
+    /// Returns the value of a integer feature flag for a given user.
+    ///
+    /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
+    /// off and has no off variation.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn int_variation(&self, user: &User, flag_key: &str, default: i64) -> i64 {
         let val = self.variation(user, flag_key, default);
         if let Some(f) = val.as_int() {
@@ -374,6 +420,15 @@ impl Client {
         }
     }
 
+    /// Returns the value of a feature flag for the given user, allowing the value to be
+    /// of any JSON type.
+    ///
+    /// The value is returned as an [serde_json::Value].
+    ///
+    /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned off.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn json_variation(
         &self,
         user: &User,
@@ -385,6 +440,12 @@ impl Client {
             .unwrap_or(default)
     }
 
+    /// This method is the same as [Client::bool_variation], but also returns further information
+    /// about how the value was calculated. The "reason" data will also be included in analytics
+    /// events.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn bool_variation_detail(
         &self,
         user: &User,
@@ -395,6 +456,12 @@ impl Client {
             .try_map(|val| val.as_bool(), eval::Error::Exception)
     }
 
+    /// This method is the same as [Client::str_variation], but also returns further information
+    /// about how the value was calculated. The "reason" data will also be included in analytics
+    /// events.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn str_variation_detail(
         &self,
         user: &User,
@@ -405,16 +472,34 @@ impl Client {
             .try_map(|val| val.as_string(), eval::Error::Exception)
     }
 
+    /// This method is the same as [Client::float_variation], but also returns further information
+    /// about how the value was calculated. The "reason" data will also be included in analytics
+    /// events.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn float_variation_detail(&self, user: &User, flag_key: &str, default: f64) -> Detail<f64> {
         self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_float(), eval::Error::Exception)
     }
 
+    /// This method is the same as [Client::int_variation], but also returns further information
+    /// about how the value was calculated. The "reason" data will also be included in analytics
+    /// events.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn int_variation_detail(&self, user: &User, flag_key: &str, default: i64) -> Detail<i64> {
         self.variation_detail(user, flag_key, default)
             .try_map(|val| val.as_int(), eval::Error::Exception)
     }
 
+    /// This method is the same as [Client::json_variation], but also returns further information
+    /// about how the value was calculated. The "reason" data will also be included in analytics
+    /// events.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn json_variation_detail(
         &self,
         user: &User,
@@ -425,9 +510,10 @@ impl Client {
             .try_map(|val| val.as_json(), eval::Error::Exception)
     }
 
-    /// secure_mode_hash generates the secure mode hash value for a user.
+    /// Generates the secure mode hash value for a user.
     ///
-    /// For more information, see the Reference Guide: https://docs.launchdarkly.com/sdk/features/secure-mode#rust
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/secure-mode#rust>.
     pub fn secure_mode_hash(&self, user: &User) -> String {
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
         let tag = ring::hmac::sign(&key, user.key().as_bytes());
@@ -435,15 +521,16 @@ impl Client {
         data_encoding::HEXLOWER.encode(tag.as_ref())
     }
 
-    /// all_flags_detail returns an object that encapsulates the state of all feature flags for a given user.
-    /// This includes the flag values, and also metadata that can be used on the front end.
+    /// Returns an object that encapsulates the state of all feature flags for a given user. This
+    /// includes the flag values, and also metadata that can be used on the front end.
     ///
-    /// The most common use case for this method is to bootstrap a set of client-side feature flags from a
-    /// back-end service.
+    /// The most common use case for this method is to bootstrap a set of client-side feature flags
+    /// from a back-end service.
     ///
     /// You may pass any configuration of [FlagDetailConfig] to control what data is included.
     ///
-    /// For more information, see the Reference Guide: <https://docs.launchdarkly.com/sdk/features/all-flags#rust>
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/all-flags#rust>
     pub fn all_flags_detail(&self, user: &User, flag_state_config: FlagDetailConfig) -> FlagDetail {
         if self.offline {
             warn!(
@@ -465,6 +552,11 @@ impl Client {
         flag_detail
     }
 
+    /// This method is the same as [Client::variation], but also returns further information about
+    /// how the value was calculated. The "reason" data will also be included in analytics events.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn variation_detail<T: Into<FlagValue> + Clone>(
         &self,
         user: &User,
@@ -474,6 +566,16 @@ impl Client {
         self.variation_internal(user, flag_key, default, &self.events_with_reasons)
     }
 
+    /// This is a generic function which returns the value of a feature flag for a given user.
+    ///
+    /// This method is an alternatively to the type specified methods (e.g.
+    /// [Client::bool_variation], [Client::int_variation], etc.).
+    ///
+    /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
+    /// off and has no off variation.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn variation<T: Into<FlagValue> + Clone>(
         &self,
         user: &User,
@@ -487,10 +589,31 @@ impl Client {
             .unwrap()
     }
 
+    /// Reports that a user has performed an event.
+    ///
+    /// The `key` parameter is defined by the application and will be shown in analytics reports;
+    /// it normally corresponds to the event name of a metric that you have created through the
+    /// LaunchDarkly dashboard. If you want to associate additional data with this event, use
+    /// [Client::track_data] or [Client::track_metric].
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/events#rust>.
     pub fn track_event(&self, user: User, key: impl Into<String>) {
         let _ = self.track(user, key, None, serde_json::Value::Null);
     }
 
+    /// Reports that a user has performed an event, and associates it with custom data.
+    ///
+    /// The `key` parameter is defined by the application and will be shown in analytics reports;
+    /// it normally corresponds to the event name of a metric that you have created through the
+    /// LaunchDarkly dashboard.
+    ///
+    /// `data` parameter is any type that implements [Serialize]. If no such value is needed, use
+    /// [serde_json::Value::Null] (or call [Client::track_event] instead). To send a numeric value
+    /// for experimentation, use [Client::track_metric].
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/events#rust>.
     pub fn track_data(
         &self,
         user: User,
@@ -500,11 +623,21 @@ impl Client {
         self.track(user, key, None, data)
     }
 
+    /// Reports that a user has performed an event, and associates it with a numeric value. This
+    /// value is used by the LaunchDarkly experimentation feature in numeric custom metrics, and
+    /// will also be returned as part of the custom event for Data Export.
+    ///
+    /// The `key` parameter is defined by the application and will be shown in analytics reports;
+    /// it normally corresponds to the event name of a metric that you have created through the
+    /// LaunchDarkly dashboard.
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/events#rust>.
     pub fn track_metric(&self, user: User, key: impl Into<String>, value: f64) {
         let _ = self.track(user, key, Some(value), serde_json::Value::Null);
     }
 
-    pub fn track(
+    fn track(
         &self,
         user: User,
         key: impl Into<String>,

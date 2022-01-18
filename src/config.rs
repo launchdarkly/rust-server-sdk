@@ -20,26 +20,32 @@ pub struct Config {
 }
 
 impl Config {
+    /// Returns the sdk key.
     pub fn sdk_key(&self) -> &str {
         &self.sdk_key
     }
 
+    /// Returns the [ServiceEndpointsBuilder]
     pub fn service_endpoints_builder(&self) -> &ServiceEndpointsBuilder {
         &self.service_endpoints_builder
     }
 
+    /// Returns the DataStoreFactory
     pub fn data_store_builder(&self) -> &(dyn DataStoreFactory) {
         self.data_store_builder.borrow()
     }
 
+    /// Returns the DataSourceFactory
     pub fn data_source_builder(&self) -> &(dyn DataSourceFactory) {
         self.data_source_builder.borrow()
     }
 
+    /// Returns the EventProcessorFactory
     pub fn event_processor_builder(&self) -> &(dyn EventProcessorFactory) {
         self.event_processor_builder.borrow()
     }
 
+    /// Returns the offline status
     pub fn offline(&self) -> bool {
         self.offline
     }
@@ -62,6 +68,7 @@ pub struct ConfigBuilder {
 }
 
 impl ConfigBuilder {
+    /// Create a new instance of the [ConfigBuilder] with the provided `sdk_key`.
     pub fn new(sdk_key: &str) -> Self {
         Self {
             service_endpoints_builder: None,
@@ -94,7 +101,7 @@ impl ConfigBuilder {
     }
 
     /// Set the event processor to use for this client.
-    /// For usage see [crate::event_processor_builders::EventProcessorBuilder]
+    /// For usage see [crate::EventProcessorBuilder]
     ///
     /// If offline mode is enabled, this event processor will be ignored.
     pub fn event_processor(mut self, builder: &dyn EventProcessorFactory) -> Self {
@@ -111,6 +118,7 @@ impl ConfigBuilder {
         self
     }
 
+    /// Create a new instance of [Config] based on the [ConfigBuilder] configuration.
     pub fn build(self) -> Config {
         let service_endpoints_builder = match &self.service_endpoints_builder {
             None => ServiceEndpointsBuilder::new(),
