@@ -20,14 +20,14 @@ exclude = [
 chrono = "0.4.19"
 crossbeam-channel = "0.5.1"
 data-encoding = "2.3.2"
-eventsource-client = "0.6.0"
+eventsource-client = "0.8.1"
 futures = "0.3.12"
 lazy_static = "1.4.0"
 log = "0.4.14"
 lru = { version = "0.5.3", default_features = false }
 reqwest = "0.9.11"
 ring = "0.16.20"
-launchdarkly-server-sdk-evaluation = { git = "https://github.com/launchdarkly/rust-server-sdk-evaluation-private", branch = "master" }
+launchdarkly-server-sdk-evaluation = "1.0.0-beta.1"
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = { version = "1.0.73", features = ["float_roundtrip"] }
 thiserror = "1.0"
