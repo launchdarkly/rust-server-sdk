@@ -3,12 +3,10 @@ extern crate log;
 
 use std::env;
 use std::process::exit;
-use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use ldclient::client::Client;
-use ldclient::users::User;
+use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, User};
 
 use cursive::traits::Boxable;
 use cursive::utils::Counter;
@@ -21,6 +19,7 @@ fn main() {
     let sdk_key = env::var("LAUNCHDARKLY_SDK_KEY").expect("Please set LAUNCHDARKLY_SDK_KEY");
     let stream_url_opt = env::var("LAUNCHDARKLY_STREAM_URL");
     let events_url_opt = env::var("LAUNCHDARKLY_EVENTS_URL");
+    let polling_url_opt = env::var("LAUNCHDARKLY_POLLING_URL");
 
     let flags: Vec<String> = env::args().skip(1).collect();
     if flags.len() != 1 {
@@ -29,16 +28,28 @@ fn main() {
     }
     let user = User::with_key(flags[0].clone()).build();
 
-    let mut client_builder = Client::configure();
-    if let Ok(url) = stream_url_opt {
-        client_builder.stream_base_url(&url);
+    let mut config_builder = ConfigBuilder::new(&sdk_key);
+    match (stream_url_opt, events_url_opt, polling_url_opt) {
+        (Ok(stream_url_opt), Ok(events_url_opt), Ok(polling_url_opt)) => {
+            config_builder = config_builder.service_endpoints(
+                ServiceEndpointsBuilder::new()
+                    .polling_base_url(&polling_url_opt)
+                    .events_base_url(&events_url_opt)
+                    .streaming_base_url(&stream_url_opt),
+            );
+        }
+        // If none of them are set, then that is fine and we default.
+        (Err(_), Err(_), Err(_)) => {}
+        _ => {
+            error!(
+                "Please specify all URLs LAUNCHDARKLY_STREAM_URL,\
+             LAUNCHDARKLY_EVENTS_URL, and LAUNCHDARKLY_POLLING_URL"
+            );
+        }
     }
-    if let Ok(url) = events_url_opt {
-        client_builder.events_base_url(&url);
-    }
-    let client = client_builder
-        .start(&sdk_key)
-        .expect("failed to start client");
+
+    let client = Client::build(config_builder.build()).expect("failed to build client");
+    client.start_with_runtime().expect("failed to start");
 
     let mut cursive = Cursive::default();
 
@@ -48,9 +59,10 @@ fn main() {
 
     let progress = ProgressBar::new()
         .with_task(move |counter| {
-            fake_load(client, user, counter);
+            fake_load(&client, user, counter);
 
             cb.send(Box::new(display_done)).unwrap();
+            client.close();
         })
         .full_width();
 
@@ -60,23 +72,21 @@ fn main() {
     cursive.run();
 }
 
-fn fake_load(ld: Arc<RwLock<Client>>, mut user: User, counter: Counter) {
-    let ld = ld.read().unwrap();
-
+fn fake_load(client: &Client, mut user: User, counter: Counter) {
     while counter.get() < 20 {
         thread::sleep(Duration::from_millis(20));
         counter.tick(1);
     }
 
     while counter.get() < 100 {
-        user.attribute("progress", counter.get() as i64);
+        user.attribute("progress", counter.get() as i64).unwrap();
 
-        let millis = ld.int_variation_detail(&user, "progress-delay", 100);
-        thread::sleep(Duration::from_millis(millis.value.unwrap() as u64));
+        let millis = client.int_variation(&user, "progress-delay", 100);
+        thread::sleep(Duration::from_millis(millis as u64));
 
-        let increase = ld.bool_variation_detail(&user, "make-progress", false);
+        let increase = client.bool_variation(&user, "make-progress", false);
 
-        if increase.value.unwrap() {
+        if increase {
             counter.tick(1);
         }
     }
