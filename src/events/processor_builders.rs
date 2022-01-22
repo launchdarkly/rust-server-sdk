@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 
-const DEFAULT_FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const DEFAULT_FLUSH_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_EVENT_CAPACITY: usize = 500;
 const DEFAULT_USER_KEY_SIZE: usize = 1000;
 const DEFAULT_USER_KEYS_FLUSH_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -74,7 +74,8 @@ impl EventProcessorFactory for EventProcessorBuilder {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
-        let url = reqwest::Url::parse(endpoints.events_base_url()).map_err(|e| {
+        let url = format!("{}/bulk", endpoints.events_base_url());
+        let url = reqwest::Url::parse(&url).map_err(|e| {
             BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
         })?;
 
@@ -176,6 +177,8 @@ impl Default for EventProcessorBuilder {
     }
 }
 
+/// An implementation of EventProcessorFactory that will discard all events received. This should
+/// only be used for unit tests.
 #[derive(Clone)]
 pub struct NullEventProcessorBuilder {}
 
@@ -194,6 +197,7 @@ impl EventProcessorFactory for NullEventProcessorBuilder {
 }
 
 impl NullEventProcessorBuilder {
+    /// Create a new [NullEventProcessorBuilder] with all default values.
     pub fn new() -> Self {
         Self {}
     }

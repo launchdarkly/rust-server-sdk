@@ -33,7 +33,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Deserialize)]
 pub(crate) struct PutData {
+    #[serde(default = "String::default")]
     path: String,
+
     data: AllData<Flag, Segment>,
 }
 
@@ -285,7 +287,7 @@ fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
 
 fn process_put(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let put: PutData = parse_event_data(&event)?;
-    if put.path == "/" {
+    if put.path == "/" || put.path.is_empty() {
         data_store.init(put.data);
         Ok(())
     } else {

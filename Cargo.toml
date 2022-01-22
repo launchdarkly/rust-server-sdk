@@ -1,7 +1,7 @@
 [package]
 name = "launchdarkly-server-sdk"
 description = "LaunchDarkly Server-Side SDK"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 authors = ["LaunchDarkly"]
 edition = "2018"
 license = "Apache-2.0"
@@ -27,7 +27,7 @@ log = "0.4.14"
 lru = { version = "0.5.3", default_features = false }
 reqwest = "0.9.11"
 ring = "0.16.20"
-launchdarkly-server-sdk-evaluation = "1.0.0-beta.1"
+launchdarkly-server-sdk-evaluation = { version = "1.0.0-beta.2" }
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = { version = "1.0.73", features = ["float_roundtrip"] }
 thiserror = "1.0"

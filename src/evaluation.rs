@@ -58,11 +58,10 @@ impl FlagDetailConfig {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FlagState {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<u64>,
+    version: u64,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     variation: Option<usize>,
@@ -73,16 +72,24 @@ pub struct FlagState {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     track_events: bool,
 
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    track_reason: bool,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     debug_events_until_date: Option<u64>,
 }
 
-#[derive(Serialize)]
+/// FlagDetail is a snapshot of the state of multiple feature flags with regard to a specific user.
+/// This is the return type of [crate::Client::all_flags_detail].
+///
+/// Serializing this object to JSON will produce the appropriate data structure for bootstrapping
+/// the LaunchDarkly JavaScript client.
+#[derive(Serialize, Clone, Debug)]
 pub struct FlagDetail {
     #[serde(flatten)]
     evaluations: HashMap<String, Option<FlagValue>>,
 
-    #[serde(rename = "$flagState")]
+    #[serde(rename = "$flagsState")]
     flag_state: HashMap<String, FlagState>,
 
     #[serde(rename = "$valid")]
@@ -90,6 +97,7 @@ pub struct FlagDetail {
 }
 
 impl FlagDetail {
+    /// Create a new empty instance of FlagDetail.
     pub fn new(valid: bool) -> Self {
         Self {
             evaluations: HashMap::new(),
@@ -98,6 +106,8 @@ impl FlagDetail {
         }
     }
 
+    /// Populate the FlagDetail struct with the results of every flag found within the provided
+    /// store, evaluated for the specified user.
     pub fn populate(&mut self, store: &dyn DataStore, user: &User, config: FlagDetailConfig) {
         let mut evaluations = HashMap::new();
         let mut flag_state = HashMap::new();
@@ -109,7 +119,15 @@ impl FlagDetail {
 
             let detail = evaluate(&*store.to_store(), flag, user, None);
 
-            let with_details = match !config.details_only_for_tracked_flags || flag.track_events {
+            // Here we are applying the same logic used in EventFactory.new_feature_request_event
+            // to determine whether the evaluation involved an experiment, in which case both
+            // track_events and track_reason should be overridden.
+            let require_experiment_data = flag.is_experimentation_enabled(&detail.reason);
+
+            let with_details = match !config.details_only_for_tracked_flags
+                || flag.track_events
+                || require_experiment_data
+            {
                 true => true,
                 false => match flag.debug_events_until_date {
                     Some(time) => {
@@ -129,20 +147,16 @@ impl FlagDetail {
                 false => None,
             };
 
-            let version = match with_details {
-                true => Some(flag.version),
-                false => None,
-            };
-
             evaluations.insert(key.clone(), detail.value.cloned());
 
             flag_state.insert(
                 key,
                 FlagState {
-                    version,
+                    version: flag.version,
                     variation: detail.variation_index,
                     reason,
-                    track_events: flag.track_events,
+                    track_events: flag.track_events || require_experiment_data,
+                    track_reason: require_experiment_data,
                     debug_events_until_date: flag.debug_events_until_date,
                 },
             );
@@ -177,10 +191,45 @@ mod tests {
 
         let expected = json!({
             "myFlag": true,
-            "$flagState": {
+            "$flagsState": {
                 "myFlag": {
                     "version": 42,
                     "variation": 1
+                }
+            },
+            "$valid": true
+        });
+
+        assert_eq!(
+            serde_json::to_string_pretty(&flag_detail).unwrap(),
+            serde_json::to_string_pretty(&expected).unwrap(),
+        );
+    }
+
+    #[test]
+    fn flag_detail_handles_experimentation_reasons_correctly() {
+        let user = User::with_key("bob").build();
+        let mut store = InMemoryDataStore::new();
+
+        let mut flag = basic_flag("myFlag");
+        flag.track_events = false;
+        flag.track_events_fallthrough = true;
+
+        store
+            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+        flag_detail.populate(&store, &user, FlagDetailConfig::new());
+
+        let expected = json!({
+            "myFlag": true,
+            "$flagsState": {
+                "myFlag": {
+                    "version": 42,
+                    "variation": 1,
+                    "trackEvents": true,
+                    "trackReason": true,
                 }
             },
             "$valid": true
@@ -209,7 +258,7 @@ mod tests {
 
         let expected = json!({
             "myFlag": true,
-            "$flagState": {
+            "$flagsState": {
                 "myFlag": {
                     "version": 42,
                     "variation": 1,
@@ -228,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_detail_details_only_should_exclude_version_and_reason() {
+    fn flag_detail_details_only_should_exclude_reason() {
         let user = User::with_key("bob").build();
         let mut store = InMemoryDataStore::new();
 
@@ -244,8 +293,9 @@ mod tests {
 
         let expected = json!({
             "myFlag": true,
-            "$flagState": {
+            "$flagsState": {
                 "myFlag": {
+                    "version": 42,
                     "variation": 1,
                 }
             },
@@ -277,7 +327,7 @@ mod tests {
 
         let expected = json!({
             "myFlag": true,
-            "$flagState": {
+            "$flagsState": {
                 "myFlag": {
                     "version": 42,
                     "variation": 1,
@@ -309,7 +359,7 @@ mod tests {
 
         let expected = json!({
             "myFlag": true,
-            "$flagState": {
+            "$flagsState": {
                 "myFlag": {
                     "version": 42,
                     "variation": 1,

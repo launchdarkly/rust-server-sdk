@@ -26,9 +26,6 @@ pub struct ReqwestEventSender {
 
 impl ReqwestEventSender {
     pub fn new(http: r::Client, url: r::Url, sdk_key: &str) -> Self {
-        let mut url = url;
-        url.set_path("/bulk");
-
         Self {
             http,
             url,
@@ -244,8 +241,8 @@ mod tests {
         let http = r::Client::builder()
             .build()
             .expect("Failed building the client");
-        let url = reqwest::Url::parse(&mockito::server_url())
-            .expect("Failed parsing the mock server url");
+        let url = format!("{}/bulk", &mockito::server_url());
+        let url = reqwest::Url::parse(&url).expect("Failed parsing the mock server url");
 
         ReqwestEventSender::new(http, url, "sdk-key")
     }

@@ -316,9 +316,16 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/identify#rust>
     pub fn identify(&self, user: User) {
-        if !self.events_default.disabled {
-            self.send_internal(self.events_default.event_factory.new_identify(user));
+        if self.events_default.disabled {
+            return;
         }
+
+        if user.key().is_empty() {
+            warn!("identify called with empty user key!");
+            return;
+        }
+
+        self.send_internal(self.events_default.event_factory.new_identify(user));
     }
 
     /// Alias associates two users for analytics purposes.
@@ -452,8 +459,11 @@ impl Client {
         flag_key: &str,
         default: bool,
     ) -> Detail<bool> {
-        self.variation_detail(user, flag_key, default)
-            .try_map(|val| val.as_bool(), eval::Error::Exception)
+        self.variation_detail(user, flag_key, default).try_map(
+            |val| val.as_bool(),
+            default,
+            eval::Error::WrongType,
+        )
     }
 
     /// This method is the same as [Client::str_variation], but also returns further information
@@ -468,8 +478,8 @@ impl Client {
         flag_key: &str,
         default: String,
     ) -> Detail<String> {
-        self.variation_detail(user, flag_key, default)
-            .try_map(|val| val.as_string(), eval::Error::Exception)
+        self.variation_detail(user, flag_key, default.clone())
+            .try_map(|val| val.as_string(), default, eval::Error::WrongType)
     }
 
     /// This method is the same as [Client::float_variation], but also returns further information
@@ -479,8 +489,11 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn float_variation_detail(&self, user: &User, flag_key: &str, default: f64) -> Detail<f64> {
-        self.variation_detail(user, flag_key, default)
-            .try_map(|val| val.as_float(), eval::Error::Exception)
+        self.variation_detail(user, flag_key, default).try_map(
+            |val| val.as_float(),
+            default,
+            eval::Error::WrongType,
+        )
     }
 
     /// This method is the same as [Client::int_variation], but also returns further information
@@ -490,8 +503,11 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn int_variation_detail(&self, user: &User, flag_key: &str, default: i64) -> Detail<i64> {
-        self.variation_detail(user, flag_key, default)
-            .try_map(|val| val.as_int(), eval::Error::Exception)
+        self.variation_detail(user, flag_key, default).try_map(
+            |val| val.as_int(),
+            default,
+            eval::Error::WrongType,
+        )
     }
 
     /// This method is the same as [Client::json_variation], but also returns further information
@@ -506,8 +522,8 @@ impl Client {
         flag_key: &str,
         default: serde_json::Value,
     ) -> Detail<serde_json::Value> {
-        self.variation_detail(user, flag_key, default)
-            .try_map(|val| val.as_json(), eval::Error::Exception)
+        self.variation_detail(user, flag_key, default.clone())
+            .try_map(|val| val.as_json(), default, eval::Error::WrongType)
     }
 
     /// Generates the secure mode hash value for a user.
@@ -633,8 +649,14 @@ impl Client {
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/events#rust>.
-    pub fn track_metric(&self, user: User, key: impl Into<String>, value: f64) {
-        let _ = self.track(user, key, Some(value), serde_json::Value::Null);
+    pub fn track_metric(
+        &self,
+        user: User,
+        key: impl Into<String>,
+        value: f64,
+        data: impl Serialize,
+    ) {
+        let _ = self.track(user, key, Some(value), data);
     }
 
     fn track(
@@ -697,7 +719,7 @@ impl Client {
 
         if !events_scope.disabled {
             let event = match &flag {
-                Some(f) => self.events_default.event_factory.new_eval_event(
+                Some(f) => events_scope.event_factory.new_eval_event(
                     flag_key,
                     user.clone(),
                     f,
@@ -705,7 +727,7 @@ impl Client {
                     default.into(),
                     None,
                 ),
-                None => self.events_default.event_factory.new_unknown_flag_event(
+                None => events_scope.event_factory.new_unknown_flag_event(
                     flag_key,
                     user.clone(),
                     result.clone(),
@@ -1289,7 +1311,12 @@ mod tests {
             "event-with-struct",
             MyCustomData { answer: 42 },
         )?;
-        client.track_metric(user.clone(), "event-with-metric", 42.0);
+        client.track_metric(
+            user.clone(),
+            "event-with-metric",
+            42.0,
+            serde_json::Value::Null,
+        );
 
         client.flush();
         client.close();
@@ -1326,7 +1353,12 @@ mod tests {
             "event-with-struct",
             MyCustomData { answer: 42 },
         )?;
-        client.track_metric(user.clone(), "event-with-metric", 42.0);
+        client.track_metric(
+            user.clone(),
+            "event-with-metric",
+            42.0,
+            serde_json::Value::Null,
+        );
 
         client.flush();
         client.close();

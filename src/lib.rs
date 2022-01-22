@@ -33,10 +33,10 @@ pub use config::{Config, ConfigBuilder};
 pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
 };
-pub use evaluation::FlagDetailConfig;
+pub use evaluation::{FlagDetail, FlagDetailConfig};
 pub use events::processor::EventProcessor;
 pub use events::processor_builders::{
-    BuildError as EventProcessorBuildError, EventProcessorBuilder,
+    BuildError as EventProcessorBuildError, EventProcessorBuilder, NullEventProcessorBuilder,
 };
 pub use feature_requester_builders::{
     BuildError as FeatureRequestBuilderError, FeatureRequesterFactory,
