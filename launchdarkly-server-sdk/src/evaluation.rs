@@ -61,7 +61,8 @@ impl FlagDetailConfig {
 #[derive(Serialize, Default, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FlagState {
-    version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     variation: Option<usize>,
@@ -123,40 +124,52 @@ impl FlagDetail {
             // to determine whether the evaluation involved an experiment, in which case both
             // track_events and track_reason should be overridden.
             let require_experiment_data = flag.is_experimentation_enabled(&detail.reason);
+            let track_events = flag.track_events || require_experiment_data;
+            let track_reason = require_experiment_data;
 
-            let with_details = match !config.details_only_for_tracked_flags
-                || flag.track_events
-                || require_experiment_data
+            let currently_debugging = match flag.debug_events_until_date {
+                Some(time) => {
+                    let today = SystemTime::now();
+                    let today_millis = today
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+                    (time as u128) > today_millis
+                }
+                None => false,
+            };
+
+            let mut omit_details = false;
+            if config.details_only_for_tracked_flags
+                && !(track_events
+                    || track_reason
+                    || flag.debug_events_until_date.is_some() && currently_debugging)
             {
-                true => true,
-                false => match flag.debug_events_until_date {
-                    Some(time) => {
-                        let today = SystemTime::now();
-                        let today_millis = today
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis();
-                        (time as u128) > today_millis
-                    }
-                    None => false,
-                },
+                omit_details = true;
+            }
+
+            let mut reason = if !config.with_reasons && !track_reason {
+                None
+            } else {
+                Some(detail.reason)
             };
 
-            let reason = match config.with_reasons && with_details {
-                true => Some(detail.reason),
-                false => None,
-            };
+            let mut version = Some(flag.version);
+            if omit_details {
+                reason = None;
+                version = None;
+            }
 
             evaluations.insert(key.clone(), detail.value.cloned());
 
             flag_state.insert(
                 key,
                 FlagState {
-                    version: flag.version,
+                    version,
                     variation: detail.variation_index,
                     reason,
-                    track_events: flag.track_events || require_experiment_data,
-                    track_reason: require_experiment_data,
+                    track_events,
+                    track_reason,
                     debug_events_until_date: flag.debug_events_until_date,
                 },
             );
@@ -228,6 +241,9 @@ mod tests {
                 "myFlag": {
                     "version": 42,
                     "variation": 1,
+                    "reason": {
+                        "kind": "FALLTHROUGH",
+                    },
                     "trackEvents": true,
                     "trackReason": true,
                 }
@@ -295,7 +311,6 @@ mod tests {
             "myFlag": true,
             "$flagsState": {
                 "myFlag": {
-                    "version": 42,
                     "variation": 1,
                 }
             },

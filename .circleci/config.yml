@@ -38,6 +38,18 @@ jobs:
           path: target/doc
           destination: doc
 
+      - run:
+          name: make test output directory
+          command: mkdir /tmp/test-results
+      - run: make build-contract-tests
+      - run:
+          command: TEST_HARNESS_PARAMS="-junit /tmp/test-results/contract-tests-junit.xml" make start-contract-test-service
+          background: true
+      - run: make run-contract-tests
+
+      - store_test_results:
+          path: /tmp/test-results/
+
 workflows:
   version: 2
   build:

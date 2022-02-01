@@ -1,50 +1,6 @@
-[package]
-name = "launchdarkly-server-sdk"
-description = "LaunchDarkly Server-Side SDK"
-version = "1.0.0-beta.1"
-authors = ["LaunchDarkly"]
-edition = "2018"
-license = "Apache-2.0"
-homepage = "https://docs.launchdarkly.com/sdk/server-side/rust"
-repository = "https://github.com/launchdarkly/rust-server-sdk-evaluation"
-keywords = ["launchdarkly", "launchdarkly-sdk", "feature-flags", "feature-toggles"]
-exclude = [
-    ".circleci",
-    ".github",
-    ".ldrelease",
-    ".pre-commit-config.yaml",
-    "coverage.sh"
+[workspace]
+
+members = [
+    "contract-tests",
+    "launchdarkly-server-sdk"
 ]
-
-[dependencies]
-chrono = "0.4.19"
-crossbeam-channel = "0.5.1"
-data-encoding = "2.3.2"
-eventsource-client = "0.8.1"
-futures = "0.3.12"
-lazy_static = "1.4.0"
-log = "0.4.14"
-lru = { version = "0.5.3", default_features = false }
-reqwest = "0.9.11"
-ring = "0.16.20"
-launchdarkly-server-sdk-evaluation = { version = "1.0.0-beta.2" }
-serde = { version = "1.0.132", features = ["derive"] }
-serde_json = { version = "1.0.73", features = ["float_roundtrip"] }
-thiserror = "1.0"
-tokio = { version = "1.2.0", features = ["rt-multi-thread"] }
-threadpool = "1.8.1"
-parking_lot = "0.11.2"
-tokio-stream = { version = "0.1.8", features = ["sync"] }
-
-[dev-dependencies]
-maplit = "1.0.1"
-env_logger = "0.7.1"
-serde_json = { version = "1.0.73", features = ["preserve_order"] } # for deterministic JSON testing
-spectral = "0.6.0"
-cursive = "0.11"
-tokio = { version = "1.2.0", features = ["macros", "time"] }
-test-case = "1.2.0"
-mockito = "0.30.0"
-
-[build-dependencies]
-built = "0.4"

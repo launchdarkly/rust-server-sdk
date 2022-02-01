@@ -237,6 +237,7 @@ impl EventDispatcher {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(super) enum EventDispatcherMessage {
     EventMessage(InputEvent),
     Flush,

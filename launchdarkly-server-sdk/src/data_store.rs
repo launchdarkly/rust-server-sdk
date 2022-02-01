@@ -42,13 +42,13 @@ impl From<Flag> for StorageItem<Flag> {
 }
 
 impl StorageItem<Flag> {
-    pub fn is_newer_than(&self, version: u64) -> bool {
+    pub fn is_greater_than_or_equal(&self, version: u64) -> bool {
         let self_version = match self {
             Self::Item(f) => f.version,
             Self::Tombstone(version) => *version,
         };
 
-        self_version > version
+        self_version >= version
     }
 }
 
@@ -59,13 +59,13 @@ impl From<Segment> for StorageItem<Segment> {
 }
 
 impl StorageItem<Segment> {
-    pub fn is_newer_than(&self, version: u64) -> bool {
+    pub fn is_greater_than_or_equal(&self, version: u64) -> bool {
         let self_version = match self {
             Self::Item(s) => s.version,
             Self::Tombstone(version) => *version,
         };
 
-        self_version > version
+        self_version >= version
     }
 }
 
@@ -129,7 +129,7 @@ impl InMemoryDataStore {
         }?;
 
         match self.data.flags.get(flag_key) {
-            Some(item) if item.is_newer_than(flag.version) => None,
+            Some(item) if item.is_greater_than_or_equal(flag.version) => None,
             _ => self.data.flags.insert(flag_key.to_string(), flag.into()),
         };
 
@@ -147,7 +147,7 @@ impl InMemoryDataStore {
         }?;
 
         match self.data.segments.get(segment_key) {
-            Some(item) if item.is_newer_than(segment.version) => None,
+            Some(item) if item.is_greater_than_or_equal(segment.version) => None,
             _ => self
                 .data
                 .segments
@@ -159,7 +159,7 @@ impl InMemoryDataStore {
 
     fn delete_flag(&mut self, flag_key: &str, version: u64) {
         match self.data.flags.get(flag_key) {
-            Some(item) if item.is_newer_than(version) => None,
+            Some(item) if item.is_greater_than_or_equal(version) => None,
             _ => self
                 .data
                 .flags
@@ -169,7 +169,7 @@ impl InMemoryDataStore {
 
     fn delete_segment(&mut self, segment_key: &str, version: u64) {
         match self.data.segments.get(segment_key) {
-            Some(item) if item.is_newer_than(version) => None,
+            Some(item) if item.is_greater_than_or_equal(version) => None,
             _ => self
                 .data
                 .segments
@@ -297,7 +297,9 @@ mod tests {
         );
 
         // Verify that patch can update
-        let patch_target = PatchTarget::Flag(basic_flag("new-key"));
+        let mut flag = basic_flag("new-key");
+        flag.version = 43;
+        let patch_target = PatchTarget::Flag(flag);
         let result = data_store.patch("/flags/flag-key".into(), patch_target);
         assert!(result.is_ok());
         assert_eq!(data_store.flag("flag-key").unwrap().key, "new-key");
@@ -309,6 +311,7 @@ mod tests {
         data_store.init(basic_data());
 
         let mut flag = data_store.flag("flag-key").unwrap().clone();
+        flag.version = flag.version + 1;
 
         assert!(data_store.delete("/flags/flag-key", flag.version).is_ok());
         assert!(data_store.flag("flag-key").is_none());
@@ -383,6 +386,7 @@ mod tests {
         data_store.init(basic_data());
 
         let mut segment = data_store.segment("segment-key").unwrap().clone();
+        segment.version = segment.version + 1;
 
         assert!(data_store
             .delete("/segments/segment-key", segment.version)
@@ -450,7 +454,7 @@ mod tests {
         assert!(data_store.flag("flag-key").is_some());
 
         assert!(data_store.delete("/flags/flag-key", 42).is_ok());
-        assert!(data_store.flag("flag-key").is_none());
+        assert!(data_store.flag("flag-key").is_some());
 
         data_store.init(basic_data());
 
@@ -468,7 +472,7 @@ mod tests {
         assert!(data_store.segment("segment-key").is_some());
 
         assert!(data_store.delete("/segments/segment-key", 1).is_ok());
-        assert!(data_store.segment("segment-key").is_none());
+        assert!(data_store.segment("segment-key").is_some());
 
         data_store.init(basic_data());
 
