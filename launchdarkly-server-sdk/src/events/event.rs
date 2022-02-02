@@ -145,6 +145,7 @@ impl IdentifyEvent {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AliasEvent {
+    pub creation_date: u64,
     key: String,
     context_kind: ContextKind,
     previous_key: String,
@@ -345,6 +346,7 @@ impl EventFactory {
 
     pub fn new_alias(&self, user: User, previous_user: User) -> InputEvent {
         InputEvent::Alias(AliasEvent {
+            creation_date: Self::now(),
             key: user.key().to_string(),
             context_kind: user.into(),
             previous_key: previous_user.key().to_string(),
@@ -802,10 +804,12 @@ mod tests {
         let event_factory = EventFactory::new(true);
         let alias = event_factory.new_alias(user, previous_user);
 
-        if let InputEvent::Alias(alias) = alias {
+        if let InputEvent::Alias(mut alias) = alias {
+            alias.creation_date = 1234;
             let output_event = OutputEvent::Alias(alias);
             let event_json = r#"{
   "kind": "alias",
+  "creationDate": 1234,
   "key": "alice",
   "contextKind": "anonymousUser",
   "previousKey": "bob",

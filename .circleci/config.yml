@@ -43,9 +43,11 @@ jobs:
           command: mkdir /tmp/test-results
       - run: make build-contract-tests
       - run:
-          command: TEST_HARNESS_PARAMS="-junit /tmp/test-results/contract-tests-junit.xml" make start-contract-test-service
+          command: make start-contract-test-service
           background: true
-      - run: make run-contract-tests
+      - run:
+          name: run contract tests
+          command: TEST_HARNESS_PARAMS="-junit /tmp/test-results/contract-tests-junit.xml" make run-contract-tests
 
       - store_test_results:
           path: /tmp/test-results/

@@ -134,7 +134,7 @@ mod tests {
         event_processor.close();
     }
 
-    #[test_case(true, false, vec!["summary"])]
+    #[test_case(true, false, vec!["index", "summary"])]
     #[test_case(false, false, vec!["index", "summary"])]
     #[test_case(true, true, vec!["feature", "summary"])]
     #[test_case(false, true, vec!["index", "feature", "summary"])]
@@ -301,8 +301,8 @@ mod tests {
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
 
-        // detail_track_rule -> feature, detail_fallthrough -> feature, 1 summary
-        assert_that!(&events).has_length(1 + 1 + 1);
+        // detail_track_rule -> feature + index, detail_fallthrough -> feature, 1 summary
+        assert_that!(&events).has_length(2 + 1 + 1);
 
         asserting!("emits feature events for rules that have track events enabled")
             .that(
@@ -312,6 +312,10 @@ mod tests {
                     .count(),
             )
             .is_equal_to(2);
+
+        asserting!("emits index event")
+            .that(&events)
+            .matching_contains(|event| event.kind() == "index");
 
         asserting!("emits summary event")
             .that(&events)
