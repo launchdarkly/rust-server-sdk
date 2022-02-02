@@ -52,8 +52,27 @@ jobs:
       - store_test_results:
           path: /tmp/test-results/
 
+  build-with-musl:
+    docker:
+      - image: cimg/rust:1.56.1
+    resource_class: medium+
+    steps:
+      - checkout
+
+      - run:
+          name: Install musl tools
+          command: |
+            sudo apt-get update && sudo apt-get install -y musl-tools
+            rustup target add x86_64-unknown-linux-musl
+
+      - run:
+          name: Build
+          command: |
+            TARGET_CC=musl-gcc RUSTFLAGS="-C linker=musl-gcc" cargo build --release --target=x86_64-unknown-linux-musl
+
 workflows:
   version: 2
   build:
     jobs:
       - build
+      - build-with-musl
