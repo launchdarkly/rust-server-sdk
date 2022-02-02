@@ -19,13 +19,13 @@ This SDK uses the standard `cargo` build system.
 To build the SDK without running any tests:
 
 ```sh
-cargo build
+cargo build -p launchdarkly-server-sdk
 ```
 
 To check and report errors without compiling object files, run:
 
 ```sh
-cargo check
+cargo check -p launchdarkly-server-sdk
 ```
 
 ### Testing
@@ -39,5 +39,5 @@ cargo test
 If you want to only run the much faster unit tests, run:
 
 ```sh
-cargo test --lib
+cargo test -p launchdarkly-server-sdk --lib
 ```

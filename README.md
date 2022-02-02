@@ -1,6 +1,6 @@
 # LaunchDarkly Server-Side SDK for Rust
 
-[![CircleCI](https://circleci.com/gh/launchdarkly/rust-server-sdk.svg?style=svg)](https://circleci.com/gh/launchdarkly/rust-server-sdk)
+[![CircleCI](https://circleci.com/gh/launchdarkly/rust-server-sdk/tree/master.svg?style=svg)](https://circleci.com/gh/launchdarkly/rust-server-sdk/tree/master)
 
 The LaunchDarkly Server-Side SDK for Rust is designed primarily for use in multi-user systems such as web servers and applications. It follows the server-side LaunchDarkly model for multi-user contexts. It is not intended for use in desktop and embedded systems applications.
 

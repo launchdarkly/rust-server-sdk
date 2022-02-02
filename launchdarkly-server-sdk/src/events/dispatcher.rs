@@ -168,9 +168,10 @@ impl EventDispatcher {
             InputEvent::FeatureRequest(fre) => {
                 self.outbox.add_to_summary(&fre);
 
-                if self.notice_user(&fre.base.user)
-                    && !self.events_configuration.inline_users_in_events
-                {
+                let first_time_seeing_user = self.notice_user(&fre.base.user);
+                let will_send_full_user_details_in_event =
+                    fre.track_events && self.events_configuration.inline_users_in_events;
+                if !will_send_full_user_details_in_event && first_time_seeing_user {
                     self.outbox
                         .add_event(OutputEvent::Index(fre.to_index_event()));
                 }
@@ -237,6 +238,7 @@ impl EventDispatcher {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(super) enum EventDispatcherMessage {
     EventMessage(InputEvent),
     Flush,
@@ -332,9 +334,9 @@ mod tests {
         assert_eq!(1, dispatcher.outbox.summary.features.len());
     }
 
-    #[test_case(0, 64_060_606_800_000, vec!["debug", "summary"])]
-    #[test_case(64_060_606_800_000, 64_060_606_800_000, vec!["summary"])]
-    #[test_case(64_060_606_800_001, 64_060_606_800_000, vec!["summary"])]
+    #[test_case(0, 64_060_606_800_000, vec!["debug", "index", "summary"])]
+    #[test_case(64_060_606_800_000, 64_060_606_800_000, vec!["index", "summary"])]
+    #[test_case(64_060_606_800_001, 64_060_606_800_000, vec!["index", "summary"])]
     fn sending_feature_event_emits_debug_event_correctly(
         last_known_time: u128,
         debug_events_until_date: u64,
