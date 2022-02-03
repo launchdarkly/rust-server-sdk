@@ -1,6 +1,7 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, ReqwestFeatureRequesterBuilder};
+use eventsource_client::HttpsConnector;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -51,6 +52,7 @@ pub trait DataSourceFactory {
 #[derive(Clone)]
 pub struct StreamingDataSourceBuilder {
     initial_reconnect_delay: Duration,
+    connector: Option<HttpsConnector>,
 }
 
 impl StreamingDataSourceBuilder {
@@ -58,12 +60,23 @@ impl StreamingDataSourceBuilder {
     pub fn new() -> Self {
         Self {
             initial_reconnect_delay: DEFAULT_INITIAL_RECONNECT_DELAY,
+            connector: None,
         }
     }
 
     /// Sets the initial reconnect delay for the streaming connection.
     pub fn initial_reconnect_delay(&mut self, duration: Duration) -> &mut Self {
         self.initial_reconnect_delay = duration;
+        self
+    }
+
+    /// Sets the [eventsource_client::HttpsConnector] for the event
+    /// source client to use. This allows for re-use of a connector between
+    /// multiple client instances. This is especially useful for the `sdk-test-harness`
+    /// where many client instances are created throughout the test and reading
+    /// the native certificates is a substantial portion of the runtime.
+    pub fn https_connector(&mut self, connector: HttpsConnector) -> &mut Self {
+        self.connector = Some(connector);
         self
     }
 }
@@ -74,11 +87,19 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
-        let data_source = StreamingDataSource::new(
-            endpoints.streaming_base_url(),
-            sdk_key,
-            self.initial_reconnect_delay,
-        )
+        let data_source = match &self.connector {
+            None => StreamingDataSource::new(
+                endpoints.streaming_base_url(),
+                sdk_key,
+                self.initial_reconnect_delay,
+            ),
+            Some(connector) => StreamingDataSource::new_with_connector(
+                endpoints.streaming_base_url(),
+                sdk_key,
+                self.initial_reconnect_delay,
+                connector.clone(),
+            ),
+        }
         .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
         Ok(Arc::new(data_source))
     }

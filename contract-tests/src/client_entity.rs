@@ -1,3 +1,4 @@
+use eventsource_client::HttpsConnector;
 use std::time::Duration;
 
 const DEFAULT_POLLING_BASE_URL: &str = "https://sdk.launchdarkly.com";
@@ -22,7 +23,10 @@ pub struct ClientEntity {
 }
 
 impl ClientEntity {
-    pub async fn new(create_instance_params: CreateInstanceParams) -> Result<Self, BuildError> {
+    pub async fn new(
+        create_instance_params: CreateInstanceParams,
+        connector: &HttpsConnector,
+    ) -> Result<Self, BuildError> {
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
 
@@ -40,6 +44,7 @@ impl ClientEntity {
             if let Some(delay) = streaming.initial_retry_delay_ms {
                 streaming_builder.initial_reconnect_delay(Duration::from_millis(delay));
             }
+            streaming_builder.https_connector(connector.clone());
 
             config_builder = config_builder.data_source(&streaming_builder);
         }

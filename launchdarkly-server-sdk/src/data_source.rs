@@ -6,7 +6,7 @@ use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 
 use eventsource_client as es;
-use eventsource_client::ReconnectOptionsBuilder;
+use eventsource_client::{HttpsConnector, ReconnectOptionsBuilder};
 use futures::StreamExt;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use serde::Deserialize;
@@ -85,6 +85,28 @@ impl StreamingDataSource {
             .header("Authorization", sdk_key)?
             .header("User-Agent", &*crate::USER_AGENT)?
             .build();
+
+        Ok(Self { es_client })
+    }
+
+    pub fn new_with_connector(
+        base_url: &str,
+        sdk_key: &str,
+        initial_reconnect_delay: Duration,
+        connector: HttpsConnector,
+    ) -> std::result::Result<Self, es::Error> {
+        let stream_url = format!("{}/all", base_url);
+        let client_builder = es::Client::for_url(&stream_url)?;
+        let es_client = client_builder
+            .reconnect(
+                ReconnectOptionsBuilder::new(true)
+                    .retry_initial(true)
+                    .delay(initial_reconnect_delay)
+                    .build(),
+            )
+            .header("Authorization", sdk_key)?
+            .header("User-Agent", &*crate::USER_AGENT)?
+            .build_with_conn(connector);
 
         Ok(Self { es_client })
     }

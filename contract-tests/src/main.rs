@@ -5,6 +5,7 @@ use crate::command_params::CommandParams;
 use actix_web::error::{ErrorBadRequest, ErrorInternalServerError};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
 use client_entity::ClientEntity;
+use eventsource_client::HttpsConnector;
 use futures::executor;
 use serde::{self, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -84,7 +85,12 @@ async fn create_client(
     create_instance_params: web::Json<CreateInstanceParams>,
     app_state: web::Data<AppState>,
 ) -> HttpResponse {
-    let client_entity = match ClientEntity::new(create_instance_params.into_inner()).await {
+    let client_entity = match ClientEntity::new(
+        create_instance_params.into_inner(),
+        &app_state.https_connector,
+    )
+    .await
+    {
         Ok(ce) => ce,
         Err(e) => return HttpResponse::InternalServerError().body(format!("{}", e)),
     };
@@ -172,6 +178,7 @@ async fn stop_client(req: HttpRequest, app_state: web::Data<AppState>) -> HttpRe
 struct AppState {
     counter: Mutex<u32>,
     client_entities: Mutex<HashMap<u32, ClientEntity>>,
+    https_connector: HttpsConnector,
 }
 
 #[actix_web::main]
@@ -183,6 +190,7 @@ async fn main() -> std::io::Result<()> {
     let state = web::Data::new(AppState {
         counter: Mutex::new(0),
         client_entities: Mutex::new(HashMap::new()),
+        https_connector: HttpsConnector::with_native_roots(),
     });
 
     let server = HttpServer::new(move || {
