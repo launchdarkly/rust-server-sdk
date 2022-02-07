@@ -13,9 +13,6 @@
 extern crate log;
 
 #[cfg(test)]
-extern crate spectral;
-
-#[cfg(test)]
 #[macro_use]
 extern crate serde_json;
 

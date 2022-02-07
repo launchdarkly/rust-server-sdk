@@ -568,7 +568,6 @@ impl From<(&VariationKey, FlagValue, u64)> for VariationCounterOutput {
 #[cfg(test)]
 mod tests {
     use maplit::hashmap;
-    use spectral::prelude::*;
 
     use super::*;
     use crate::test_common::basic_flag;
@@ -716,8 +715,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -765,8 +765,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -792,8 +793,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -818,8 +820,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -851,8 +854,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -880,8 +884,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -918,8 +923,9 @@ mod tests {
         "#
         .trim();
 
-        assert_that!(serde_json::to_string_pretty(&summary_event))
-            .is_ok_containing(event_json.to_string());
+        let json = serde_json::to_string_pretty(&summary_event);
+        assert!(json.is_ok());
+        assert_eq!(json.unwrap(), event_json.to_string());
     }
 
     #[test]
@@ -941,15 +947,16 @@ mod tests {
         "#
         .trim();
 
-        assert_that!(serde_json::to_string_pretty(&index_event))
-            .is_ok_containing(event_json.to_string());
+        let json = serde_json::to_string_pretty(&index_event);
+        assert!(json.is_ok());
+        assert_eq!(json.unwrap(), event_json.to_string());
     }
 
     #[test]
     fn summarises_feature_request() {
         let mut summary = EventSummary::new();
-        assert_that!(summary.is_empty()).is_true();
-        assert_that!(summary.start_date).is_greater_than(summary.end_date);
+        assert!(summary.is_empty());
+        assert!(summary.start_date > summary.end_date);
 
         let flag = basic_flag("flag");
         let default = FlagValue::from(false);
@@ -977,9 +984,9 @@ mod tests {
         };
 
         summary.add(&fallthrough_request);
-        assert_that!(summary.is_empty()).is_false();
-        assert_that!(summary.start_date).is_equal_to(eval_at);
-        assert_that!(summary.end_date).is_equal_to(eval_at);
+        assert!(!summary.is_empty());
+        assert_eq!(summary.start_date, eval_at);
+        assert_eq!(summary.end_date, eval_at);
 
         let fallthrough_key = VariationKey {
             flag_key: flag.key,
@@ -988,19 +995,22 @@ mod tests {
         };
 
         let fallthrough_summary = summary.features.get(&fallthrough_key);
-        asserting!("counts the eval for the flag key, version and variation")
-            .that(&fallthrough_summary)
-            .contains_value(&VariationSummary {
-                count: 1,
-                value,
-                default,
-            });
+        if let Some(VariationSummary {
+            count: c,
+            value: v,
+            default: d,
+        }) = fallthrough_summary
+        {
+            assert_eq!(*c, 1);
+            assert_eq!(*v, value);
+            assert_eq!(*d, default);
+        } else {
+            panic!("Fallthrough summary is wrong type");
+        }
 
         summary.add(&fallthrough_request);
         let fallthrough_summary = summary.features.get(&fallthrough_key).unwrap();
-        asserting!("another request for same variation increments the count")
-            .that(&fallthrough_summary.count)
-            .is_equal_to(2);
+        assert_eq!(fallthrough_summary.count, 2);
     }
 
     #[test]
