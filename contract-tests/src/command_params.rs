@@ -33,7 +33,7 @@ pub struct EvaluateFlagParams {
 #[serde(rename_all = "camelCase")]
 pub struct EvaluateFlagResponse {
     pub value: Option<FlagValue>,
-    pub variation_index: Option<usize>,
+    pub variation_index: Option<isize>,
     pub reason: Option<Reason>,
 }
 

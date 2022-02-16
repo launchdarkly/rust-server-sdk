@@ -65,7 +65,7 @@ pub struct FlagState {
     version: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    variation: Option<usize>,
+    variation: Option<isize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<Reason>,
