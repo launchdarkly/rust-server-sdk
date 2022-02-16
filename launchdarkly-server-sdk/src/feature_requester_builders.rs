@@ -41,7 +41,7 @@ impl FeatureRequesterFactory for ReqwestFeatureRequesterBuilder {
             .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
         url.set_path("/sdk/latest-all");
 
-        let http = r::Client::builder()
+        let http = r::blocking::Client::builder()
             .build()
             .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
 

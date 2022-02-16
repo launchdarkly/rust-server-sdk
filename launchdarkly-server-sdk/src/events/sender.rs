@@ -2,7 +2,8 @@ use crate::reqwest::is_http_error_recoverable;
 use crossbeam_channel::Sender;
 
 use chrono::DateTime;
-use r::{header::HeaderValue, Response};
+use r::blocking::Response;
+use r::header::HeaderValue;
 use reqwest as r;
 
 use super::event::OutputEvent;
@@ -21,11 +22,11 @@ pub trait EventSender: Send + Sync {
 pub struct ReqwestEventSender {
     url: r::Url,
     sdk_key: String,
-    http: r::Client,
+    http: r::blocking::Client,
 }
 
 impl ReqwestEventSender {
-    pub fn new(http: r::Client, url: r::Url, sdk_key: &str) -> Self {
+    pub fn new(http: r::blocking::Client, url: r::Url, sdk_key: &str) -> Self {
         Self {
             http,
             url,

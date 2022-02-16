@@ -79,7 +79,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
             BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
         })?;
 
-        let http = reqwest::Client::builder().build().map_err(|e| {
+        let http = reqwest::blocking::Client::builder().build().map_err(|e| {
             BuildError::InvalidConfig(format!("unable to build reqwest client: {}", e))
         })?;
 
