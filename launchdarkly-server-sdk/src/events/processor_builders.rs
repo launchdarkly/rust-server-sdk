@@ -5,6 +5,7 @@ use super::sender::{EventSender, ReqwestEventSender};
 use super::EventsConfiguration;
 
 use crate::service_endpoints;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -63,8 +64,8 @@ pub struct EventProcessorBuilder {
     user_keys_flush_interval: Duration,
     inline_users_in_events: bool,
     event_sender: Option<Arc<dyn EventSender>>,
-    // all_attributes_private: bool,
-    // private_attributes: Vec<String>,
+    all_attributes_private: bool,
+    private_attributes: HashSet<String>,
     // diagnostic_recording_interval: Duration
 }
 
@@ -95,6 +96,8 @@ impl EventProcessorFactory for EventProcessorBuilder {
             inline_users_in_events: self.inline_users_in_events,
             user_keys_capacity: self.user_keys_capacity,
             user_keys_flush_interval: self.user_keys_flush_interval,
+            all_attributes_private: self.all_attributes_private,
+            private_attributes: self.private_attributes.clone(),
         };
 
         let events_processor =
@@ -118,6 +121,8 @@ impl EventProcessorBuilder {
             user_keys_flush_interval: DEFAULT_USER_KEYS_FLUSH_INTERVAL,
             inline_users_in_events: false,
             event_sender: None,
+            all_attributes_private: false,
+            private_attributes: HashSet::new(),
         }
     }
 
@@ -161,6 +166,25 @@ impl EventProcessorBuilder {
     /// the full details for the user.
     pub fn inline_users_in_events(&mut self, inline_users_in_events: bool) -> &mut Self {
         self.inline_users_in_events = inline_users_in_events;
+        self
+    }
+
+    /// Sets whether or not all optional user attributes should be hidden from LaunchDarkly.
+    ///
+    /// If this is true, all user attribute values (other than the key) will be private, not just the attributes
+    /// specified with private_attribute_names or on a per-user basis with UserBuilder methods. By default, it is false.
+    pub fn all_attributes_private(&mut self, all_attributes_private: bool) -> &mut Self {
+        self.all_attributes_private = all_attributes_private;
+        self
+    }
+
+    /// Marks a set of attribute names as always private.
+    ///
+    /// Any users sent to LaunchDarkly with this configuration active will have attributes with these
+    /// names removed. This is in addition to any attributes that were marked as private for an
+    /// individual user with UserBuilder methods. Setting all_attribute_private to true overrides this.
+    pub fn private_attribute_names(&mut self, attributes: HashSet<String>) -> &mut Self {
+        self.private_attributes = attributes;
         self
     }
 
@@ -211,6 +235,8 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
+    use maplit::hashset;
+
     use super::*;
 
     #[test]
@@ -253,5 +279,23 @@ mod tests {
         let mut builder = EventProcessorBuilder::new();
         builder.inline_users_in_events(true);
         assert!(builder.inline_users_in_events);
+    }
+
+    #[test]
+    fn all_attribute_private_can_be_adjusted() {
+        let mut builder = EventProcessorBuilder::new();
+
+        assert!(!builder.all_attributes_private);
+        builder.all_attributes_private(true);
+        assert!(builder.all_attributes_private);
+    }
+
+    #[test]
+    fn attribte_names_can_be_adjusted() {
+        let mut builder = EventProcessorBuilder::new();
+
+        assert!(builder.private_attributes.is_empty());
+        builder.private_attribute_names(hashset!["name".to_string()]);
+        assert!(builder.private_attributes.contains("name"));
     }
 }

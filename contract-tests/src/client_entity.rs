@@ -56,10 +56,16 @@ impl ClientEntity {
             if let Some(capacity) = events.capacity {
                 processor_builder.capacity(capacity);
             }
-            processor_builder.inline_users_in_events(events.inline_users);
+            processor_builder
+                .inline_users_in_events(events.inline_users)
+                .all_attributes_private(events.all_attributes_private);
 
             if let Some(interval) = events.flush_interval_ms {
                 processor_builder.flush_interval(Duration::from_millis(interval));
+            }
+
+            if let Some(attributes) = events.global_private_attributes {
+                processor_builder.private_attribute_names(attributes);
             }
 
             config_builder.event_processor(&processor_builder)

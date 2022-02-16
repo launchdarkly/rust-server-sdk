@@ -1,47 +1,5 @@
 evaluation/all flags state/client not ready
 evaluation/client not ready
-events/user properties/inlineUsers=false, allAttributesPrivate=true, globally-private=[firstName], user-private=[lastName]/identify event
-events/user properties/inlineUsers=false, allAttributesPrivate=true, globally-private=[firstName], user-private=[lastName]/index event
-events/user properties/inlineUsers=false, allAttributesPrivate=true, globally-private=[firstName]/identify event
-events/user properties/inlineUsers=false, allAttributesPrivate=true, globally-private=[firstName]/index event
-events/user properties/inlineUsers=false, allAttributesPrivate=true, user-private=[lastName]/identify event
-events/user properties/inlineUsers=false, allAttributesPrivate=true, user-private=[lastName]/index event
-events/user properties/inlineUsers=false, allAttributesPrivate=true/identify event
-events/user properties/inlineUsers=false, allAttributesPrivate=true/index event
-events/user properties/inlineUsers=false, globally-private=[firstName], user-private=[lastName]/identify event
-events/user properties/inlineUsers=false, globally-private=[firstName], user-private=[lastName]/index event
-events/user properties/inlineUsers=false, globally-private=[firstName]/identify event
-events/user properties/inlineUsers=false, globally-private=[firstName]/index event
-events/user properties/inlineUsers=false, user-private=[lastName]/identify event
-events/user properties/inlineUsers=false, user-private=[lastName]/index event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName], user-private=[lastName]/custom event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName], user-private=[lastName]/feature event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName], user-private=[lastName]/identify event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName], user-private=[lastName]/index event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName]/custom event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName]/feature event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName]/identify event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, globally-private=[firstName]/index event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, user-private=[lastName]/custom event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, user-private=[lastName]/feature event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, user-private=[lastName]/identify event
-events/user properties/inlineUsers=true, allAttributesPrivate=true, user-private=[lastName]/index event
-events/user properties/inlineUsers=true, allAttributesPrivate=true/custom event
-events/user properties/inlineUsers=true, allAttributesPrivate=true/feature event
-events/user properties/inlineUsers=true, allAttributesPrivate=true/identify event
-events/user properties/inlineUsers=true, allAttributesPrivate=true/index event
-events/user properties/inlineUsers=true, globally-private=[firstName], user-private=[lastName]/custom event
-events/user properties/inlineUsers=true, globally-private=[firstName], user-private=[lastName]/feature event
-events/user properties/inlineUsers=true, globally-private=[firstName], user-private=[lastName]/identify event
-events/user properties/inlineUsers=true, globally-private=[firstName], user-private=[lastName]/index event
-events/user properties/inlineUsers=true, globally-private=[firstName]/custom event
-events/user properties/inlineUsers=true, globally-private=[firstName]/feature event
-events/user properties/inlineUsers=true, globally-private=[firstName]/identify event
-events/user properties/inlineUsers=true, globally-private=[firstName]/index event
-events/user properties/inlineUsers=true, user-private=[lastName]/custom event
-events/user properties/inlineUsers=true, user-private=[lastName]/feature event
-events/user properties/inlineUsers=true, user-private=[lastName]/identify event
-events/user properties/inlineUsers=true, user-private=[lastName]/index event
 streaming/retry behavior/do not retry after unrecoverable HTTP error on initial connect
 streaming/retry behavior/retry after recoverable HTTP error on initial connect
 streaming/retry behavior/retry after recoverable HTTP error on reconnect/error 400
