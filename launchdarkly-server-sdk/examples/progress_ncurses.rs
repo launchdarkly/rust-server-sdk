@@ -11,7 +11,7 @@ use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, Us
 use cursive::traits::Boxable;
 use cursive::utils::Counter;
 use cursive::views::{Dialog, ProgressBar};
-use cursive::Cursive;
+use cursive::{Cursive, CursiveExt};
 
 fn main() {
     env_logger::init();
