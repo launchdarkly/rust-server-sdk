@@ -40,6 +40,13 @@ pub struct EventParameters {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct TagParams {
+    pub application_id: Option<String>,
+    pub application_version: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Configuration {
     pub credential: String,
 
@@ -51,6 +58,8 @@ pub struct Configuration {
     pub streaming: Option<StreamingParameters>,
 
     pub events: Option<EventParameters>,
+
+    pub tags: Option<TagParams>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -69,6 +78,7 @@ async fn status() -> impl Responder {
             "all-flags-with-reasons".to_string(),
             "all-flags-client-side-only".to_string(),
             "all-flags-details-only-for-tracked-flags".to_string(),
+            "tags".to_string(),
         ],
     })
 }

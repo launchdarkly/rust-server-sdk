@@ -27,6 +27,7 @@ pub trait DataSourceFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError>;
     fn to_owned(&self) -> Box<dyn DataSourceFactory>;
 }
@@ -86,17 +87,20 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let data_source = match &self.connector {
             None => StreamingDataSource::new(
                 endpoints.streaming_base_url(),
                 sdk_key,
                 self.initial_reconnect_delay,
+                &tags,
             ),
             Some(connector) => StreamingDataSource::new_with_connector(
                 endpoints.streaming_base_url(),
                 sdk_key,
                 self.initial_reconnect_delay,
+                &tags,
                 connector.clone(),
             ),
         }
@@ -129,6 +133,7 @@ impl DataSourceFactory for NullDataSourceBuilder {
         &self,
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
+        _: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         Ok(Arc::new(NullDataSource::new()))
     }
@@ -228,6 +233,7 @@ impl DataSourceFactory for PollingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>> =
             match &self.feature_requester_factory {
@@ -238,7 +244,8 @@ impl DataSourceFactory for PollingDataSourceBuilder {
                 )))),
             };
 
-        let data_source = PollingDataSource::new(feature_requester_factory, self.poll_interval);
+        let data_source =
+            PollingDataSource::new(feature_requester_factory, self.poll_interval, tags);
         Ok(Arc::new(data_source))
     }
 
@@ -282,6 +289,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         &self,
         _endpoints: &service_endpoints::ServiceEndpoints,
         _sdk_key: &str,
+        _tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         return Ok(self.data_source.as_ref().unwrap().clone());
     }

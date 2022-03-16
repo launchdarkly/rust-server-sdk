@@ -14,6 +14,7 @@ use serde::Deserialize;
 use crate::data_store::UpdateError;
 use crate::feature_requester::FeatureRequesterError;
 use crate::feature_requester_builders::FeatureRequesterFactory;
+use crate::LAUNCHDARKLY_TAGS_HEADER;
 
 use super::data_store::{AllData, DataStore, PatchTarget};
 
@@ -72,10 +73,11 @@ impl StreamingDataSource {
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
+        tags: &Option<String>,
     ) -> std::result::Result<Self, es::Error> {
         let stream_url = format!("{}/all", base_url);
         let client_builder = es::Client::for_url(&stream_url)?;
-        let es_client = client_builder
+        let mut client_builder = client_builder
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
                     .retry_initial(true)
@@ -83,8 +85,13 @@ impl StreamingDataSource {
                     .build(),
             )
             .header("Authorization", sdk_key)?
-            .header("User-Agent", &*crate::USER_AGENT)?
-            .build();
+            .header("User-Agent", &*crate::USER_AGENT)?;
+
+        if let Some(tags) = tags {
+            client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
+        }
+
+        let es_client = client_builder.build();
 
         Ok(Self { es_client })
     }
@@ -93,11 +100,12 @@ impl StreamingDataSource {
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
+        tags: &Option<String>,
         connector: HttpsConnector,
     ) -> std::result::Result<Self, es::Error> {
         let stream_url = format!("{}/all", base_url);
         let client_builder = es::Client::for_url(&stream_url)?;
-        let es_client = client_builder
+        let mut client_builder = client_builder
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
                     .retry_initial(true)
@@ -105,8 +113,13 @@ impl StreamingDataSource {
                     .build(),
             )
             .header("Authorization", sdk_key)?
-            .header("User-Agent", &*crate::USER_AGENT)?
-            .build_with_conn(connector);
+            .header("User-Agent", &*crate::USER_AGENT)?;
+
+        if let Some(tags) = tags {
+            client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
+        }
+
+        let es_client = client_builder.build_with_conn(connector);
 
         Ok(Self { es_client })
     }
@@ -174,16 +187,19 @@ impl DataSource for StreamingDataSource {
 pub struct PollingDataSource {
     feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>>,
     poll_interval: Duration,
+    tags: Option<String>,
 }
 
 impl PollingDataSource {
     pub fn new(
         feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>>,
         poll_interval: Duration,
+        tags: Option<String>,
     ) -> Self {
         Self {
             feature_requester_factory,
             poll_interval,
+            tags,
         }
     }
 }
@@ -196,7 +212,7 @@ impl DataSource for PollingDataSource {
         shutdown_receiver: broadcast::Receiver<()>,
     ) {
         let mut feature_requester = match self.feature_requester_factory.lock() {
-            Ok(factory) => match factory.build() {
+            Ok(factory) => match factory.build(self.tags.clone()) {
                 Ok(requester) => requester,
                 Err(e) => {
                     error!("{:?}", e);
@@ -329,4 +345,134 @@ fn process_delete(data_store: &mut dyn DataStore, event: es::Event) -> Result<()
     data_store
         .delete(&delete.path, delete.version)
         .map_err(Error::InvalidUpdate)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
+
+    use mockito::{mock, Matcher};
+    use parking_lot::RwLock;
+    use test_case::test_case;
+    use tokio::sync::broadcast;
+
+    use super::{DataSource, PollingDataSource, StreamingDataSource};
+    use crate::{
+        data_store::InMemoryDataStore, feature_requester_builders::ReqwestFeatureRequesterBuilder,
+        LAUNCHDARKLY_TAGS_HEADER,
+    };
+
+    #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
+    #[test_case(None, Matcher::Missing)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn streaming_source_passes_along_tags_header(
+        tag: Option<String>,
+        matcher: impl Into<Matcher>,
+    ) {
+        let mock_endpoint = mock("GET", "/all")
+            .with_status(200)
+            .with_body("event:one\ndata:One\n\n")
+            .expect_at_least(1)
+            .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
+            .create();
+
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        let initialized = Arc::new(AtomicBool::new(false));
+
+        let streaming = StreamingDataSource::new(
+            &mockito::server_url(),
+            "sdk-key",
+            Duration::from_secs(0),
+            &tag,
+        )
+        .unwrap();
+
+        let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+
+        let init_state = initialized.clone();
+        streaming.subscribe(
+            data_store,
+            Arc::new(move |success| init_state.store(success, Ordering::SeqCst)),
+            shutdown_tx.subscribe(),
+        );
+
+        let mut attempts = 0;
+        loop {
+            if initialized.load(Ordering::SeqCst) {
+                break;
+            }
+
+            attempts += 1;
+            if attempts > 10 {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = shutdown_tx.send(());
+
+        mock_endpoint.assert();
+    }
+
+    #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
+    #[test_case(None, Matcher::Missing)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn polling_source_passes_along_tags_header(
+        tag: Option<String>,
+        matcher: impl Into<Matcher>,
+    ) {
+        let mock_endpoint = mock("GET", "/sdk/latest-all")
+            .with_status(200)
+            .with_body("{}")
+            .expect_at_least(1)
+            .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
+            .create();
+
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        let initialized = Arc::new(AtomicBool::new(false));
+
+        let reqwest_builder =
+            ReqwestFeatureRequesterBuilder::new(&mockito::server_url(), "sdk-key");
+
+        let polling = PollingDataSource::new(
+            Arc::new(Mutex::new(Box::new(reqwest_builder))),
+            Duration::from_secs(10),
+            tag,
+        );
+
+        let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+
+        let init_state = initialized.clone();
+        polling.subscribe(
+            data_store,
+            Arc::new(move |success| init_state.store(success, Ordering::SeqCst)),
+            shutdown_tx.subscribe(),
+        );
+
+        let mut attempts = 0;
+        loop {
+            if initialized.load(Ordering::SeqCst) {
+                break;
+            }
+
+            attempts += 1;
+            if attempts > 10 {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = shutdown_tx.send(());
+
+        mock_endpoint.assert();
+    }
 }

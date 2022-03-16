@@ -6,8 +6,9 @@ const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 use launchdarkly_server_sdk::{
-    BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder, FlagDetailConfig, FlagValue,
-    NullEventProcessorBuilder, ServiceEndpointsBuilder, StreamingDataSourceBuilder,
+    ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
+    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, ServiceEndpointsBuilder,
+    StreamingDataSourceBuilder,
 };
 
 use crate::{
@@ -29,6 +30,19 @@ impl ClientEntity {
     ) -> Result<Self, BuildError> {
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
+
+        let mut application_info = ApplicationInfo::new();
+        if let Some(tags) = create_instance_params.configuration.tags {
+            if let Some(id) = tags.application_id {
+                application_info.application_identifier(id);
+            }
+
+            if let Some(version) = tags.application_version {
+                application_info.application_version(version);
+            }
+        }
+
+        config_builder = config_builder.application_info(application_info);
 
         let mut service_endpoints_builder = ServiceEndpointsBuilder::new();
         service_endpoints_builder.streaming_base_url(DEFAULT_STREAM_BASE_URL);

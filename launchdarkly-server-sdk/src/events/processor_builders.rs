@@ -4,7 +4,7 @@ use super::processor::{
 use super::sender::{EventSender, ReqwestEventSender};
 use super::EventsConfiguration;
 
-use crate::service_endpoints;
+use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +35,7 @@ pub trait EventProcessorFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn EventProcessor>, BuildError>;
     fn to_owned(&self) -> Box<dyn EventProcessorFactory>;
 }
@@ -74,13 +75,26 @@ impl EventProcessorFactory for EventProcessorBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         let url = format!("{}/bulk", endpoints.events_base_url());
         let url = reqwest::Url::parse(&url).map_err(|e| {
             BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
         })?;
 
-        let http = reqwest::Client::builder().build().map_err(|e| {
+        let mut builder = reqwest::Client::builder();
+
+        if let Some(tags) = tags {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.append(
+                LAUNCHDARKLY_TAGS_HEADER,
+                reqwest::header::HeaderValue::from_str(&tags)
+                    .map_err(|e| BuildError::InvalidConfig(e.to_string()))?,
+            );
+            builder = builder.default_headers(headers);
+        }
+
+        let http = builder.build().map_err(|e| {
             BuildError::InvalidConfig(format!("unable to build reqwest client: {}", e))
         })?;
 
@@ -211,6 +225,7 @@ impl EventProcessorFactory for NullEventProcessorBuilder {
         &self,
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
+        _: Option<String>,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         Ok(Arc::new(NullEventProcessor::new()))
     }
@@ -235,7 +250,12 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
+    use launchdarkly_server_sdk_evaluation::User;
     use maplit::hashset;
+    use mockito::{mock, Matcher};
+    use test_case::test_case;
+
+    use crate::{events::event::EventFactory, ServiceEndpointsBuilder};
 
     use super::*;
 
@@ -297,5 +317,37 @@ mod tests {
         assert!(builder.private_attributes.is_empty());
         builder.private_attribute_names(hashset!["name".to_string()]);
         assert!(builder.private_attributes.contains("name"));
+    }
+
+    #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
+    #[test_case(None, Matcher::Missing)]
+    fn processor_sends_correct_headers(tag: Option<String>, matcher: impl Into<Matcher>) {
+        let mock_endpoint = mock("POST", "/bulk")
+            .with_status(200)
+            .expect_at_least(1)
+            .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
+            .create();
+
+        let service_endpoints = ServiceEndpointsBuilder::new()
+            .events_base_url(&mockito::server_url())
+            .polling_base_url(&mockito::server_url())
+            .streaming_base_url(&mockito::server_url())
+            .build()
+            .expect("Service endpoints failed to be created");
+
+        let builder = EventProcessorBuilder::new();
+        let processor = builder
+            .build(&service_endpoints, "sdk-key", tag)
+            .expect("Processor failed to build");
+
+        let event_factory = EventFactory::new(false);
+
+        let user = User::with_key("bob").build();
+        let identify_event = event_factory.new_identify(user);
+
+        processor.send(identify_event);
+        processor.close();
+
+        mock_endpoint.assert();
     }
 }

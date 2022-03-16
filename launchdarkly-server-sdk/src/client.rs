@@ -161,13 +161,17 @@ impl Client {
             info!("Started LaunchDarkly Client in offline mode");
         }
 
+        let tags = config.application_tag();
+
         let endpoints = config.service_endpoints_builder().build()?;
-        let event_processor = config
-            .event_processor_builder()
-            .build(&endpoints, config.sdk_key())?;
-        let data_source = config
-            .data_source_builder()
-            .build(&endpoints, config.sdk_key())?;
+        let event_processor =
+            config
+                .event_processor_builder()
+                .build(&endpoints, config.sdk_key(), tags.clone())?;
+        let data_source =
+            config
+                .data_source_builder()
+                .build(&endpoints, config.sdk_key(), tags.clone())?;
         let data_store = config.data_store_builder().build()?;
 
         let events_default = EventsScope {

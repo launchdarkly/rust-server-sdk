@@ -26,7 +26,7 @@ pub use client::Client;
 
 // Re-export
 pub use client::{BuildError, StartError};
-pub use config::{Config, ConfigBuilder};
+pub use config::{ApplicationInfo, Config, ConfigBuilder};
 pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
 };
@@ -55,6 +55,8 @@ mod reqwest;
 mod service_endpoints;
 mod test_common;
 mod version;
+
+pub(crate) const LAUNCHDARKLY_TAGS_HEADER: &str = "x-launchdarkly-tags";
 
 lazy_static! {
     pub(crate) static ref USER_AGENT: String =
