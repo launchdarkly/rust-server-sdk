@@ -3,7 +3,7 @@ TEMP_TEST_OUTPUT=/tmp/contract-test-service.log
 build-contract-tests:
 	@cargo build -p contract-tests --release
 
-start-contract-test-service:
+start-contract-test-service: build-contract-tests
 	@./target/release/contract-tests
 
 start-contract-test-service-bg:

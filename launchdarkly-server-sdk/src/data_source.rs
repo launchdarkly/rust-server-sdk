@@ -1,15 +1,14 @@
+use es::{Client, ClientBuilder, HttpsConnector, ReconnectOptionsBuilder};
+use eventsource_client as es;
+use futures::StreamExt;
+use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use parking_lot::RwLock;
+use serde::Deserialize;
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
-
-use eventsource_client as es;
-use eventsource_client::{HttpsConnector, ReconnectOptionsBuilder};
-use futures::StreamExt;
-use launchdarkly_server_sdk_evaluation::{Flag, Segment};
-use serde::Deserialize;
 
 use crate::data_store::UpdateError;
 use crate::feature_requester::FeatureRequesterError;
@@ -19,6 +18,7 @@ use crate::LAUNCHDARKLY_TAGS_HEADER;
 use super::data_store::{AllData, DataStore, PatchTarget};
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum Error {
     InvalidEventData {
         event_type: String,
@@ -27,7 +27,6 @@ pub enum Error {
     InvalidPutPath(String),
     InvalidUpdate(UpdateError),
     InvalidEventType(String),
-    MissingEventField(String, String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -65,18 +64,19 @@ pub trait DataSource: Send + Sync {
 }
 
 pub struct StreamingDataSource {
-    es_client: es::Client<es::HttpsConnector>,
+    es_client: Box<dyn Client>,
 }
 
 impl StreamingDataSource {
-    pub fn new(
+    fn new_builder(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
         tags: &Option<String>,
-    ) -> std::result::Result<Self, es::Error> {
+    ) -> es::Result<ClientBuilder> {
         let stream_url = format!("{}/all", base_url);
-        let client_builder = es::Client::for_url(&stream_url)?;
+
+        let client_builder = ClientBuilder::for_url(&stream_url)?;
         let mut client_builder = client_builder
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
@@ -85,15 +85,27 @@ impl StreamingDataSource {
                     .build(),
             )
             .header("Authorization", sdk_key)?
-            .header("User-Agent", &*crate::USER_AGENT)?;
+            .header("User-Agent", &crate::USER_AGENT)?;
 
         if let Some(tags) = tags {
             client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
         }
 
-        let es_client = client_builder.build();
+        Ok(client_builder)
+    }
 
-        Ok(Self { es_client })
+    pub fn new(
+        base_url: &str,
+        sdk_key: &str,
+        initial_reconnect_delay: Duration,
+        tags: &Option<String>,
+    ) -> std::result::Result<Self, es::Error> {
+        let client_builder =
+            StreamingDataSource::new_builder(base_url, sdk_key, initial_reconnect_delay, tags)?;
+
+        Ok(Self {
+            es_client: Box::new(client_builder.build()),
+        })
     }
 
     pub fn new_with_connector(
@@ -103,25 +115,12 @@ impl StreamingDataSource {
         tags: &Option<String>,
         connector: HttpsConnector,
     ) -> std::result::Result<Self, es::Error> {
-        let stream_url = format!("{}/all", base_url);
-        let client_builder = es::Client::for_url(&stream_url)?;
-        let mut client_builder = client_builder
-            .reconnect(
-                ReconnectOptionsBuilder::new(true)
-                    .retry_initial(true)
-                    .delay(initial_reconnect_delay)
-                    .build(),
-            )
-            .header("Authorization", sdk_key)?
-            .header("User-Agent", &*crate::USER_AGENT)?;
+        let client_builder =
+            StreamingDataSource::new_builder(base_url, sdk_key, initial_reconnect_delay, tags)?;
 
-        if let Some(tags) = tags {
-            client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
-        }
-
-        let es_client = client_builder.build_with_conn(connector);
-
-        Ok(Self { es_client })
+        Ok(Self {
+            es_client: Box::new(client_builder.build_with_conn(connector)),
+        })
     }
 }
 
@@ -132,7 +131,7 @@ impl DataSource for StreamingDataSource {
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
         shutdown_receiver: broadcast::Receiver<()>,
     ) {
-        let mut event_stream = Box::pin(self.es_client.stream()).fuse();
+        let mut event_stream = self.es_client.stream().fuse();
 
         tokio::spawn(async move {
             let shutdown_stream = BroadcastStream::new(shutdown_receiver);
@@ -145,11 +144,25 @@ impl DataSource for StreamingDataSource {
                     _ = shutdown_future => break,
                     event = event_stream.next() => {
                         let event = match event {
-                            Some(Ok(event)) => event,
+                            Some(Ok(event)) => match event {
+                                es::SSE::Comment(str)=> {
+                                    debug!("data source got a comment: {}", str);
+                                    continue;
+                                },
+                                es::SSE::Event(ev) => ev,
+                            },
                             Some(Err(e)) => {
                                 error!("error on event stream: {:?}", e);
-                                // TODO reconnect?
-                                break;
+
+                                match e {
+                                    es::Error::Eof => {
+                                        continue;
+                                    }
+                                    _ => {
+                                        debug!("unhandled error; break");
+                                        break;
+                                    }
+                                }
                             },
                             None => {
                                 error!("unexpected end of event stream");
@@ -309,15 +322,8 @@ impl DataSource for MockDataSource {
     }
 }
 
-fn event_field<'a>(event: &'a es::Event, field: &'a str) -> Result<&'a [u8]> {
-    event
-        .field(field)
-        .ok_or_else(|| Error::MissingEventField(event.event_type.clone(), field.to_string()))
-}
-
 fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
-    let data = event_field(event, "data")?;
-    serde_json::from_slice(data).map_err(|e| Error::InvalidEventData {
+    serde_json::from_slice(event.data.as_ref()).map_err(|e| Error::InvalidEventData {
         event_type: event.event_type.clone(),
         error: Box::new(e),
     })
