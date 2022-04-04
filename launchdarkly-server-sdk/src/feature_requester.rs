@@ -1,6 +1,6 @@
 use crate::reqwest::is_http_error_recoverable;
 
-use super::data_store::AllData;
+use super::stores::store_types::AllData;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use r::{
     header::{HeaderValue, ETAG},

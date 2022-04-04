@@ -10,12 +10,14 @@ use tokio::sync::broadcast;
 use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 
-use crate::data_store::UpdateError;
+use super::stores::store_types::{AllData, DataKind, PatchTarget, StorageItem};
 use crate::feature_requester::FeatureRequesterError;
 use crate::feature_requester_builders::FeatureRequesterFactory;
+use crate::stores::store::{DataStore, UpdateError};
 use crate::LAUNCHDARKLY_TAGS_HEADER;
 
-use super::data_store::{AllData, DataStore, PatchTarget};
+const FLAGS_PREFIX: &str = "/flags/";
+const SEGMENTS_PREFIX: &str = "/segments/";
 
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
@@ -24,7 +26,7 @@ pub enum Error {
         event_type: String,
         error: Box<dyn std::error::Error + Send>,
     },
-    InvalidPutPath(String),
+    InvalidPath(String),
     InvalidUpdate(UpdateError),
     InvalidEventType(String),
 }
@@ -335,22 +337,38 @@ fn process_put(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
         data_store.init(put.data);
         Ok(())
     } else {
-        Err(Error::InvalidPutPath(put.path))
+        Err(Error::InvalidPath(put.path))
     }
 }
 
 fn process_patch(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
+    let (_, key) = path_to_key(&patch.path)?;
+
     data_store
-        .patch(&patch.path, patch.data)
+        .upsert(key, patch.data)
         .map_err(Error::InvalidUpdate)
 }
 
 fn process_delete(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let delete: DeleteData = parse_event_data(&event)?;
-    data_store
-        .delete(&delete.path, delete.version)
-        .map_err(Error::InvalidUpdate)
+    let (kind, key) = path_to_key(&delete.path)?;
+    let target = match kind {
+        DataKind::Flag => PatchTarget::Flag(StorageItem::Tombstone(delete.version)),
+        DataKind::Segment => PatchTarget::Segment(StorageItem::Tombstone(delete.version)),
+    };
+
+    data_store.upsert(key, target).map_err(Error::InvalidUpdate)
+}
+
+fn path_to_key(path: &str) -> Result<(DataKind, &str)> {
+    if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
+        Ok((DataKind::Flag, flag_key))
+    } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
+        Ok((DataKind::Segment, segment_key))
+    } else {
+        Err(Error::InvalidPath(path.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -371,8 +389,8 @@ mod tests {
 
     use super::{DataSource, PollingDataSource, StreamingDataSource};
     use crate::{
-        data_store::InMemoryDataStore, feature_requester_builders::ReqwestFeatureRequesterBuilder,
-        LAUNCHDARKLY_TAGS_HEADER,
+        feature_requester_builders::ReqwestFeatureRequesterBuilder,
+        stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER,
     };
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]

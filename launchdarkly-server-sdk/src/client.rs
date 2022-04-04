@@ -14,9 +14,9 @@ use tokio::sync::{broadcast, Semaphore};
 use super::config::Config;
 use super::data_source::DataSource;
 use super::data_source_builders::BuildError as DataSourceError;
-use super::data_store::DataStore;
-use super::data_store_builders::BuildError as DataStoreError;
 use super::evaluation::{FlagDetail, FlagDetailConfig};
+use super::stores::store::DataStore;
+use super::stores::store_builders::BuildError as DataStoreError;
 use crate::events::event::EventFactory;
 use crate::events::event::InputEvent;
 use crate::events::processor::EventProcessor;
@@ -703,15 +703,15 @@ impl Client {
                 match data_store.flag(flag_key) {
                     Some(flag) => {
                         let result = eval::evaluate(
-                            &*data_store.to_store(),
-                            flag,
+                            data_store.to_store(),
+                            &flag,
                             user,
                             Some(&*events_scope.prerequisite_event_recorder),
                         )
                         .map(|v| v.clone())
                         .or(default.clone().into());
 
-                        (Some(flag.clone()), result)
+                        (Some(flag), result)
                     }
                     None => (
                         None,
@@ -759,10 +759,10 @@ mod tests {
 
     use crate::data_source::MockDataSource;
     use crate::data_source_builders::MockDataSourceBuilder;
-    use crate::data_store::PatchTarget;
     use crate::events::create_event_sender;
     use crate::events::event::{OutputEvent, VariationKey};
     use crate::events::processor_builders::EventProcessorBuilder;
+    use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::{
         self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_off_flag,
     };
@@ -823,7 +823,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .upsert(
+                &flag.key,
+                PatchTarget::Flag(StorageItem::Item(flag.clone())),
+            )
             .expect("patch should apply");
 
         let result = client.variation_detail(&user, "myFlag", default);
@@ -843,7 +846,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -926,7 +932,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .upsert(
+                &flag.key,
+                PatchTarget::Flag(StorageItem::Item(flag.clone())),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -968,7 +977,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -1032,7 +1044,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_off_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_off_flag("myFlag"))),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -1070,7 +1085,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/prereqFlag", PatchTarget::Flag(basic_preqreq_flag))
+            .upsert(
+                "prereqFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_preqreq_flag)),
+            )
             .expect("patch should apply");
 
         let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
@@ -1078,7 +1096,7 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag))
+            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -1128,7 +1146,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/prereqFlag", PatchTarget::Flag(basic_preqreq_flag))
+            .upsert(
+                "prereqFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_preqreq_flag)),
+            )
             .expect("patch should apply");
 
         let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
@@ -1136,7 +1157,7 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag))
+            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
@@ -1349,7 +1370,7 @@ mod tests {
         assert_eq!(events.len(), 6);
 
         let mut events_by_type: HashMap<&str, usize> = HashMap::new();
-        for event in &*events {
+        for event in events {
             if let Some(count) = events_by_type.get_mut(event.kind()) {
                 *count += 1;
             } else {

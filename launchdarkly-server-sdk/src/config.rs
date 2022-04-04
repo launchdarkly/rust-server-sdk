@@ -1,8 +1,8 @@
 use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
-use crate::data_store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
 use crate::events::processor_builders::{
     EventProcessorBuilder, EventProcessorFactory, NullEventProcessorBuilder,
 };
+use crate::stores::store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
 use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};
 
 use std::borrow::Borrow;
