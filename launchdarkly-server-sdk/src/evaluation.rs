@@ -1,4 +1,4 @@
-use super::data_store::DataStore;
+use super::stores::store::DataStore;
 use serde::Serialize;
 
 use launchdarkly_server_sdk_evaluation::{evaluate, FlagValue, Reason, User};
@@ -65,7 +65,7 @@ pub struct FlagState {
     version: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    variation: Option<usize>,
+    variation: Option<isize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<Reason>,
@@ -118,7 +118,7 @@ impl FlagDetail {
                 continue;
             }
 
-            let detail = evaluate(&*store.to_store(), flag, user, None);
+            let detail = evaluate(store.to_store(), &flag, user, None);
 
             // Here we are applying the same logic used in EventFactory.new_feature_request_event
             // to determine whether the evaluation involved an experiment, in which case both
@@ -182,13 +182,13 @@ impl FlagDetail {
 
 #[cfg(test)]
 mod tests {
-    use launchdarkly_server_sdk_evaluation::User;
-
-    use crate::data_store::PatchTarget;
-    use crate::data_store::{DataStore, InMemoryDataStore};
     use crate::evaluation::FlagDetail;
+    use crate::stores::store::DataStore;
+    use crate::stores::store::InMemoryDataStore;
+    use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::basic_flag;
     use crate::FlagDetailConfig;
+    use launchdarkly_server_sdk_evaluation::User;
 
     #[test]
     fn flag_detail_handles_default_configuration() {
@@ -196,7 +196,10 @@ mod tests {
         let mut store = InMemoryDataStore::new();
 
         store
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
+            )
             .expect("patch should apply");
 
         let mut flag_detail = FlagDetail::new(true);
@@ -229,7 +232,7 @@ mod tests {
         flag.track_events_fallthrough = true;
 
         store
-            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(flag)))
             .expect("patch should apply");
 
         let mut flag_detail = FlagDetail::new(true);
@@ -263,7 +266,10 @@ mod tests {
         let mut store = InMemoryDataStore::new();
 
         store
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
+            )
             .expect("patch should apply");
 
         let mut config = FlagDetailConfig::new();
@@ -298,7 +304,10 @@ mod tests {
         let mut store = InMemoryDataStore::new();
 
         store
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
+            )
             .expect("patch should apply");
 
         let mut config = FlagDetailConfig::new();
@@ -331,7 +340,7 @@ mod tests {
         flag.track_events = true;
 
         store
-            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(flag)))
             .expect("patch should apply");
 
         let mut config = FlagDetailConfig::new();
@@ -366,7 +375,7 @@ mod tests {
         flag.track_events = true;
 
         store
-            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(flag)))
             .expect("patch should apply");
 
         let mut flag_detail = FlagDetail::new(true);

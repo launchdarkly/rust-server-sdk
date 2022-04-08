@@ -1,6 +1,7 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, ReqwestFeatureRequesterBuilder};
+use eventsource_client::HttpsConnector;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -26,6 +27,7 @@ pub trait DataSourceFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError>;
     fn to_owned(&self) -> Box<dyn DataSourceFactory>;
 }
@@ -51,6 +53,7 @@ pub trait DataSourceFactory {
 #[derive(Clone)]
 pub struct StreamingDataSourceBuilder {
     initial_reconnect_delay: Duration,
+    connector: Option<HttpsConnector>,
 }
 
 impl StreamingDataSourceBuilder {
@@ -58,12 +61,23 @@ impl StreamingDataSourceBuilder {
     pub fn new() -> Self {
         Self {
             initial_reconnect_delay: DEFAULT_INITIAL_RECONNECT_DELAY,
+            connector: None,
         }
     }
 
     /// Sets the initial reconnect delay for the streaming connection.
     pub fn initial_reconnect_delay(&mut self, duration: Duration) -> &mut Self {
         self.initial_reconnect_delay = duration;
+        self
+    }
+
+    /// Sets the [eventsource_client::HttpsConnector] for the event
+    /// source client to use. This allows for re-use of a connector between
+    /// multiple client instances. This is especially useful for the `sdk-test-harness`
+    /// where many client instances are created throughout the test and reading
+    /// the native certificates is a substantial portion of the runtime.
+    pub fn https_connector(&mut self, connector: HttpsConnector) -> &mut Self {
+        self.connector = Some(connector);
         self
     }
 }
@@ -73,12 +87,23 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
-        let data_source = StreamingDataSource::new(
-            endpoints.streaming_base_url(),
-            sdk_key,
-            self.initial_reconnect_delay,
-        )
+        let data_source = match &self.connector {
+            None => StreamingDataSource::new(
+                endpoints.streaming_base_url(),
+                sdk_key,
+                self.initial_reconnect_delay,
+                &tags,
+            ),
+            Some(connector) => StreamingDataSource::new_with_connector(
+                endpoints.streaming_base_url(),
+                sdk_key,
+                self.initial_reconnect_delay,
+                &tags,
+                connector.clone(),
+            ),
+        }
         .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
         Ok(Arc::new(data_source))
     }
@@ -108,6 +133,7 @@ impl DataSourceFactory for NullDataSourceBuilder {
         &self,
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
+        _: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         Ok(Arc::new(NullDataSource::new()))
     }
@@ -207,6 +233,7 @@ impl DataSourceFactory for PollingDataSourceBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>> =
             match &self.feature_requester_factory {
@@ -217,7 +244,8 @@ impl DataSourceFactory for PollingDataSourceBuilder {
                 )))),
             };
 
-        let data_source = PollingDataSource::new(feature_requester_factory, self.poll_interval);
+        let data_source =
+            PollingDataSource::new(feature_requester_factory, self.poll_interval, tags);
         Ok(Arc::new(data_source))
     }
 
@@ -261,6 +289,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         &self,
         _endpoints: &service_endpoints::ServiceEndpoints,
         _sdk_key: &str,
+        _tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         return Ok(self.data_source.as_ref().unwrap().clone());
     }

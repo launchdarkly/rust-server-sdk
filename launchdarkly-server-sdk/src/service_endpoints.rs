@@ -159,21 +159,17 @@ mod tests {
     #[test_case("localhost/", "localhost"; "trims trailing slash")]
     #[test_case("http://localhost/", "http://localhost"; "trims trailing slash with scheme")]
     #[test_case("localhost////////", "localhost"; "trims multiple trailing slashes")]
-    fn service_endpoints_trims_base_urls(
-        url: &str,
-        expected: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn service_endpoints_trims_base_urls(url: &str, expected: &str) {
         let endpoints = ServiceEndpointsBuilder::new()
             .polling_base_url(url)
             .streaming_base_url(url)
             .events_base_url(url)
-            .build()?;
+            .build()
+            .expect("Provided URLs should parse successfully");
 
         assert_eq!(expected, endpoints.events_base_url());
         assert_eq!(expected, endpoints.streaming_base_url());
         assert_eq!(expected, endpoints.polling_base_url());
-
-        Ok(())
     }
 
     #[test]

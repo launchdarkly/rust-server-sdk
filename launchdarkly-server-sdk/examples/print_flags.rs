@@ -87,7 +87,7 @@ async fn main() {
     loop {
         interval.tick().await;
 
-        for user in vec![&alice, &bob] {
+        for user in &[&alice, &bob] {
             for flag_key in &bool_flags {
                 let flag_detail = client.bool_variation_detail(user, flag_key, false);
                 info!(

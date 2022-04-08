@@ -1,8 +1,10 @@
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
-use launchdarkly_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User, VariationIndex};
+use launchdarkly_server_sdk_evaluation::{
+    Detail, Flag, FlagValue, Reason, User, UserAttributes, VariationIndex,
+};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 
@@ -33,8 +35,11 @@ pub struct BaseEvent {
     pub creation_date: u64,
     pub user: User,
 
-    // This will not be serialized. It must also always default to false.
+    // These attributes will not be serialized. They exist only to help serialize base event into
+    // the right structure
     inline: bool,
+    all_attribute_private: bool,
+    global_private_attributes: HashSet<String>,
 }
 
 impl Serialize for BaseEvent {
@@ -46,7 +51,12 @@ impl Serialize for BaseEvent {
         state.serialize_field("creationDate", &self.creation_date)?;
 
         if self.inline {
-            state.serialize_field("user", &self.user)?;
+            let user_attribute = UserAttributes::from_user(
+                self.user.clone(),
+                self.all_attribute_private,
+                &self.global_private_attributes,
+            );
+            state.serialize_field("user", &user_attribute)?;
         } else {
             state.serialize_field("userKey", &self.user.key())?;
         }
@@ -61,12 +71,20 @@ impl BaseEvent {
             creation_date,
             user,
             inline: false,
+            all_attribute_private: false,
+            global_private_attributes: HashSet::new(),
         }
     }
 
-    pub(crate) fn into_inline(self) -> Self {
+    pub(crate) fn into_inline(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<String>,
+    ) -> Self {
         Self {
             inline: true,
+            all_attribute_private,
+            global_private_attributes,
             ..self
         }
     }
@@ -97,13 +115,26 @@ pub struct FeatureRequestEvent {
 }
 
 impl FeatureRequestEvent {
-    pub fn to_index_event(&self) -> IndexEvent {
-        self.base.clone().into()
+    pub fn to_index_event(
+        &self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<String>,
+    ) -> IndexEvent {
+        self.base
+            .clone()
+            .into_inline(all_attribute_private, global_private_attributes)
+            .into()
     }
 
-    pub(crate) fn into_inline(self) -> Self {
+    pub(crate) fn into_inline(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<String>,
+    ) -> Self {
         Self {
-            base: self.base.into_inline(),
+            base: self
+                .base
+                .into_inline(all_attribute_private, global_private_attributes),
             ..self
         }
     }
@@ -134,9 +165,15 @@ pub struct IdentifyEvent {
 }
 
 impl IdentifyEvent {
-    pub(crate) fn into_inline(self) -> Self {
+    pub(crate) fn into_inline(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<String>,
+    ) -> Self {
         Self {
-            base: self.base.into_inline(),
+            base: self
+                .base
+                .into_inline(all_attribute_private, global_private_attributes),
             ..self
         }
     }
@@ -167,13 +204,26 @@ pub struct CustomEvent {
 }
 
 impl CustomEvent {
-    pub fn to_index_event(&self) -> IndexEvent {
-        self.base.clone().into()
+    pub fn to_index_event(
+        &self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<String>,
+    ) -> IndexEvent {
+        self.base
+            .clone()
+            .into_inline(all_attribute_private, global_private_attributes)
+            .into()
     }
 
-    pub(crate) fn into_inline(self) -> Self {
+    pub(crate) fn into_inline(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<String>,
+    ) -> Self {
         Self {
-            base: self.base.into_inline(),
+            base: self
+                .base
+                .into_inline(all_attribute_private, global_private_attributes),
             ..self
         }
     }
@@ -567,8 +617,7 @@ impl From<(&VariationKey, FlagValue, u64)> for VariationCounterOutput {
 
 #[cfg(test)]
 mod tests {
-    use maplit::hashmap;
-    use spectral::prelude::*;
+    use maplit::{hashmap, hashset};
 
     use super::*;
     use crate::test_common::basic_flag;
@@ -694,14 +743,15 @@ mod tests {
         feature_request_event.base_mut().unwrap().creation_date = 1234;
 
         if let InputEvent::FeatureRequest(feature_request_event) = feature_request_event {
-            let output_event = OutputEvent::FeatureRequest(feature_request_event.into_inline());
+            let output_event = OutputEvent::FeatureRequest(
+                feature_request_event.into_inline(false, HashSet::new()),
+            );
             let event_json = r#"{
   "kind": "feature",
   "creationDate": 1234,
   "user": {
     "key": "alice",
-    "anonymous": true,
-    "custom": {}
+    "anonymous": true
   },
   "key": "flag",
   "value": false,
@@ -716,8 +766,131 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
+        }
+    }
+
+    #[test]
+    fn serializes_feature_request_event_with_private_attributes() {
+        let flag = basic_flag("flag");
+        let default = FlagValue::from(false);
+        let user = User::with_key("alice".to_string())
+            .anonymous(true)
+            .secondary("Secondary")
+            .build();
+        let fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let event_factory = EventFactory::new(true);
+        let mut feature_request_event = event_factory.new_eval_event(
+            &flag.key.clone(),
+            user,
+            &flag,
+            fallthrough.clone(),
+            default.clone(),
+            None,
+        );
+        // fix creation date so JSON is predictable
+        feature_request_event.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::FeatureRequest(feature_request_event) = feature_request_event {
+            let output_event = OutputEvent::FeatureRequest(
+                feature_request_event.into_inline(false, hashset!["secondary".into()]),
+            );
+            let event_json = r#"{
+  "kind": "feature",
+  "creationDate": 1234,
+  "user": {
+    "key": "alice",
+    "anonymous": true,
+    "privateAttrs": [
+      "secondary"
+    ]
+  },
+  "key": "flag",
+  "value": false,
+  "variation": 1,
+  "default": false,
+  "reason": {
+    "kind": "FALLTHROUGH"
+  },
+  "version": 42,
+  "contextKind": "anonymousUser"
+}
+        "#
+            .trim();
+
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
+        }
+    }
+
+    #[test]
+    fn serializes_feature_request_event_with_all_private_attributes() {
+        let flag = basic_flag("flag");
+        let default = FlagValue::from(false);
+        let user = User::with_key("alice".to_string())
+            .anonymous(true)
+            .secondary("Secondary")
+            .build();
+        let fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let event_factory = EventFactory::new(true);
+        let mut feature_request_event = event_factory.new_eval_event(
+            &flag.key.clone(),
+            user,
+            &flag,
+            fallthrough.clone(),
+            default.clone(),
+            None,
+        );
+        // fix creation date so JSON is predictable
+        feature_request_event.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::FeatureRequest(feature_request_event) = feature_request_event {
+            let output_event = OutputEvent::FeatureRequest(
+                feature_request_event.into_inline(true, HashSet::new()),
+            );
+            let event_json = r#"{
+  "kind": "feature",
+  "creationDate": 1234,
+  "user": {
+    "key": "alice",
+    "privateAttrs": [
+      "secondary",
+      "anonymous"
+    ]
+  },
+  "key": "flag",
+  "value": false,
+  "variation": 1,
+  "default": false,
+  "reason": {
+    "kind": "FALLTHROUGH"
+  },
+  "version": 42,
+  "contextKind": "anonymousUser"
+}
+        "#
+            .trim();
+
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -765,8 +938,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -778,22 +952,22 @@ mod tests {
         identify.base_mut().unwrap().creation_date = 1234;
 
         if let InputEvent::Identify(identify) = identify {
-            let output_event = OutputEvent::Identify(identify.into_inline());
+            let output_event = OutputEvent::Identify(identify.into_inline(false, HashSet::new()));
             let event_json = r#"{
   "kind": "identify",
   "creationDate": 1234,
   "user": {
     "key": "alice",
-    "anonymous": true,
-    "custom": {}
+    "anonymous": true
   },
   "key": "alice"
 }
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -818,8 +992,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -835,14 +1010,13 @@ mod tests {
         custom_event.base_mut().unwrap().creation_date = 1234;
 
         if let InputEvent::Custom(custom_event) = custom_event {
-            let output_event = OutputEvent::Custom(custom_event.into_inline());
+            let output_event = OutputEvent::Custom(custom_event.into_inline(false, HashSet::new()));
             let event_json = r#"{
   "kind": "custom",
   "creationDate": 1234,
   "user": {
     "key": "alice",
-    "anonymous": true,
-    "custom": {}
+    "anonymous": true
   },
   "key": "custom-key",
   "metricValue": 12345.0,
@@ -851,8 +1025,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -880,8 +1055,9 @@ mod tests {
         "#
             .trim();
 
-            assert_that!(serde_json::to_string_pretty(&output_event))
-                .is_ok_containing(event_json.to_string());
+            let json = serde_json::to_string_pretty(&output_event);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap(), event_json.to_string());
         }
     }
 
@@ -918,8 +1094,9 @@ mod tests {
         "#
         .trim();
 
-        assert_that!(serde_json::to_string_pretty(&summary_event))
-            .is_ok_containing(event_json.to_string());
+        let json = serde_json::to_string_pretty(&summary_event);
+        assert!(json.is_ok());
+        assert_eq!(json.unwrap(), event_json.to_string());
     }
 
     #[test]
@@ -934,22 +1111,22 @@ mod tests {
   "creationDate": 1234,
   "user": {
     "key": "alice",
-    "anonymous": true,
-    "custom": {}
+    "anonymous": true
   }
 }
         "#
         .trim();
 
-        assert_that!(serde_json::to_string_pretty(&index_event))
-            .is_ok_containing(event_json.to_string());
+        let json = serde_json::to_string_pretty(&index_event);
+        assert!(json.is_ok());
+        assert_eq!(json.unwrap(), event_json.to_string());
     }
 
     #[test]
     fn summarises_feature_request() {
         let mut summary = EventSummary::new();
-        assert_that!(summary.is_empty()).is_true();
-        assert_that!(summary.start_date).is_greater_than(summary.end_date);
+        assert!(summary.is_empty());
+        assert!(summary.start_date > summary.end_date);
 
         let flag = basic_flag("flag");
         let default = FlagValue::from(false);
@@ -977,9 +1154,9 @@ mod tests {
         };
 
         summary.add(&fallthrough_request);
-        assert_that!(summary.is_empty()).is_false();
-        assert_that!(summary.start_date).is_equal_to(eval_at);
-        assert_that!(summary.end_date).is_equal_to(eval_at);
+        assert!(!summary.is_empty());
+        assert_eq!(summary.start_date, eval_at);
+        assert_eq!(summary.end_date, eval_at);
 
         let fallthrough_key = VariationKey {
             flag_key: flag.key,
@@ -988,19 +1165,22 @@ mod tests {
         };
 
         let fallthrough_summary = summary.features.get(&fallthrough_key);
-        asserting!("counts the eval for the flag key, version and variation")
-            .that(&fallthrough_summary)
-            .contains_value(&VariationSummary {
-                count: 1,
-                value,
-                default,
-            });
+        if let Some(VariationSummary {
+            count: c,
+            value: v,
+            default: d,
+        }) = fallthrough_summary
+        {
+            assert_eq!(*c, 1);
+            assert_eq!(*v, value);
+            assert_eq!(*d, default);
+        } else {
+            panic!("Fallthrough summary is wrong type");
+        }
 
         summary.add(&fallthrough_request);
         let fallthrough_summary = summary.features.get(&fallthrough_key).unwrap();
-        asserting!("another request for same variation increments the count")
-            .that(&fallthrough_summary.count)
-            .is_equal_to(2);
+        assert_eq!(fallthrough_summary.count, 2);
     }
 
     #[test]

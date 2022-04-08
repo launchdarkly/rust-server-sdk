@@ -1,4 +1,6 @@
 use crossbeam_channel::{bounded, select, tick, Receiver, Sender};
+use std::collections::HashSet;
+use std::iter::FromIterator;
 use std::time::SystemTime;
 use threadpool::ThreadPool;
 
@@ -172,8 +174,10 @@ impl EventDispatcher {
                 let will_send_full_user_details_in_event =
                     fre.track_events && self.events_configuration.inline_users_in_events;
                 if !will_send_full_user_details_in_event && first_time_seeing_user {
-                    self.outbox
-                        .add_event(OutputEvent::Index(fre.to_index_event()));
+                    self.outbox.add_event(OutputEvent::Index(fre.to_index_event(
+                        self.events_configuration.all_attributes_private,
+                        self.events_configuration.private_attributes.clone(),
+                    )));
                 }
 
                 let now = match SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
@@ -184,14 +188,20 @@ impl EventDispatcher {
                 if let Some(debug_events_until_date) = fre.debug_events_until_date {
                     let time = u128::from(debug_events_until_date);
                     if time > now && time > self.last_known_time {
-                        let event = fre.clone().into_inline();
+                        let event = fre.clone().into_inline(
+                            self.events_configuration.all_attributes_private,
+                            self.events_configuration.private_attributes.clone(),
+                        );
                         self.outbox.add_event(OutputEvent::Debug(event));
                     }
                 }
 
                 if fre.track_events {
                     let event = match self.events_configuration.inline_users_in_events {
-                        true => fre.into_inline(),
+                        true => fre.into_inline(
+                            self.events_configuration.all_attributes_private,
+                            self.events_configuration.private_attributes.clone(),
+                        ),
                         false => fre,
                     };
 
@@ -201,7 +211,12 @@ impl EventDispatcher {
             InputEvent::Identify(identify) => {
                 self.notice_user(&identify.base.user);
                 self.outbox
-                    .add_event(OutputEvent::Identify(identify.into_inline()));
+                    .add_event(OutputEvent::Identify(identify.into_inline(
+                        self.events_configuration.all_attributes_private,
+                        HashSet::from_iter(
+                            self.events_configuration.private_attributes.iter().cloned(),
+                        ),
+                    )));
             }
             InputEvent::Alias(alias) => {
                 self.outbox.add_event(OutputEvent::Alias(alias));
@@ -211,11 +226,19 @@ impl EventDispatcher {
                     && !self.events_configuration.inline_users_in_events
                 {
                     self.outbox
-                        .add_event(OutputEvent::Index(custom.to_index_event()));
+                        .add_event(OutputEvent::Index(custom.to_index_event(
+                            self.events_configuration.all_attributes_private,
+                            self.events_configuration.private_attributes.clone(),
+                        )));
                 }
 
                 let event = match self.events_configuration.inline_users_in_events {
-                    true => custom.into_inline(),
+                    true => custom.into_inline(
+                        self.events_configuration.all_attributes_private,
+                        HashSet::from_iter(
+                            self.events_configuration.private_attributes.iter().cloned(),
+                        ),
+                    ),
                     false => custom,
                 };
 

@@ -5,6 +5,7 @@ use crate::command_params::CommandParams;
 use actix_web::error::{ErrorBadRequest, ErrorInternalServerError};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
 use client_entity::ClientEntity;
+use eventsource_client::HttpsConnector;
 use futures::executor;
 use serde::{self, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -39,6 +40,13 @@ pub struct EventParameters {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct TagParams {
+    pub application_id: Option<String>,
+    pub application_version: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Configuration {
     pub credential: String,
 
@@ -50,6 +58,8 @@ pub struct Configuration {
     pub streaming: Option<StreamingParameters>,
 
     pub events: Option<EventParameters>,
+
+    pub tags: Option<TagParams>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -68,6 +78,7 @@ async fn status() -> impl Responder {
             "all-flags-with-reasons".to_string(),
             "all-flags-client-side-only".to_string(),
             "all-flags-details-only-for-tracked-flags".to_string(),
+            "tags".to_string(),
         ],
     })
 }
@@ -84,7 +95,12 @@ async fn create_client(
     create_instance_params: web::Json<CreateInstanceParams>,
     app_state: web::Data<AppState>,
 ) -> HttpResponse {
-    let client_entity = match ClientEntity::new(create_instance_params.into_inner()).await {
+    let client_entity = match ClientEntity::new(
+        create_instance_params.into_inner(),
+        &app_state.https_connector,
+    )
+    .await
+    {
         Ok(ce) => ce,
         Err(e) => return HttpResponse::InternalServerError().body(format!("{}", e)),
     };
@@ -172,6 +188,7 @@ async fn stop_client(req: HttpRequest, app_state: web::Data<AppState>) -> HttpRe
 struct AppState {
     counter: Mutex<u32>,
     client_entities: Mutex<HashMap<u32, ClientEntity>>,
+    https_connector: HttpsConnector,
 }
 
 #[actix_web::main]
@@ -183,6 +200,7 @@ async fn main() -> std::io::Result<()> {
     let state = web::Data::new(AppState {
         counter: Mutex::new(0),
         client_entities: Mutex::new(HashMap::new()),
+        https_connector: HttpsConnector::with_native_roots(),
     });
 
     let server = HttpServer::new(move || {

@@ -1,4 +1,4 @@
-use super::data_store::{DataStore, InMemoryDataStore};
+use super::store::{DataStore, InMemoryDataStore};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use thiserror::Error;

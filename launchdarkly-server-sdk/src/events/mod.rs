@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +17,8 @@ pub struct EventsConfiguration {
     inline_users_in_events: bool,
     user_keys_capacity: usize,
     user_keys_flush_interval: Duration,
+    all_attributes_private: bool,
+    private_attributes: HashSet<String>,
 }
 
 #[cfg(test)]
@@ -31,6 +34,8 @@ fn create_events_configuration(
         inline_users_in_events,
         user_keys_capacity: 5,
         user_keys_flush_interval: Duration::from_secs(100),
+        all_attributes_private: false,
+        private_attributes: HashSet::new(),
     }
 }
 
