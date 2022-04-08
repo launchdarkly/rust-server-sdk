@@ -110,7 +110,6 @@ mod tests {
     use std::time::Duration;
 
     use launchdarkly_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User};
-    use spectral::prelude::*;
     use test_case::test_case;
 
     use crate::{
@@ -180,7 +179,7 @@ mod tests {
         assert_eq!(expected_event_types.len(), events.len());
 
         for event_type in expected_event_types {
-            assert_that(&events).matching_contains(|event| event.kind() == event_type);
+            assert!(events.iter().find(|e| e.kind() == event_type).is_some());
         }
     }
 
@@ -302,24 +301,16 @@ mod tests {
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
 
         // detail_track_rule -> feature + index, detail_fallthrough -> feature, 1 summary
-        assert_that!(&events).has_length(2 + 1 + 1);
-
-        asserting!("emits feature events for rules that have track events enabled")
-            .that(
-                &events
-                    .iter()
-                    .filter(|event| event.kind() == "feature")
-                    .count(),
-            )
-            .is_equal_to(2);
-
-        asserting!("emits index event")
-            .that(&events)
-            .matching_contains(|event| event.kind() == "index");
-
-        asserting!("emits summary event")
-            .that(&events)
-            .matching_contains(|event| event.kind() == "summary");
+        assert_eq!(events.len(), 2 + 1 + 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind() == "feature")
+                .count(),
+            2
+        );
+        assert!(events.iter().find(|e| e.kind() == "index").is_some());
+        assert!(events.iter().find(|e| e.kind() == "summary").is_some());
     }
 
     #[test]
@@ -356,24 +347,22 @@ mod tests {
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
 
-        assert_that!(&events).has_length(2);
+        assert_eq!(events.len(), 2);
 
-        asserting!("emits index event only once")
-            .that(
-                &events
-                    .iter()
-                    .filter(|event| event.kind() == "index")
-                    .count(),
-            )
-            .is_equal_to(1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind() == "index")
+                .count(),
+            1
+        );
 
-        asserting!("emits summary event only once")
-            .that(
-                &events
-                    .iter()
-                    .filter(|event| event.kind() == "summary")
-                    .count(),
-            )
-            .is_equal_to(1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind() == "summary")
+                .count(),
+            1
+        );
     }
 }

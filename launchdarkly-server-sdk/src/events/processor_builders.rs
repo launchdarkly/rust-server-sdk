@@ -4,7 +4,8 @@ use super::processor::{
 use super::sender::{EventSender, ReqwestEventSender};
 use super::EventsConfiguration;
 
-use crate::service_endpoints;
+use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -34,6 +35,7 @@ pub trait EventProcessorFactory {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn EventProcessor>, BuildError>;
     fn to_owned(&self) -> Box<dyn EventProcessorFactory>;
 }
@@ -63,8 +65,8 @@ pub struct EventProcessorBuilder {
     user_keys_flush_interval: Duration,
     inline_users_in_events: bool,
     event_sender: Option<Arc<dyn EventSender>>,
-    // all_attributes_private: bool,
-    // private_attributes: Vec<String>,
+    all_attributes_private: bool,
+    private_attributes: HashSet<String>,
     // diagnostic_recording_interval: Duration
 }
 
@@ -73,13 +75,26 @@ impl EventProcessorFactory for EventProcessorBuilder {
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
+        tags: Option<String>,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         let url = format!("{}/bulk", endpoints.events_base_url());
         let url = reqwest::Url::parse(&url).map_err(|e| {
             BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
         })?;
 
-        let http = reqwest::Client::builder().build().map_err(|e| {
+        let mut builder = reqwest::Client::builder();
+
+        if let Some(tags) = tags {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.append(
+                LAUNCHDARKLY_TAGS_HEADER,
+                reqwest::header::HeaderValue::from_str(&tags)
+                    .map_err(|e| BuildError::InvalidConfig(e.to_string()))?,
+            );
+            builder = builder.default_headers(headers);
+        }
+
+        let http = builder.build().map_err(|e| {
             BuildError::InvalidConfig(format!("unable to build reqwest client: {}", e))
         })?;
 
@@ -95,6 +110,8 @@ impl EventProcessorFactory for EventProcessorBuilder {
             inline_users_in_events: self.inline_users_in_events,
             user_keys_capacity: self.user_keys_capacity,
             user_keys_flush_interval: self.user_keys_flush_interval,
+            all_attributes_private: self.all_attributes_private,
+            private_attributes: self.private_attributes.clone(),
         };
 
         let events_processor =
@@ -118,6 +135,8 @@ impl EventProcessorBuilder {
             user_keys_flush_interval: DEFAULT_USER_KEYS_FLUSH_INTERVAL,
             inline_users_in_events: false,
             event_sender: None,
+            all_attributes_private: false,
+            private_attributes: HashSet::new(),
         }
     }
 
@@ -164,6 +183,25 @@ impl EventProcessorBuilder {
         self
     }
 
+    /// Sets whether or not all optional user attributes should be hidden from LaunchDarkly.
+    ///
+    /// If this is true, all user attribute values (other than the key) will be private, not just the attributes
+    /// specified with private_attribute_names or on a per-user basis with UserBuilder methods. By default, it is false.
+    pub fn all_attributes_private(&mut self, all_attributes_private: bool) -> &mut Self {
+        self.all_attributes_private = all_attributes_private;
+        self
+    }
+
+    /// Marks a set of attribute names as always private.
+    ///
+    /// Any users sent to LaunchDarkly with this configuration active will have attributes with these
+    /// names removed. This is in addition to any attributes that were marked as private for an
+    /// individual user with UserBuilder methods. Setting all_attribute_private to true overrides this.
+    pub fn private_attribute_names(&mut self, attributes: HashSet<String>) -> &mut Self {
+        self.private_attributes = attributes;
+        self
+    }
+
     #[cfg(test)]
     pub fn event_sender(&mut self, event_sender: Arc<dyn EventSender>) -> &mut Self {
         self.event_sender = Some(event_sender);
@@ -187,6 +225,7 @@ impl EventProcessorFactory for NullEventProcessorBuilder {
         &self,
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
+        _: Option<String>,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         Ok(Arc::new(NullEventProcessor::new()))
     }
@@ -211,6 +250,13 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
+    use launchdarkly_server_sdk_evaluation::User;
+    use maplit::hashset;
+    use mockito::{mock, Matcher};
+    use test_case::test_case;
+
+    use crate::{events::event::EventFactory, ServiceEndpointsBuilder};
+
     use super::*;
 
     #[test]
@@ -253,5 +299,55 @@ mod tests {
         let mut builder = EventProcessorBuilder::new();
         builder.inline_users_in_events(true);
         assert!(builder.inline_users_in_events);
+    }
+
+    #[test]
+    fn all_attribute_private_can_be_adjusted() {
+        let mut builder = EventProcessorBuilder::new();
+
+        assert!(!builder.all_attributes_private);
+        builder.all_attributes_private(true);
+        assert!(builder.all_attributes_private);
+    }
+
+    #[test]
+    fn attribte_names_can_be_adjusted() {
+        let mut builder = EventProcessorBuilder::new();
+
+        assert!(builder.private_attributes.is_empty());
+        builder.private_attribute_names(hashset!["name".to_string()]);
+        assert!(builder.private_attributes.contains("name"));
+    }
+
+    #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
+    #[test_case(None, Matcher::Missing)]
+    fn processor_sends_correct_headers(tag: Option<String>, matcher: impl Into<Matcher>) {
+        let mock_endpoint = mock("POST", "/bulk")
+            .with_status(200)
+            .expect_at_least(1)
+            .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
+            .create();
+
+        let service_endpoints = ServiceEndpointsBuilder::new()
+            .events_base_url(&mockito::server_url())
+            .polling_base_url(&mockito::server_url())
+            .streaming_base_url(&mockito::server_url())
+            .build()
+            .expect("Service endpoints failed to be created");
+
+        let builder = EventProcessorBuilder::new();
+        let processor = builder
+            .build(&service_endpoints, "sdk-key", tag)
+            .expect("Processor failed to build");
+
+        let event_factory = EventFactory::new(false);
+
+        let user = User::with_key("bob").build();
+        let identify_event = event_factory.new_identify(user);
+
+        processor.send(identify_event);
+        processor.close();
+
+        mock_endpoint.assert();
     }
 }

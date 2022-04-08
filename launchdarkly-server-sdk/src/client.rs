@@ -14,9 +14,9 @@ use tokio::sync::{broadcast, Semaphore};
 use super::config::Config;
 use super::data_source::DataSource;
 use super::data_source_builders::BuildError as DataSourceError;
-use super::data_store::DataStore;
-use super::data_store_builders::BuildError as DataStoreError;
 use super::evaluation::{FlagDetail, FlagDetailConfig};
+use super::stores::store::DataStore;
+use super::stores::store_builders::BuildError as DataStoreError;
 use crate::events::event::EventFactory;
 use crate::events::event::InputEvent;
 use crate::events::processor::EventProcessor;
@@ -161,13 +161,17 @@ impl Client {
             info!("Started LaunchDarkly Client in offline mode");
         }
 
+        let tags = config.application_tag();
+
         let endpoints = config.service_endpoints_builder().build()?;
-        let event_processor = config
-            .event_processor_builder()
-            .build(&endpoints, config.sdk_key())?;
-        let data_source = config
-            .data_source_builder()
-            .build(&endpoints, config.sdk_key())?;
+        let event_processor =
+            config
+                .event_processor_builder()
+                .build(&endpoints, config.sdk_key(), tags.clone())?;
+        let data_source =
+            config
+                .data_source_builder()
+                .build(&endpoints, config.sdk_key(), tags.clone())?;
         let data_store = config.data_store_builder().build()?;
 
         let events_default = EventsScope {
@@ -699,15 +703,15 @@ impl Client {
                 match data_store.flag(flag_key) {
                     Some(flag) => {
                         let result = eval::evaluate(
-                            &*data_store.to_store(),
-                            flag,
+                            data_store.to_store(),
+                            &flag,
                             user,
                             Some(&*events_scope.prerequisite_event_recorder),
                         )
                         .map(|v| v.clone())
                         .or(default.clone().into());
 
-                        (Some(flag.clone()), result)
+                        (Some(flag), result)
                     }
                     None => (
                         None,
@@ -749,17 +753,16 @@ impl Client {
 mod tests {
     use crossbeam_channel::Receiver;
     use launchdarkly_server_sdk_evaluation::{Reason, User};
-    use spectral::prelude::*;
     use std::collections::HashMap;
 
     use tokio::time::Instant;
 
     use crate::data_source::MockDataSource;
     use crate::data_source_builders::MockDataSourceBuilder;
-    use crate::data_store::PatchTarget;
     use crate::events::create_event_sender;
     use crate::events::event::{OutputEvent, VariationKey};
     use crate::events::processor_builders::EventProcessorBuilder;
+    use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::{
         self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_off_flag,
     };
@@ -814,20 +817,26 @@ mod tests {
         let (client, _event_rx) = make_mocked_client();
 
         let result = client.variation_detail(&user, "myFlag", default.clone());
-        assert_that!(result.value).contains_value(default.clone());
+        assert_eq!(result.value.unwrap(), default.clone());
 
         client.start_with_default_executor();
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .upsert(
+                &flag.key,
+                PatchTarget::Flag(StorageItem::Item(flag.clone())),
+            )
             .expect("patch should apply");
 
         let result = client.variation_detail(&user, "myFlag", default);
-        assert_that!(result.value).contains_value(expected);
-        assert_that!(result.reason).is_equal_to(Reason::Fallthrough {
-            in_experiment: false,
-        });
+        assert_eq!(result.value.unwrap(), expected);
+        assert!(matches!(
+            result.reason,
+            Reason::Fallthrough {
+                in_experiment: false
+            }
+        ));
     }
 
     #[test]
@@ -837,20 +846,23 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
         let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&flag_value.as_bool().unwrap()).is_true();
+        assert!(flag_value.as_bool().unwrap());
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(2);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
@@ -858,7 +870,7 @@ mod tests {
                 version: Some(42),
                 variation: Some(1),
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -872,12 +884,12 @@ mod tests {
         let user = User::with_key("bob").build();
         let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&flag_value.as_bool().unwrap()).is_false();
+        assert!(!flag_value.as_bool().unwrap());
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(0);
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -888,14 +900,14 @@ mod tests {
 
         let flag_value = client.variation(&user, "non-existent-flag", FlagValue::Bool(false));
 
-        assert_that(&flag_value.as_bool().unwrap()).is_false();
+        assert!(!flag_value.as_bool().unwrap());
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(2);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
@@ -903,7 +915,7 @@ mod tests {
                 version: None,
                 variation: None,
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -920,24 +932,30 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(flag))
+            .upsert(
+                &flag.key,
+                PatchTarget::Flag(StorageItem::Item(flag.clone())),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
         let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
-        assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
-            in_experiment: false,
-        });
+        assert!(detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Fallthrough {
+                in_experiment: false
+            }
+        ));
         client.flush();
         client.close();
 
         let events = event_rx.try_iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(3);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("debug");
-        assert_that!(events[2].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "debug");
+        assert_eq!(events[2].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[2].clone() {
             let variation_key = VariationKey {
@@ -945,7 +963,7 @@ mod tests {
                 version: Some(42),
                 variation: Some(1),
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -959,23 +977,29 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
         let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
-        assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
-            in_experiment: false,
-        });
+        assert!(detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Fallthrough {
+                in_experiment: false
+            }
+        ));
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(2);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
@@ -983,7 +1007,7 @@ mod tests {
                 version: Some(42),
                 variation: Some(1),
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -998,15 +1022,18 @@ mod tests {
 
         let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
-        assert_that(&detail.reason).is_equal_to(Reason::Error {
-            error: eval::Error::ClientNotReady,
-        });
+        assert!(!detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Error {
+                error: eval::Error::ClientNotReady
+            }
+        ));
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(0);
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -1017,20 +1044,23 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_off_flag("myFlag")))
+            .upsert(
+                "myFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_off_flag("myFlag"))),
+            )
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
         let result = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&result.as_bool().unwrap()).is_false();
+        assert!(!result.as_bool().unwrap());
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(2);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
@@ -1038,7 +1068,7 @@ mod tests {
                 version: Some(42),
                 variation: None,
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -1055,7 +1085,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/prereqFlag", PatchTarget::Flag(basic_preqreq_flag))
+            .upsert(
+                "prereqFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_preqreq_flag)),
+            )
             .expect("patch should apply");
 
         let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
@@ -1063,25 +1096,28 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag))
+            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
         let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_true();
-        assert_that(&detail.reason).is_equal_to(Reason::Fallthrough {
-            in_experiment: false,
-        });
+        assert!(detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Fallthrough {
+                in_experiment: false
+            }
+        ));
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(4);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("feature");
-        assert_that!(events[2].kind()).is_equal_to("feature");
-        assert_that!(events[3].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "feature");
+        assert_eq!(events[2].kind(), "feature");
+        assert_eq!(events[3].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
@@ -1089,13 +1125,13 @@ mod tests {
                 version: Some(42),
                 variation: Some(1),
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
             let variation_key = VariationKey {
                 flag_key: "prereqFlag".into(),
                 version: Some(42),
                 variation: Some(1),
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         }
     }
 
@@ -1110,7 +1146,10 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/prereqFlag", PatchTarget::Flag(basic_preqreq_flag))
+            .upsert(
+                "prereqFlag",
+                PatchTarget::Flag(StorageItem::Item(basic_preqreq_flag)),
+            )
             .expect("patch should apply");
 
         let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
@@ -1118,22 +1157,22 @@ mod tests {
         client
             .data_store
             .write()
-            .patch("/flags/myFlag", PatchTarget::Flag(basic_flag))
+            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
             .expect("patch should apply");
         let user = User::with_key("bob").build();
 
         let detail = client.variation(&user, "myFlag", FlagValue::Bool(false));
 
-        assert_that(&detail.as_bool().unwrap()).is_false();
+        assert!(!detail.as_bool().unwrap());
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(4);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("feature");
-        assert_that!(events[2].kind()).is_equal_to("feature");
-        assert_that!(events[3].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "feature");
+        assert_eq!(events[2].kind(), "feature");
+        assert_eq!(events[3].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
@@ -1141,13 +1180,13 @@ mod tests {
                 version: Some(42),
                 variation: Some(0),
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
             let variation_key = VariationKey {
                 flag_key: "prereqFlag".into(),
                 version: Some(42),
                 variation: None,
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         }
     }
 
@@ -1159,17 +1198,20 @@ mod tests {
         let user = User::with_key("bob").build();
         let detail = client.variation_detail(&user, "non-existent-flag", FlagValue::Bool(false));
 
-        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
-        assert_that(&detail.reason).is_equal_to(Reason::Error {
-            error: eval::Error::FlagNotFound,
-        });
+        assert!(!detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Error {
+                error: eval::Error::FlagNotFound
+            }
+        ));
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(2);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
@@ -1177,7 +1219,7 @@ mod tests {
                 version: None,
                 variation: None,
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -1191,17 +1233,20 @@ mod tests {
 
         let detail = client.variation_detail(&user, "non-existent-flag", FlagValue::Bool(false));
 
-        assert_that(&detail.value.unwrap().as_bool().unwrap()).is_false();
-        assert_that(&detail.reason).is_equal_to(Reason::Error {
-            error: eval::Error::ClientNotReady,
-        });
+        assert!(!detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Error {
+                error: eval::Error::ClientNotReady
+            }
+        ));
         client.flush();
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(2);
-        assert_that!(events[0].kind()).is_equal_to("index");
-        assert_that!(events[1].kind()).is_equal_to("summary");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind(), "index");
+        assert_eq!(events[1].kind(), "summary");
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
@@ -1209,7 +1254,7 @@ mod tests {
                 version: None,
                 variation: None,
             };
-            assert_that!(event_summary.features).contains_key(variation_key);
+            assert!(event_summary.features.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -1227,8 +1272,8 @@ mod tests {
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(1);
-        assert_that!(events[0].kind()).is_equal_to("identify");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind(), "identify");
     }
 
     #[test]
@@ -1243,7 +1288,7 @@ mod tests {
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(0);
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -1271,8 +1316,8 @@ mod tests {
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(1);
-        assert_that!(events[0].kind()).is_equal_to("alias");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind(), "alias");
     }
 
     #[test]
@@ -1288,7 +1333,7 @@ mod tests {
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(0);
+        assert!(events.is_empty());
     }
 
     #[derive(Serialize)]
@@ -1322,18 +1367,18 @@ mod tests {
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(6);
+        assert_eq!(events.len(), 6);
 
         let mut events_by_type: HashMap<&str, usize> = HashMap::new();
-        for event in &*events {
+        for event in events {
             if let Some(count) = events_by_type.get_mut(event.kind()) {
                 *count += 1;
             } else {
                 events_by_type.insert(event.kind(), 1);
             }
         }
-        assert_that!(events_by_type.get("index")).contains_value(&1);
-        assert_that!(events_by_type.get("custom")).contains_value(&5);
+        assert!(matches!(events_by_type.get("index"), Some(1)));
+        assert!(matches!(events_by_type.get("custom"), Some(5)));
 
         Ok(())
     }
@@ -1364,7 +1409,7 @@ mod tests {
         client.close();
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_that!(&events).has_length(0);
+        assert!(events.is_empty());
 
         Ok(())
     }

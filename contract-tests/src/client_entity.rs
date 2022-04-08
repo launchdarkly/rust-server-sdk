@@ -1,3 +1,4 @@
+use eventsource_client::HttpsConnector;
 use std::time::Duration;
 
 const DEFAULT_POLLING_BASE_URL: &str = "https://sdk.launchdarkly.com";
@@ -5,8 +6,9 @@ const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 use launchdarkly_server_sdk::{
-    BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder, FlagDetailConfig, FlagValue,
-    NullEventProcessorBuilder, ServiceEndpointsBuilder, StreamingDataSourceBuilder,
+    ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
+    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, ServiceEndpointsBuilder,
+    StreamingDataSourceBuilder,
 };
 
 use crate::{
@@ -22,9 +24,25 @@ pub struct ClientEntity {
 }
 
 impl ClientEntity {
-    pub async fn new(create_instance_params: CreateInstanceParams) -> Result<Self, BuildError> {
+    pub async fn new(
+        create_instance_params: CreateInstanceParams,
+        connector: &HttpsConnector,
+    ) -> Result<Self, BuildError> {
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
+
+        let mut application_info = ApplicationInfo::new();
+        if let Some(tags) = create_instance_params.configuration.tags {
+            if let Some(id) = tags.application_id {
+                application_info.application_identifier(id);
+            }
+
+            if let Some(version) = tags.application_version {
+                application_info.application_version(version);
+            }
+        }
+
+        config_builder = config_builder.application_info(application_info);
 
         let mut service_endpoints_builder = ServiceEndpointsBuilder::new();
         service_endpoints_builder.streaming_base_url(DEFAULT_STREAM_BASE_URL);
@@ -40,6 +58,7 @@ impl ClientEntity {
             if let Some(delay) = streaming.initial_retry_delay_ms {
                 streaming_builder.initial_reconnect_delay(Duration::from_millis(delay));
             }
+            streaming_builder.https_connector(connector.clone());
 
             config_builder = config_builder.data_source(&streaming_builder);
         }
@@ -51,10 +70,16 @@ impl ClientEntity {
             if let Some(capacity) = events.capacity {
                 processor_builder.capacity(capacity);
             }
-            processor_builder.inline_users_in_events(events.inline_users);
+            processor_builder
+                .inline_users_in_events(events.inline_users)
+                .all_attributes_private(events.all_attributes_private);
 
             if let Some(interval) = events.flush_interval_ms {
                 processor_builder.flush_interval(Duration::from_millis(interval));
+            }
+
+            if let Some(attributes) = events.global_private_attributes {
+                processor_builder.private_attribute_names(attributes);
             }
 
             config_builder.event_processor(&processor_builder)

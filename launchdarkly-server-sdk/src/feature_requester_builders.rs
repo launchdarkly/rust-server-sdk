@@ -1,5 +1,6 @@
 use crate::feature_requester::FeatureRequester;
 use crate::feature_requester::ReqwestFeatureRequester;
+use crate::LAUNCHDARKLY_TAGS_HEADER;
 use reqwest as r;
 use thiserror::Error;
 
@@ -18,7 +19,7 @@ pub enum BuildError {
 /// to retrieve state information from an external resource such as the LaunchDarkly API.
 pub trait FeatureRequesterFactory: Send {
     /// Create an instance of FeatureRequester.
-    fn build(&self) -> Result<Box<dyn FeatureRequester>, BuildError>;
+    fn build(&self, tags: Option<String>) -> Result<Box<dyn FeatureRequester>, BuildError>;
 }
 
 pub struct ReqwestFeatureRequesterBuilder {
@@ -36,12 +37,24 @@ impl ReqwestFeatureRequesterBuilder {
 }
 
 impl FeatureRequesterFactory for ReqwestFeatureRequesterBuilder {
-    fn build(&self) -> Result<Box<dyn FeatureRequester>, BuildError> {
+    fn build(&self, tags: Option<String>) -> Result<Box<dyn FeatureRequester>, BuildError> {
         let mut url = reqwest::Url::parse(&self.url)
             .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
         url.set_path("/sdk/latest-all");
 
-        let http = r::Client::builder()
+        let mut builder = r::Client::builder();
+
+        if let Some(tags) = tags {
+            let mut headers = r::header::HeaderMap::new();
+            headers.append(
+                LAUNCHDARKLY_TAGS_HEADER,
+                r::header::HeaderValue::from_str(&tags)
+                    .map_err(|e| BuildError::InvalidConfig(e.to_string()))?,
+            );
+            builder = builder.default_headers(headers);
+        }
+
+        let http = builder
             .build()
             .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
 
@@ -61,7 +74,7 @@ mod tests {
     fn factory_handles_url_parsing_failure() {
         let builder =
             ReqwestFeatureRequesterBuilder::new("This is clearly not a valid URL", "sdk-key");
-        let result = builder.build();
+        let result = builder.build(None);
 
         match result {
             Err(BuildError::InvalidConfig(_)) => (),

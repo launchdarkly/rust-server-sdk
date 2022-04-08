@@ -1,32 +1,34 @@
+use es::{Client, ClientBuilder, HttpsConnector, ReconnectOptionsBuilder};
+use eventsource_client as es;
+use futures::StreamExt;
+use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use parking_lot::RwLock;
+use serde::Deserialize;
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 
-use eventsource_client as es;
-use eventsource_client::ReconnectOptionsBuilder;
-use futures::StreamExt;
-use launchdarkly_server_sdk_evaluation::{Flag, Segment};
-use serde::Deserialize;
-
-use crate::data_store::UpdateError;
+use super::stores::store_types::{AllData, DataKind, PatchTarget, StorageItem};
 use crate::feature_requester::FeatureRequesterError;
 use crate::feature_requester_builders::FeatureRequesterFactory;
+use crate::stores::store::{DataStore, UpdateError};
+use crate::LAUNCHDARKLY_TAGS_HEADER;
 
-use super::data_store::{AllData, DataStore, PatchTarget};
+const FLAGS_PREFIX: &str = "/flags/";
+const SEGMENTS_PREFIX: &str = "/segments/";
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum Error {
     InvalidEventData {
         event_type: String,
         error: Box<dyn std::error::Error + Send>,
     },
-    InvalidPutPath(String),
+    InvalidPath(String),
     InvalidUpdate(UpdateError),
     InvalidEventType(String),
-    MissingEventField(String, String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -64,18 +66,20 @@ pub trait DataSource: Send + Sync {
 }
 
 pub struct StreamingDataSource {
-    es_client: es::Client<es::HttpsConnector>,
+    es_client: Box<dyn Client>,
 }
 
 impl StreamingDataSource {
-    pub fn new(
+    fn new_builder(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
-    ) -> std::result::Result<Self, es::Error> {
+        tags: &Option<String>,
+    ) -> es::Result<ClientBuilder> {
         let stream_url = format!("{}/all", base_url);
-        let client_builder = es::Client::for_url(&stream_url)?;
-        let es_client = client_builder
+
+        let client_builder = ClientBuilder::for_url(&stream_url)?;
+        let mut client_builder = client_builder
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
                     .retry_initial(true)
@@ -83,10 +87,42 @@ impl StreamingDataSource {
                     .build(),
             )
             .header("Authorization", sdk_key)?
-            .header("User-Agent", &*crate::USER_AGENT)?
-            .build();
+            .header("User-Agent", &crate::USER_AGENT)?;
 
-        Ok(Self { es_client })
+        if let Some(tags) = tags {
+            client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
+        }
+
+        Ok(client_builder)
+    }
+
+    pub fn new(
+        base_url: &str,
+        sdk_key: &str,
+        initial_reconnect_delay: Duration,
+        tags: &Option<String>,
+    ) -> std::result::Result<Self, es::Error> {
+        let client_builder =
+            StreamingDataSource::new_builder(base_url, sdk_key, initial_reconnect_delay, tags)?;
+
+        Ok(Self {
+            es_client: Box::new(client_builder.build()),
+        })
+    }
+
+    pub fn new_with_connector(
+        base_url: &str,
+        sdk_key: &str,
+        initial_reconnect_delay: Duration,
+        tags: &Option<String>,
+        connector: HttpsConnector,
+    ) -> std::result::Result<Self, es::Error> {
+        let client_builder =
+            StreamingDataSource::new_builder(base_url, sdk_key, initial_reconnect_delay, tags)?;
+
+        Ok(Self {
+            es_client: Box::new(client_builder.build_with_conn(connector)),
+        })
     }
 }
 
@@ -97,7 +133,7 @@ impl DataSource for StreamingDataSource {
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
         shutdown_receiver: broadcast::Receiver<()>,
     ) {
-        let mut event_stream = Box::pin(self.es_client.stream()).fuse();
+        let mut event_stream = self.es_client.stream().fuse();
 
         tokio::spawn(async move {
             let shutdown_stream = BroadcastStream::new(shutdown_receiver);
@@ -110,11 +146,25 @@ impl DataSource for StreamingDataSource {
                     _ = shutdown_future => break,
                     event = event_stream.next() => {
                         let event = match event {
-                            Some(Ok(event)) => event,
+                            Some(Ok(event)) => match event {
+                                es::SSE::Comment(str)=> {
+                                    debug!("data source got a comment: {}", str);
+                                    continue;
+                                },
+                                es::SSE::Event(ev) => ev,
+                            },
                             Some(Err(e)) => {
                                 error!("error on event stream: {:?}", e);
-                                // TODO reconnect?
-                                break;
+
+                                match e {
+                                    es::Error::Eof => {
+                                        continue;
+                                    }
+                                    _ => {
+                                        debug!("unhandled error; break");
+                                        break;
+                                    }
+                                }
                             },
                             None => {
                                 error!("unexpected end of event stream");
@@ -152,16 +202,19 @@ impl DataSource for StreamingDataSource {
 pub struct PollingDataSource {
     feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>>,
     poll_interval: Duration,
+    tags: Option<String>,
 }
 
 impl PollingDataSource {
     pub fn new(
         feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>>,
         poll_interval: Duration,
+        tags: Option<String>,
     ) -> Self {
         Self {
             feature_requester_factory,
             poll_interval,
+            tags,
         }
     }
 }
@@ -174,7 +227,7 @@ impl DataSource for PollingDataSource {
         shutdown_receiver: broadcast::Receiver<()>,
     ) {
         let mut feature_requester = match self.feature_requester_factory.lock() {
-            Ok(factory) => match factory.build() {
+            Ok(factory) => match factory.build(self.tags.clone()) {
                 Ok(requester) => requester,
                 Err(e) => {
                     error!("{:?}", e);
@@ -271,15 +324,8 @@ impl DataSource for MockDataSource {
     }
 }
 
-fn event_field<'a>(event: &'a es::Event, field: &'a str) -> Result<&'a [u8]> {
-    event
-        .field(field)
-        .ok_or_else(|| Error::MissingEventField(event.event_type.clone(), field.to_string()))
-}
-
 fn parse_event_data<'a, T: Deserialize<'a>>(event: &'a es::Event) -> Result<T> {
-    let data = event_field(event, "data")?;
-    serde_json::from_slice(data).map_err(|e| Error::InvalidEventData {
+    serde_json::from_slice(event.data.as_ref()).map_err(|e| Error::InvalidEventData {
         event_type: event.event_type.clone(),
         error: Box::new(e),
     })
@@ -291,20 +337,166 @@ fn process_put(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
         data_store.init(put.data);
         Ok(())
     } else {
-        Err(Error::InvalidPutPath(put.path))
+        Err(Error::InvalidPath(put.path))
     }
 }
 
 fn process_patch(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let patch: PatchData = parse_event_data(&event)?;
+    let (_, key) = path_to_key(&patch.path)?;
+
     data_store
-        .patch(&patch.path, patch.data)
+        .upsert(key, patch.data)
         .map_err(Error::InvalidUpdate)
 }
 
 fn process_delete(data_store: &mut dyn DataStore, event: es::Event) -> Result<()> {
     let delete: DeleteData = parse_event_data(&event)?;
-    data_store
-        .delete(&delete.path, delete.version)
-        .map_err(Error::InvalidUpdate)
+    let (kind, key) = path_to_key(&delete.path)?;
+    let target = match kind {
+        DataKind::Flag => PatchTarget::Flag(StorageItem::Tombstone(delete.version)),
+        DataKind::Segment => PatchTarget::Segment(StorageItem::Tombstone(delete.version)),
+    };
+
+    data_store.upsert(key, target).map_err(Error::InvalidUpdate)
+}
+
+fn path_to_key(path: &str) -> Result<(DataKind, &str)> {
+    if let Some(flag_key) = path.strip_prefix(FLAGS_PREFIX) {
+        Ok((DataKind::Flag, flag_key))
+    } else if let Some(segment_key) = path.strip_prefix(SEGMENTS_PREFIX) {
+        Ok((DataKind::Segment, segment_key))
+    } else {
+        Err(Error::InvalidPath(path.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
+
+    use mockito::{mock, Matcher};
+    use parking_lot::RwLock;
+    use test_case::test_case;
+    use tokio::sync::broadcast;
+
+    use super::{DataSource, PollingDataSource, StreamingDataSource};
+    use crate::{
+        feature_requester_builders::ReqwestFeatureRequesterBuilder,
+        stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER,
+    };
+
+    #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
+    #[test_case(None, Matcher::Missing)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn streaming_source_passes_along_tags_header(
+        tag: Option<String>,
+        matcher: impl Into<Matcher>,
+    ) {
+        let mock_endpoint = mock("GET", "/all")
+            .with_status(200)
+            .with_body("event:one\ndata:One\n\n")
+            .expect_at_least(1)
+            .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
+            .create();
+
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        let initialized = Arc::new(AtomicBool::new(false));
+
+        let streaming = StreamingDataSource::new(
+            &mockito::server_url(),
+            "sdk-key",
+            Duration::from_secs(0),
+            &tag,
+        )
+        .unwrap();
+
+        let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+
+        let init_state = initialized.clone();
+        streaming.subscribe(
+            data_store,
+            Arc::new(move |success| init_state.store(success, Ordering::SeqCst)),
+            shutdown_tx.subscribe(),
+        );
+
+        let mut attempts = 0;
+        loop {
+            if initialized.load(Ordering::SeqCst) {
+                break;
+            }
+
+            attempts += 1;
+            if attempts > 10 {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = shutdown_tx.send(());
+
+        mock_endpoint.assert();
+    }
+
+    #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
+    #[test_case(None, Matcher::Missing)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn polling_source_passes_along_tags_header(
+        tag: Option<String>,
+        matcher: impl Into<Matcher>,
+    ) {
+        let mock_endpoint = mock("GET", "/sdk/latest-all")
+            .with_status(200)
+            .with_body("{}")
+            .expect_at_least(1)
+            .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
+            .create();
+
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        let initialized = Arc::new(AtomicBool::new(false));
+
+        let reqwest_builder =
+            ReqwestFeatureRequesterBuilder::new(&mockito::server_url(), "sdk-key");
+
+        let polling = PollingDataSource::new(
+            Arc::new(Mutex::new(Box::new(reqwest_builder))),
+            Duration::from_secs(10),
+            tag,
+        );
+
+        let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+
+        let init_state = initialized.clone();
+        polling.subscribe(
+            data_store,
+            Arc::new(move |success| init_state.store(success, Ordering::SeqCst)),
+            shutdown_tx.subscribe(),
+        );
+
+        let mut attempts = 0;
+        loop {
+            if initialized.load(Ordering::SeqCst) {
+                break;
+            }
+
+            attempts += 1;
+            if attempts > 10 {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = shutdown_tx.send(());
+
+        mock_endpoint.assert();
+    }
 }

@@ -1,11 +1,113 @@
 use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
-use crate::data_store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
 use crate::events::processor_builders::{
     EventProcessorBuilder, EventProcessorFactory, NullEventProcessorBuilder,
 };
+use crate::stores::store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
 use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};
 
 use std::borrow::Borrow;
+
+#[derive(Debug)]
+struct Tag {
+    key: String,
+    value: String,
+}
+
+impl Tag {
+    fn is_valid(&self) -> bool {
+        if self.key.is_empty() || !self.key.chars().all(Tag::valid_characters) {
+            return false;
+        }
+
+        if self.value.is_empty() || !self.value.chars().all(Tag::valid_characters) {
+            return false;
+        }
+
+        true
+    }
+
+    fn valid_characters(c: char) -> bool {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_')
+    }
+}
+
+impl ToString for &Tag {
+    fn to_string(&self) -> String {
+        format!("{}/{}", self.key, self.value)
+    }
+}
+
+/// ApplicationInfo allows configuration of application metadata.
+///
+/// If you want to set non-default values for any of these fields, create a new instance with
+/// [ApplicationInfo::new] and pass it to [ConfigBuilder::application_info].
+pub struct ApplicationInfo {
+    tags: Vec<Tag>,
+}
+
+impl ApplicationInfo {
+    /// Create a new default instance of [ApplicationInfo].
+    pub fn new() -> Self {
+        Self { tags: Vec::new() }
+    }
+
+    /// A unique identifier representing the application where the LaunchDarkly SDK is running.
+    ///
+    /// This can be specified as any string value as long as it only uses the following characters:
+    /// ASCII letters, ASCII digits, period, hyphen, underscore. A string containing any other
+    /// characters will be ignored.
+    pub fn application_identifier(&mut self, application_id: impl Into<String>) -> &mut Self {
+        self.add_tag("application-id", application_id)
+    }
+
+    /// A unique identifier representing the version of the application where the LaunchDarkly SDK
+    /// is running.
+    ///
+    /// This can be specified as any string value as long as it only uses the following characters:
+    /// ASCII letters, ASCII digits, period, hyphen, underscore. A string containing any other
+    /// characters will be ignored.
+    pub fn application_version(&mut self, application_version: impl Into<String>) -> &mut Self {
+        self.add_tag("application-version", application_version)
+    }
+
+    fn add_tag(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+        let tag = Tag {
+            key: key.into(),
+            value: value.into(),
+        };
+
+        if !tag.is_valid() {
+            warn!("{:?} is not a valid tag. Ignoring.", tag);
+        } else {
+            self.tags.push(tag);
+        }
+
+        self
+    }
+
+    pub(crate) fn build(&self) -> Option<String> {
+        if self.tags.is_empty() {
+            return None;
+        }
+
+        let mut tags = self
+            .tags
+            .iter()
+            .map(|tag| tag.to_string())
+            .collect::<Vec<String>>();
+
+        tags.sort();
+        tags.dedup();
+
+        Some(tags.join(" "))
+    }
+}
+
+impl Default for ApplicationInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Immutable configuration object for [crate::Client].
 ///
@@ -16,6 +118,7 @@ pub struct Config {
     data_store_builder: Box<dyn DataStoreFactory>,
     data_source_builder: Box<dyn DataSourceFactory>,
     event_processor_builder: Box<dyn EventProcessorFactory>,
+    application_tag: Option<String>,
     offline: bool,
 }
 
@@ -49,6 +152,11 @@ impl Config {
     pub fn offline(&self) -> bool {
         self.offline
     }
+
+    /// Returns the tag builder if provided
+    pub fn application_tag(&self) -> &Option<String> {
+        &self.application_tag
+    }
 }
 
 /// Used to create a [Config] struct for creating [crate::Client] instances.
@@ -63,6 +171,7 @@ pub struct ConfigBuilder {
     data_store_builder: Option<Box<dyn DataStoreFactory>>,
     data_source_builder: Option<Box<dyn DataSourceFactory>>,
     event_processor_builder: Option<Box<dyn EventProcessorFactory>>,
+    application_info: Option<ApplicationInfo>,
     offline: bool,
     sdk_key: String,
 }
@@ -76,9 +185,11 @@ impl ConfigBuilder {
             data_source_builder: None,
             event_processor_builder: None,
             offline: false,
+            application_info: None,
             sdk_key: sdk_key.to_string(),
         }
     }
+
     /// Set the URLs to use for this client. For usage see [ServiceEndpointsBuilder]
     pub fn service_endpoints(mut self, builder: &ServiceEndpointsBuilder) -> Self {
         self.service_endpoints_builder = Some(builder.clone());
@@ -118,6 +229,15 @@ impl ConfigBuilder {
         self
     }
 
+    /// Provides configuration of application metadata.
+    ///
+    /// These properties are optional and informational. They may be used in LaunchDarkly analytics
+    /// or other product features, but they do not affect feature flag evaluations.
+    pub fn application_info(mut self, application_info: ApplicationInfo) -> Self {
+        self.application_info = Some(application_info);
+        self
+    }
+
     /// Create a new instance of [Config] based on the [ConfigBuilder] configuration.
     pub fn build(self) -> Config {
         let service_endpoints_builder = match &self.service_endpoints_builder {
@@ -151,12 +271,18 @@ impl ConfigBuilder {
                 Some(_event_processor_builder) => self.event_processor_builder.unwrap(),
             };
 
+        let application_tag = match self.application_info {
+            Some(tb) => tb.build(),
+            _ => None,
+        };
+
         Config {
             sdk_key: self.sdk_key,
             service_endpoints_builder,
             data_store_builder,
             data_source_builder,
             event_processor_builder,
+            application_tag,
             offline: self.offline,
         }
     }
@@ -164,6 +290,8 @@ impl ConfigBuilder {
 
 #[cfg(test)]
 mod tests {
+    use test_case::test_case;
+
     use super::*;
 
     #[test]
@@ -182,5 +310,73 @@ mod tests {
             "http://my-relay-hostname:8080"
         );
         assert_eq!(endpoints.events_base_url(), "http://my-relay-hostname:8080");
+    }
+
+    #[test]
+    fn unconfigured_config_builder_handles_application_tags_correctly() {
+        let builder = ConfigBuilder::new("sdk-key");
+        let config = builder.build();
+
+        assert_eq!(None, config.application_tag);
+    }
+
+    #[test_case("id", "version", Some("application-id/id application-version/version".to_string()))]
+    #[test_case("Invalid id", "version", Some("application-version/version".to_string()))]
+    #[test_case("id", "Invalid version", Some("application-id/id".to_string()))]
+    #[test_case("Invalid id", "Invalid version", None)]
+    fn config_builder_handles_application_tags_appropriately(
+        id: impl Into<String>,
+        version: impl Into<String>,
+        expected: Option<String>,
+    ) {
+        let mut application_info = ApplicationInfo::new();
+        application_info
+            .application_identifier(id)
+            .application_version(version);
+        let builder = ConfigBuilder::new("sdk-key");
+        let config = builder.application_info(application_info).build();
+
+        assert_eq!(expected, config.application_tag);
+    }
+
+    #[test_case("", "abc", false; "Empty key")]
+    #[test_case(" ", "abc", false; "Key with whitespace")]
+    #[test_case("/", "abc", false; "Key with slash")]
+    #[test_case(":", "abc", false; "Key with colon")]
+    #[test_case("🦀", "abc", false; "Key with emoji")]
+    #[test_case("abcABC123.-_", "abc", true; "Valid key")]
+    #[test_case("abc", "", false; "Empty value")]
+    #[test_case("abc", " ", false; "Value with whitespace")]
+    #[test_case("abc", "/", false; "Value with slash")]
+    #[test_case("abc", ":", false; "Value with colon")]
+    #[test_case("abc", "🦀", false; "Value with emoji")]
+    #[test_case("abc", "abcABC123.-_", true; "Valid value")]
+    fn tag_can_determine_valid_values(key: &str, value: &str, is_valid: bool) {
+        let tag = Tag {
+            key: key.to_string(),
+            value: value.to_string(),
+        };
+        assert_eq!(is_valid, tag.is_valid());
+    }
+
+    #[test_case(vec![], None; "No tags returns None")]
+    #[test_case(vec![("application-id".into(), "gonfalon-be".into()), ("application-sha".into(), "abcdef".into())], Some("application-id/gonfalon-be application-sha/abcdef".into()); "Tags are formatted correctly")]
+    #[test_case(vec![("key".into(), "xyz".into()), ("key".into(), "abc".into())], Some("key/abc key/xyz".into()); "Keys are ordered correctly")]
+    #[test_case(vec![("key".into(), "abc".into()), ("key".into(), "abc".into())], Some("key/abc".into()); "Tags are deduped")]
+    #[test_case(vec![("XYZ".into(), "xyz".into()), ("abc".into(), "abc".into())], Some("XYZ/xyz abc/abc".into()); "Keys are ascii sorted correctly")]
+    #[test_case(vec![("abc".into(), "XYZ".into()), ("abc".into(), "abc".into())], Some("abc/XYZ abc/abc".into()); "Values are ascii sorted correctly")]
+    #[test_case(vec![("".into(), "XYZ".into()), ("abc".into(), "xyz".into())], Some("abc/xyz".into()); "Invalid tags are filtered")]
+    #[test_case(Vec::new(), None; "Empty tags returns None")]
+    fn application_tag_builder_can_create_tag_string_correctly(
+        tags: Vec<(String, String)>,
+        expected_value: Option<String>,
+    ) {
+        let mut application_info = ApplicationInfo::new();
+
+        tags.into_iter().for_each(|(key, value)| {
+            application_info.add_tag(key, value);
+        });
+
+        assert_eq!(expected_value, application_info.build());
     }
 }
