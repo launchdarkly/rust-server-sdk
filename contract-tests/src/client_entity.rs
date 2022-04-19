@@ -49,6 +49,18 @@ impl ClientEntity {
         service_endpoints_builder.polling_base_url(DEFAULT_POLLING_BASE_URL);
         service_endpoints_builder.events_base_url(DEFAULT_EVENTS_BASE_URL);
 
+        if let Some(endpoints) = create_instance_params.configuration.service_endpoints {
+            if let Some(streaming) = endpoints.streaming {
+                service_endpoints_builder.streaming_base_url(&streaming);
+            }
+            if let Some(polling) = endpoints.polling {
+                service_endpoints_builder.polling_base_url(&polling);
+            }
+            if let Some(events) = endpoints.events {
+                service_endpoints_builder.events_base_url(&events);
+            }
+        }
+
         if let Some(streaming) = create_instance_params.configuration.streaming {
             if let Some(base_uri) = streaming.base_uri {
                 service_endpoints_builder.streaming_base_url(&base_uri);
@@ -64,7 +76,9 @@ impl ClientEntity {
         }
 
         config_builder = if let Some(events) = create_instance_params.configuration.events {
-            service_endpoints_builder.events_base_url(&events.base_uri);
+            if let Some(base_uri) = events.base_uri {
+                service_endpoints_builder.events_base_url(&base_uri);
+            }
 
             let mut processor_builder = EventProcessorBuilder::new();
             if let Some(capacity) = events.capacity {

@@ -27,7 +27,7 @@ pub struct StreamingParameters {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct EventParameters {
-    pub base_uri: String,
+    pub base_uri: Option<String>,
     pub capacity: Option<usize>,
     pub enable_diagnostics: bool,
     #[serde(default = "bool::default")]
@@ -47,6 +47,14 @@ pub struct TagParams {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct ServiceEndpointParameters {
+    pub streaming: Option<String>,
+    pub polling: Option<String>,
+    pub events: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Configuration {
     pub credential: String,
 
@@ -60,6 +68,8 @@ pub struct Configuration {
     pub events: Option<EventParameters>,
 
     pub tags: Option<TagParams>,
+
+    pub service_endpoints: Option<ServiceEndpointParameters>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -79,6 +89,7 @@ async fn status() -> impl Responder {
             "all-flags-client-side-only".to_string(),
             "all-flags-details-only-for-tracked-flags".to_string(),
             "tags".to_string(),
+            "service-endpoints".to_string(),
         ],
     })
 }
