@@ -482,6 +482,8 @@ impl EventSummary {
 
     pub fn reset(&mut self) {
         self.features.clear();
+        self.start_date = std::u64::MAX;
+        self.end_date = 0;
     }
 }
 
@@ -1097,6 +1099,25 @@ mod tests {
         let json = serde_json::to_string_pretty(&summary_event);
         assert!(json.is_ok());
         assert_eq!(json.unwrap(), event_json.to_string());
+    }
+
+    #[test]
+    fn summary_resets_appropriately() {
+        let mut summary = EventSummary {
+            start_date: 1234,
+            end_date: 4567,
+            features: hashmap! {
+                VariationKey{flag_key: "f".into(), version: Some(2), variation: Some(1)} => VariationSummary{count: 1, value: true.into(), default: false.into()},
+            },
+        };
+
+        summary.reset();
+
+        assert!(summary.features.is_empty());
+        assert_eq!(summary.start_date, std::u64::MAX);
+        assert_eq!(summary.end_date, 0);
+
+        assert_eq!(summary, EventSummary::default());
     }
 
     #[test]
