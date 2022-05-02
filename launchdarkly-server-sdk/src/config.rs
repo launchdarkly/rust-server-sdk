@@ -14,16 +14,20 @@ struct Tag {
 }
 
 impl Tag {
-    fn is_valid(&self) -> bool {
+    fn is_valid(&self) -> Result<(), &str> {
+        if self.value.chars().count() > 64 {
+            return Err("Value was longer than 64 characters and was discarded");
+        }
+
         if self.key.is_empty() || !self.key.chars().all(Tag::valid_characters) {
-            return false;
+            return Err("Key was empty or contained invalid characters");
         }
 
         if self.value.is_empty() || !self.value.chars().all(Tag::valid_characters) {
-            return false;
+            return Err("Value was empty or contained invalid characters");
         }
 
-        true
+        Ok(())
     }
 
     fn valid_characters(c: char) -> bool {
@@ -76,10 +80,11 @@ impl ApplicationInfo {
             value: value.into(),
         };
 
-        if !tag.is_valid() {
-            warn!("{:?} is not a valid tag. Ignoring.", tag);
-        } else {
-            self.tags.push(tag);
+        match tag.is_valid() {
+            Ok(_) => self.tags.push(tag),
+            Err(e) => {
+                warn!("{}", e)
+            }
         }
 
         self
@@ -339,24 +344,26 @@ mod tests {
         assert_eq!(expected, config.application_tag);
     }
 
-    #[test_case("", "abc", false; "Empty key")]
-    #[test_case(" ", "abc", false; "Key with whitespace")]
-    #[test_case("/", "abc", false; "Key with slash")]
-    #[test_case(":", "abc", false; "Key with colon")]
-    #[test_case("🦀", "abc", false; "Key with emoji")]
-    #[test_case("abcABC123.-_", "abc", true; "Valid key")]
-    #[test_case("abc", "", false; "Empty value")]
-    #[test_case("abc", " ", false; "Value with whitespace")]
-    #[test_case("abc", "/", false; "Value with slash")]
-    #[test_case("abc", ":", false; "Value with colon")]
-    #[test_case("abc", "🦀", false; "Value with emoji")]
-    #[test_case("abc", "abcABC123.-_", true; "Valid value")]
-    fn tag_can_determine_valid_values(key: &str, value: &str, is_valid: bool) {
+    #[test_case("", "abc", Err("Key was empty or contained invalid characters"); "Empty key")]
+    #[test_case(" ", "abc", Err("Key was empty or contained invalid characters"); "Key with whitespace")]
+    #[test_case("/", "abc", Err("Key was empty or contained invalid characters"); "Key with slash")]
+    #[test_case(":", "abc", Err("Key was empty or contained invalid characters"); "Key with colon")]
+    #[test_case("🦀", "abc", Err("Key was empty or contained invalid characters"); "Key with emoji")]
+    #[test_case("abcABC123.-_", "abc", Ok(()); "Valid key")]
+    #[test_case("abc", "", Err("Value was empty or contained invalid characters"); "Empty value")]
+    #[test_case("abc", " ", Err("Value was empty or contained invalid characters"); "Value with whitespace")]
+    #[test_case("abc", "/", Err("Value was empty or contained invalid characters"); "Value with slash")]
+    #[test_case("abc", ":", Err("Value was empty or contained invalid characters"); "Value with colon")]
+    #[test_case("abc", "🦀", Err("Value was empty or contained invalid characters"); "Value with emoji")]
+    #[test_case("abc", "abcABC123.-_", Ok(()); "Valid value")]
+    #[test_case("abc", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl", Ok(()); "64 is the max length")]
+    #[test_case("abc", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm", Err("Value was longer than 64 characters and was discarded"); "65 is too far")]
+    fn tag_can_determine_valid_values(key: &str, value: &str, expected_result: Result<(), &str>) {
         let tag = Tag {
             key: key.to_string(),
             value: value.to_string(),
         };
-        assert_eq!(is_valid, tag.is_valid());
+        assert_eq!(expected_result, tag.is_valid());
     }
 
     #[test_case(vec![], None; "No tags returns None")]
