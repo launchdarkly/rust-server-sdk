@@ -2,8 +2,8 @@ version: 2
 jobs:
   build:
     docker:
-      - image: cimg/rust:1.59.0
-    resource_class: medium+
+      - image: cimg/rust:1.60.0
+    resource_class: large
     steps:
       - checkout
       - run:
