@@ -1,11 +1,15 @@
-use es::{Client, ClientBuilder, HttpsConnector, ReconnectOptionsBuilder};
+use es::{Client, ClientBuilder, ReconnectOptionsBuilder};
 use eventsource_client as es;
 use futures::StreamExt;
+use hyper::client::connect::Connection;
+use hyper::service::Service;
+use hyper::Uri;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use parking_lot::RwLock;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
@@ -110,13 +114,19 @@ impl StreamingDataSource {
         })
     }
 
-    pub fn new_with_connector(
+    pub fn new_with_connector<C>(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
         tags: &Option<String>,
-        connector: HttpsConnector,
-    ) -> std::result::Result<Self, es::Error> {
+        connector: C,
+    ) -> std::result::Result<Self, es::Error>
+    where
+        C: Service<Uri> + Clone + Send + Sync + 'static,
+        C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+        C::Future: Send + 'static,
+        C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
         let client_builder =
             StreamingDataSource::new_builder(base_url, sdk_key, initial_reconnect_delay, tags)?;
 

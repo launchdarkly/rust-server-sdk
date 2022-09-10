@@ -1,3 +1,5 @@
+use eventsource_client::HttpsConnector;
+
 use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
 use crate::events::processor_builders::{
     EventProcessorBuilder, EventProcessorFactory, NullEventProcessorBuilder,
@@ -256,7 +258,7 @@ impl ConfigBuilder {
                 warn!("Custom data source builders will be ignored when in offline mode");
                 Box::new(NullDataSourceBuilder::new())
             }
-            None => Box::new(StreamingDataSourceBuilder::new()),
+            None => Box::new(StreamingDataSourceBuilder::<HttpsConnector>::new()),
             Some(_data_source_builder) => self.data_source_builder.unwrap(),
         };
 
