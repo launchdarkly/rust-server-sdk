@@ -26,6 +26,13 @@ pub struct StreamingParameters {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct PollingParameters {
+    pub base_uri: Option<String>,
+    pub poll_interval_ms: Option<u64>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct EventParameters {
     pub base_uri: Option<String>,
     pub capacity: Option<usize>,
@@ -65,6 +72,8 @@ pub struct Configuration {
 
     pub streaming: Option<StreamingParameters>,
 
+    pub polling: Option<PollingParameters>,
+
     pub events: Option<EventParameters>,
 
     pub tags: Option<TagParams>,
@@ -84,6 +93,7 @@ async fn status() -> impl Responder {
     web::Json(Status {
         capabilities: vec![
             "server-side".to_string(),
+            "server-side-polling".to_string(),
             "strongly-typed".to_string(),
             "all-flags-with-reasons".to_string(),
             "all-flags-client-side-only".to_string(),

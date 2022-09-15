@@ -57,7 +57,12 @@ impl FeatureRequester for ReqwestFeatureRequester {
         let mut response = match resp {
             Ok(response) => response,
             Err(e) => {
-                error!("An error occurred while retrieving flag information: {}", e);
+                error!(
+                    "An error occurred while retrieving flag information {} (status: {})",
+                    e,
+                    e.status()
+                        .map_or(String::from("none"), |s| s.as_str().to_string())
+                );
                 return Err(match e.status() {
                     Some(status_code) if is_http_error_recoverable(status_code) => {
                         FeatureRequesterError::Temporary
@@ -94,7 +99,14 @@ impl FeatureRequester for ReqwestFeatureRequester {
                     Err(FeatureRequesterError::Permanent)
                 }
             };
-        } else if !is_http_error_recoverable(response.status()) {
+        }
+
+        error!(
+            "An error occurred while retrieving flag information. (status: {})",
+            response.status().as_str()
+        );
+
+        if !is_http_error_recoverable(response.status()) {
             return Err(FeatureRequesterError::Permanent);
         }
 

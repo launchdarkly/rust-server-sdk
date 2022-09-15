@@ -7,8 +7,8 @@ const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 use launchdarkly_server_sdk::{
     ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
-    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, ServiceEndpointsBuilder,
-    StreamingDataSourceBuilder,
+    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
+    ServiceEndpointsBuilder, StreamingDataSourceBuilder,
 };
 
 use crate::{
@@ -73,6 +73,17 @@ impl ClientEntity {
             streaming_builder.https_connector(connector.clone());
 
             config_builder = config_builder.data_source(&streaming_builder);
+        } else if let Some(polling) = create_instance_params.configuration.polling {
+            if let Some(base_uri) = polling.base_uri {
+                service_endpoints_builder.polling_base_url(&base_uri);
+            }
+
+            let mut polling_builder = PollingDataSourceBuilder::new();
+            if let Some(delay) = polling.poll_interval_ms {
+                polling_builder.poll_interval(Duration::from_millis(delay));
+            }
+
+            config_builder = config_builder.data_source(&polling_builder);
         }
 
         config_builder = if let Some(events) = create_instance_params.configuration.events {
