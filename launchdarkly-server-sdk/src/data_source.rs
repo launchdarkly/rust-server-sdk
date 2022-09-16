@@ -260,7 +260,6 @@ impl DataSource for PollingDataSource {
                             }
                             Err(FeatureRequesterError::Temporary) => {
                                 warn!("feature requester has returned a temporary failure");
-                                notify_init.call_once(|| init_complete(false))
                             }
                             Err(FeatureRequesterError::Permanent) => {
                                 error!("feature requester has returned a permanent failure");

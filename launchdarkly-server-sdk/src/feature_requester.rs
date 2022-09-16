@@ -64,10 +64,13 @@ impl FeatureRequester for ReqwestFeatureRequester {
                         .map_or(String::from("none"), |s| s.as_str().to_string())
                 );
                 return Err(match e.status() {
-                    Some(status_code) if is_http_error_recoverable(status_code) => {
-                        FeatureRequesterError::Temporary
+                    // If there is no status code, then the error is recoverable.
+                    // If there is a status code, and the code is for a non-recoverable error,
+                    // then the failure is permanent.
+                    Some(status_code) if !is_http_error_recoverable(status_code) => {
+                        FeatureRequesterError::Permanent
                     }
-                    _ => FeatureRequesterError::Permanent,
+                    _ => FeatureRequesterError::Temporary,
                 });
             }
         };
