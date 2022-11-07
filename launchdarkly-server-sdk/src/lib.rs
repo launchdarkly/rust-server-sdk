@@ -61,7 +61,10 @@ mod stores;
 mod test_common;
 mod version;
 
-pub(crate) const LAUNCHDARKLY_TAGS_HEADER: &str = "x-launchdarkly-tags";
+static LAUNCHDARKLY_EVENT_SCHEMA_HEADER: &str = "x-launchdarkly-event-schema";
+static LAUNCHDARKLY_PAYLOAD_ID_HEADER: &str = "x-launchdarkly-payload-id";
+static LAUNCHDARKLY_TAGS_HEADER: &str = "x-launchdarkly-tags";
+static CURRENT_EVENT_SCHEMA: &str = "3";
 
 lazy_static! {
     pub(crate) static ref USER_AGENT: String =

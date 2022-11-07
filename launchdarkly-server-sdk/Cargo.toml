@@ -1,7 +1,7 @@
 [package]
 name = "launchdarkly-server-sdk"
 description = "LaunchDarkly Server-Side SDK"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 authors = ["LaunchDarkly"]
 edition = "2021"
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ exclude = [
 chrono = "0.4.19"
 crossbeam-channel = "0.5.1"
 data-encoding = "2.3.2"
-eventsource-client = "0.10.0"
+eventsource-client = "0.11.0"
 futures = "0.3.12"
 lazy_static = "1.4.0"
 log = "0.4.14"
@@ -32,6 +32,7 @@ threadpool = "1.8.1"
 parking_lot = "0.12.0"
 tokio-stream = { version = "0.1.8", features = ["sync"] }
 moka = "0.7.1"
+uuid = {version = "1.0.0-alpha.1", features = ["v4"] }
 
 [dev-dependencies]
 maplit = "1.0.1"

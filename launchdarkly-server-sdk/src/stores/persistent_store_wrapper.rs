@@ -125,6 +125,7 @@ impl PersistentDataStoreWrapper {
     fn cache_items(&self, all_data: AllData<StorageItem<Flag>, StorageItem<Segment>>) {
         self.cache_flags(all_data.flags);
         self.cache_segments(all_data.segments);
+        debug!("flag and segment caches have been updated");
     }
 }
 
@@ -193,17 +194,26 @@ impl DataStore for PersistentDataStoreWrapper {
 
         let serialized_data = AllData::<SerializedItem, SerializedItem>::try_from(all_data.clone());
 
-        if let Ok(data) = serialized_data {
-            let result = self.store.init(data);
+        match serialized_data {
+            Err(e) => warn!(
+                "failed to deserialize payload; cannot initialize store {}",
+                e
+            ),
+            Ok(data) => {
+                let result = self.store.init(data);
 
-            match result {
-                Ok(()) => self.cache_items(all_data.into()),
-                Err(e) if self.flags.cache_is_infinite() => {
-                    warn!("failed to init store. Updating non-expiring cache: {}", e);
-                    self.cache_items(all_data.into())
-                }
-                _ => (),
-            };
+                match result {
+                    Ok(()) => {
+                        debug!("data store has been updated with new flag data");
+                        self.cache_items(all_data.into());
+                    }
+                    Err(e) if self.flags.cache_is_infinite() => {
+                        warn!("failed to init store. Updating non-expiring cache: {}", e);
+                        self.cache_items(all_data.into())
+                    }
+                    _ => (),
+                };
+            }
         }
     }
 

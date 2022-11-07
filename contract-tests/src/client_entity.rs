@@ -7,8 +7,8 @@ const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 use launchdarkly_server_sdk::{
     ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
-    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, ServiceEndpointsBuilder,
-    StreamingDataSourceBuilder,
+    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
+    ServiceEndpointsBuilder, StreamingDataSourceBuilder,
 };
 
 use crate::{
@@ -49,6 +49,18 @@ impl ClientEntity {
         service_endpoints_builder.polling_base_url(DEFAULT_POLLING_BASE_URL);
         service_endpoints_builder.events_base_url(DEFAULT_EVENTS_BASE_URL);
 
+        if let Some(endpoints) = create_instance_params.configuration.service_endpoints {
+            if let Some(streaming) = endpoints.streaming {
+                service_endpoints_builder.streaming_base_url(&streaming);
+            }
+            if let Some(polling) = endpoints.polling {
+                service_endpoints_builder.polling_base_url(&polling);
+            }
+            if let Some(events) = endpoints.events {
+                service_endpoints_builder.events_base_url(&events);
+            }
+        }
+
         if let Some(streaming) = create_instance_params.configuration.streaming {
             if let Some(base_uri) = streaming.base_uri {
                 service_endpoints_builder.streaming_base_url(&base_uri);
@@ -61,10 +73,23 @@ impl ClientEntity {
             streaming_builder.https_connector(connector.clone());
 
             config_builder = config_builder.data_source(&streaming_builder);
+        } else if let Some(polling) = create_instance_params.configuration.polling {
+            if let Some(base_uri) = polling.base_uri {
+                service_endpoints_builder.polling_base_url(&base_uri);
+            }
+
+            let mut polling_builder = PollingDataSourceBuilder::new();
+            if let Some(delay) = polling.poll_interval_ms {
+                polling_builder.poll_interval(Duration::from_millis(delay));
+            }
+
+            config_builder = config_builder.data_source(&polling_builder);
         }
 
         config_builder = if let Some(events) = create_instance_params.configuration.events {
-            service_endpoints_builder.events_base_url(&events.base_uri);
+            if let Some(base_uri) = events.base_uri {
+                service_endpoints_builder.events_base_url(&base_uri);
+            }
 
             let mut processor_builder = EventProcessorBuilder::new();
             if let Some(capacity) = events.capacity {

@@ -295,8 +295,12 @@ impl Client {
     pub fn close(&self) {
         self.event_processor.close();
 
-        if let Err(e) = self.shutdown_broadcast.send(()) {
-            error!("Failed to shutdown client appropriately: {}", e);
+        // If the system is in offline mode, no receiver will be listening to this broadcast
+        // channel, so sending on it would always result in an error.
+        if !self.offline {
+            if let Err(e) = self.shutdown_broadcast.send(()) {
+                error!("Failed to shutdown client appropriately: {}", e);
+            }
         }
 
         // Potentially take the runtime we created when starting the client and do nothing with it

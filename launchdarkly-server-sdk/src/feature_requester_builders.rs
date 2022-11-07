@@ -38,9 +38,9 @@ impl ReqwestFeatureRequesterBuilder {
 
 impl FeatureRequesterFactory for ReqwestFeatureRequesterBuilder {
     fn build(&self, tags: Option<String>) -> Result<Box<dyn FeatureRequester>, BuildError> {
-        let mut url = reqwest::Url::parse(&self.url)
+        let url = format!("{}/sdk/latest-all", self.url);
+        let url = r::Url::parse(&url)
             .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
-        url.set_path("/sdk/latest-all");
 
         let mut builder = r::Client::builder();
 

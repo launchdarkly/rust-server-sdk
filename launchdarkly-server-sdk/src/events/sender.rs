@@ -1,9 +1,13 @@
-use crate::reqwest::is_http_error_recoverable;
+use crate::{
+    reqwest::is_http_error_recoverable, LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
+    LAUNCHDARKLY_PAYLOAD_ID_HEADER,
+};
 use crossbeam_channel::Sender;
 
 use chrono::DateTime;
 use r::{header::HeaderValue, Response};
 use reqwest as r;
+use uuid::Uuid;
 
 use super::event::OutputEvent;
 
@@ -51,8 +55,11 @@ impl ReqwestEventSender {
 
 impl EventSender for ReqwestEventSender {
     fn send_event_data(&self, events: Vec<OutputEvent>, result_tx: Sender<EventSenderResult>) {
+        let uuid = Uuid::new_v4();
+
         debug!(
-            "Sending: {}",
+            "Sending ({}): {}",
+            uuid,
             serde_json::to_string_pretty(&events).unwrap_or_else(|e| e.to_string())
         );
 
@@ -74,6 +81,11 @@ impl EventSender for ReqwestEventSender {
                 .header("Content-Type", "application/json")
                 .header("Authorization", self.sdk_key.clone())
                 .header("User-Agent", &*crate::USER_AGENT)
+                .header(
+                    LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
+                    crate::CURRENT_EVENT_SCHEMA,
+                )
+                .header(LAUNCHDARKLY_PAYLOAD_ID_HEADER, uuid.to_string())
                 .body(json.clone());
 
             let response = match request.send() {

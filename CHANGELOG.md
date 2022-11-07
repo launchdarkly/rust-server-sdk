@@ -2,6 +2,16 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [1.0.0-beta.4] - 2022-11-07
+### Added:
+- Enforce ApplicationInfo length restrictions.
+- Set missing HTTP headers for event payloads.
+
+### Fixed:
+- Correct handling of specific temporary network failures.
+- Prevent shutdown broadcast error when in polling mode.
+- Reset event summaries correctly.
+
 ## [1.0.0-beta.3] - 2022-04-06
 ### Added
 - Add support for persistent data stores, which allow flag and segment information to be stored in external databases like redis.
