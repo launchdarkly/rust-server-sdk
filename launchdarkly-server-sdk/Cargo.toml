@@ -14,7 +14,7 @@ exclude = [
 ]
 
 [dependencies]
-chrono = "0.4.19"
+chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.1"
 data-encoding = "2.3.2"
 eventsource-client = "0.11.0"
