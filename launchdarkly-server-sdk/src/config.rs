@@ -167,10 +167,10 @@ impl Config {
 /// Used to create a [Config] struct for creating [crate::Client] instances.
 ///
 /// For usage examples see:
-// TODO(doc) Include the data store builder example once we have something that can be customized
-/// - [crate::ServiceEndpointsBuilder]
-/// - [crate::StreamingDataSourceBuilder]
-/// - [crate::EventProcessorBuilder]
+/// - [Creating service endpoints](crate::ServiceEndpointsBuilder)
+/// - [Configuring a persistent data store](crate::PersistentDataStoreBuilder)
+/// - [Configuring the streaming data source](crate::StreamingDataSourceBuilder)
+/// - [Configuring events sent to LaunchDarkly](crate::EventProcessorBuilder)
 pub struct ConfigBuilder {
     service_endpoints_builder: Option<ServiceEndpointsBuilder>,
     data_store_builder: Option<Box<dyn DataStoreFactory>>,
@@ -202,13 +202,16 @@ impl ConfigBuilder {
     }
 
     /// Set the data store to use for this client.
+    ///
+    /// By default, the SDK uses an in-memory data store.
+    /// For a persistent store, see [PersistentDataStoreBuilder](crate::stores::persistent_store_builders::PersistentDataStoreBuilder).
     pub fn data_store(mut self, builder: &dyn DataStoreFactory) -> Self {
         self.data_store_builder = Some(builder.to_owned());
         self
     }
 
     /// Set the data source to use for this client.
-    /// For usage see [crate::data_source_builders::StreamingDataSourceBuilder]
+    /// For the streaming data source, see [StreamingDataSourceBuilder](crate::data_source_builders::StreamingDataSourceBuilder).
     ///
     /// If offline mode is enabled, this data source will be ignored.
     pub fn data_source(mut self, builder: &dyn DataSourceFactory) -> Self {
@@ -217,7 +220,7 @@ impl ConfigBuilder {
     }
 
     /// Set the event processor to use for this client.
-    /// For usage see [crate::EventProcessorBuilder]
+    /// For usage see [EventProcessorBuilder](crate::EventProcessorBuilder).
     ///
     /// If offline mode is enabled, this event processor will be ignored.
     pub fn event_processor(mut self, builder: &dyn EventProcessorFactory) -> Self {

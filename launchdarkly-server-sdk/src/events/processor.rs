@@ -109,7 +109,7 @@ impl EventProcessor for EventProcessorImpl {
 mod tests {
     use std::time::Duration;
 
-    use launchdarkly_server_sdk_evaluation::{Detail, Flag, FlagValue, Reason, User};
+    use launchdarkly_server_sdk_evaluation::{ContextBuilder, Detail, Flag, FlagValue, Reason};
     use test_case::test_case;
 
     use crate::{
@@ -126,25 +126,24 @@ mod tests {
     fn calling_close_on_processor_twice_returns() {
         let (event_sender, _) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let event_processor =
             EventProcessorImpl::new(events_configuration).expect("failed to start ep");
         event_processor.close();
         event_processor.close();
     }
 
-    #[test_case(true, false, vec!["index", "summary"])]
-    #[test_case(false, false, vec!["index", "summary"])]
-    #[test_case(true, true, vec!["feature", "summary"])]
-    #[test_case(false, true, vec!["index", "feature", "summary"])]
+    #[test_case(true, vec!["index", "feature", "summary"])]
+    #[test_case(false, vec!["index", "summary"])]
     fn sending_feature_event_emits_correct_events(
-        inline_users_in_events: bool,
         flag_track_events: bool,
         expected_event_types: Vec<&str>,
     ) {
         let mut flag = basic_flag("flag");
         flag.track_events = flag_track_events;
-        let user = User::with_key("foo".to_string()).build();
+        let context = ContextBuilder::new("foo")
+            .build()
+            .expect("Failed to create context");
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -156,19 +155,16 @@ mod tests {
         let event_factory = EventFactory::new(true);
         let feature_request = event_factory.new_eval_event(
             &flag.key,
-            user,
+            context,
             &flag,
-            detail.clone(),
+            detail,
             FlagValue::from(false),
             None,
         );
 
         let (event_sender, event_rx) = create_event_sender();
-        let events_configuration = create_events_configuration(
-            event_sender,
-            inline_users_in_events,
-            Duration::from_secs(100),
-        );
+        let events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let event_processor =
             EventProcessorImpl::new(events_configuration).expect("failed to start ep");
         event_processor.send(feature_request);
@@ -179,7 +175,7 @@ mod tests {
         assert_eq!(expected_event_types.len(), events.len());
 
         for event_type in expected_event_types {
-            assert!(events.iter().find(|e| e.kind() == event_type).is_some());
+            assert!(events.iter().any(|e| e.kind() == event_type));
         }
     }
 
@@ -229,9 +225,15 @@ mod tests {
         )
         .expect("flag should parse");
 
-        let user_track_rule = User::with_key("do-track".to_string()).build();
-        let user_notrack_rule = User::with_key("no-track".to_string()).build();
-        let user_fallthrough = User::with_key("foo".to_string()).build();
+        let context_track_rule = ContextBuilder::new("do-track")
+            .build()
+            .expect("Failed to create context");
+        let context_notrack_rule = ContextBuilder::new("no-track")
+            .build()
+            .expect("Failed to create context");
+        let context_fallthrough = ContextBuilder::new("foo")
+            .build()
+            .expect("Failed to create context");
 
         let detail_track_rule = Detail {
             value: Some(FlagValue::from(true)),
@@ -262,7 +264,7 @@ mod tests {
         let event_factory = EventFactory::new(true);
         let fre_track_rule = event_factory.new_eval_event(
             &flag.key,
-            user_track_rule,
+            context_track_rule,
             &flag,
             detail_track_rule,
             FlagValue::from(false),
@@ -270,7 +272,7 @@ mod tests {
         );
         let fre_notrack_rule = event_factory.new_eval_event(
             &flag.key,
-            user_notrack_rule,
+            context_notrack_rule,
             &flag,
             detail_notrack_rule,
             FlagValue::from(false),
@@ -278,7 +280,7 @@ mod tests {
         );
         let fre_fallthrough = event_factory.new_eval_event(
             &flag.key,
-            user_fallthrough,
+            context_fallthrough,
             &flag,
             detail_fallthrough,
             FlagValue::from(false),
@@ -287,12 +289,12 @@ mod tests {
 
         let (event_sender, event_rx) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, true, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let event_processor =
             EventProcessorImpl::new(events_configuration).expect("failed to start ep");
 
-        for fre in vec![&fre_track_rule, &fre_notrack_rule, &fre_fallthrough] {
-            event_processor.send(fre.clone());
+        for fre in [fre_track_rule, fre_notrack_rule, fre_fallthrough] {
+            event_processor.send(fre);
         }
 
         event_processor.flush();
@@ -300,8 +302,8 @@ mod tests {
 
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
 
-        // detail_track_rule -> feature + index, detail_fallthrough -> feature, 1 summary
-        assert_eq!(events.len(), 2 + 1 + 1);
+        // detail_track_rule -> feature + index, detail_notrack_rule -> index, detail_fallthrough -> feature + index, 1 summary
+        assert_eq!(events.len(), 2 + 1 + 2 + 1);
         assert_eq!(
             events
                 .iter()
@@ -309,14 +311,16 @@ mod tests {
                 .count(),
             2
         );
-        assert!(events.iter().find(|e| e.kind() == "index").is_some());
-        assert!(events.iter().find(|e| e.kind() == "summary").is_some());
+        assert!(events.iter().any(|e| e.kind() == "index"));
+        assert!(events.iter().any(|e| e.kind() == "summary"));
     }
 
     #[test]
     fn feature_events_dedupe_index_events() {
         let flag = basic_flag("flag");
-        let user = User::with_key("bar".to_string()).build();
+        let context = ContextBuilder::new("bar")
+            .build()
+            .expect("Failed to create context");
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -328,16 +332,16 @@ mod tests {
         let event_factory = EventFactory::new(true);
         let feature_request = event_factory.new_eval_event(
             &flag.key,
-            user,
+            context,
             &flag,
-            detail.clone(),
+            detail,
             FlagValue::from(false),
             None,
         );
 
         let (event_sender, event_rx) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let event_processor =
             EventProcessorImpl::new(events_configuration).expect("failed to start ep");
         event_processor.send(feature_request.clone());

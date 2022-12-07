@@ -1,7 +1,7 @@
 use super::stores::store::DataStore;
 use serde::Serialize;
 
-use launchdarkly_server_sdk_evaluation::{evaluate, FlagValue, Reason, User};
+use launchdarkly_server_sdk_evaluation::{evaluate, Context, FlagValue, Reason};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -108,8 +108,8 @@ impl FlagDetail {
     }
 
     /// Populate the FlagDetail struct with the results of every flag found within the provided
-    /// store, evaluated for the specified user.
-    pub fn populate(&mut self, store: &dyn DataStore, user: &User, config: FlagDetailConfig) {
+    /// store, evaluated for the specified context.
+    pub fn populate(&mut self, store: &dyn DataStore, context: &Context, config: FlagDetailConfig) {
         let mut evaluations = HashMap::new();
         let mut flag_state = HashMap::new();
 
@@ -118,7 +118,7 @@ impl FlagDetail {
                 continue;
             }
 
-            let detail = evaluate(store.to_store(), &flag, user, None);
+            let detail = evaluate(store.to_store(), &flag, context, None);
 
             // Here we are applying the same logic used in EventFactory.new_feature_request_event
             // to determine whether the evaluation involved an experiment, in which case both
@@ -188,11 +188,13 @@ mod tests {
     use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::basic_flag;
     use crate::FlagDetailConfig;
-    use launchdarkly_server_sdk_evaluation::User;
+    use launchdarkly_server_sdk_evaluation::ContextBuilder;
 
     #[test]
     fn flag_detail_handles_default_configuration() {
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
         let mut store = InMemoryDataStore::new();
 
         store
@@ -203,7 +205,7 @@ mod tests {
             .expect("patch should apply");
 
         let mut flag_detail = FlagDetail::new(true);
-        flag_detail.populate(&store, &user, FlagDetailConfig::new());
+        flag_detail.populate(&store, &context, FlagDetailConfig::new());
 
         let expected = json!({
             "myFlag": true,
@@ -224,7 +226,9 @@ mod tests {
 
     #[test]
     fn flag_detail_handles_experimentation_reasons_correctly() {
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
         let mut store = InMemoryDataStore::new();
 
         let mut flag = basic_flag("myFlag");
@@ -236,7 +240,7 @@ mod tests {
             .expect("patch should apply");
 
         let mut flag_detail = FlagDetail::new(true);
-        flag_detail.populate(&store, &user, FlagDetailConfig::new());
+        flag_detail.populate(&store, &context, FlagDetailConfig::new());
 
         let expected = json!({
             "myFlag": true,
@@ -262,7 +266,9 @@ mod tests {
 
     #[test]
     fn flag_detail_with_reasons_should_include_reason() {
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
         let mut store = InMemoryDataStore::new();
 
         store
@@ -276,7 +282,7 @@ mod tests {
         config.with_reasons();
 
         let mut flag_detail = FlagDetail::new(true);
-        flag_detail.populate(&store, &user, config);
+        flag_detail.populate(&store, &context, config);
 
         let expected = json!({
             "myFlag": true,
@@ -300,7 +306,9 @@ mod tests {
 
     #[test]
     fn flag_detail_details_only_should_exclude_reason() {
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
         let mut store = InMemoryDataStore::new();
 
         store
@@ -314,7 +322,7 @@ mod tests {
         config.details_only_for_tracked_flags();
 
         let mut flag_detail = FlagDetail::new(true);
-        flag_detail.populate(&store, &user, config);
+        flag_detail.populate(&store, &context, config);
 
         let expected = json!({
             "myFlag": true,
@@ -334,7 +342,9 @@ mod tests {
 
     #[test]
     fn flag_detail_details_only_with_tracked_events_includes_version() {
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
         let mut store = InMemoryDataStore::new();
         let mut flag = basic_flag("myFlag");
         flag.track_events = true;
@@ -347,7 +357,7 @@ mod tests {
         config.details_only_for_tracked_flags();
 
         let mut flag_detail = FlagDetail::new(true);
-        flag_detail.populate(&store, &user, config);
+        flag_detail.populate(&store, &context, config);
 
         let expected = json!({
             "myFlag": true,
@@ -369,7 +379,9 @@ mod tests {
 
     #[test]
     fn flag_detail_with_default_config_but_tracked_event_should_include_version() {
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
         let mut store = InMemoryDataStore::new();
         let mut flag = basic_flag("myFlag");
         flag.track_events = true;
@@ -379,7 +391,7 @@ mod tests {
             .expect("patch should apply");
 
         let mut flag_detail = FlagDetail::new(true);
-        flag_detail.populate(&store, &user, FlagDetailConfig::new());
+        flag_detail.populate(&store, &context, FlagDetailConfig::new());
 
         let expected = json!({
             "myFlag": true,

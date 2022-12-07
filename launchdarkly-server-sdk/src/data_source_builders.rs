@@ -1,6 +1,6 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
-use crate::feature_requester_builders::{FeatureRequesterFactory, ReqwestFeatureRequesterBuilder};
+use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
 use eventsource_client::HttpsConnector;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -238,7 +238,7 @@ impl DataSourceFactory for PollingDataSourceBuilder {
         let feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>> =
             match &self.feature_requester_factory {
                 Some(factory) => factory.clone(),
-                _ => Arc::new(Mutex::new(Box::new(ReqwestFeatureRequesterBuilder::new(
+                _ => Arc::new(Mutex::new(Box::new(HyperFeatureRequesterBuilder::new(
                     endpoints.polling_base_url(),
                     sdk_key,
                 )))),
@@ -284,7 +284,6 @@ impl MockDataSourceBuilder {
 
 #[cfg(test)]
 impl DataSourceFactory for MockDataSourceBuilder {
-    // TODO: Implement re-connect with jitter.
     fn build(
         &self,
         _endpoints: &service_endpoints::ServiceEndpoints,

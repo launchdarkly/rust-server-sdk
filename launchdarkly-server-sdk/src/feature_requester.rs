@@ -1,14 +1,14 @@
 use crate::reqwest::is_http_error_recoverable;
+use futures::future::BoxFuture;
+use hyper::body::HttpBody;
+use hyper::Body;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::stores::store_types::AllData;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
-use r::{
-    header::{HeaderValue, ETAG},
-    StatusCode,
-};
-use reqwest as r;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FeatureRequesterError {
     Temporary,
     Permanent,
@@ -18,102 +18,119 @@ pub enum FeatureRequesterError {
 struct CachedEntry(AllData<Flag, Segment>, String);
 
 pub trait FeatureRequester: Send {
-    fn get_all(&mut self) -> Result<AllData<Flag, Segment>, FeatureRequesterError>;
+    fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>>;
 }
 
-pub struct ReqwestFeatureRequester {
-    http: r::Client,
-    url: r::Url,
+pub struct HyperFeatureRequester<C> {
+    http: Arc<hyper::Client<C>>,
+    url: hyper::Uri,
     sdk_key: String,
     cache: Option<CachedEntry>,
+    default_headers: HashMap<&'static str, String>,
 }
 
-impl ReqwestFeatureRequester {
-    pub fn new(http: r::Client, url: r::Url, sdk_key: String) -> Self {
+impl<C> HyperFeatureRequester<C> {
+    pub fn new(
+        http: hyper::Client<C>,
+        url: hyper::Uri,
+        sdk_key: String,
+        default_headers: HashMap<&'static str, String>,
+    ) -> Self {
         Self {
-            http,
+            http: Arc::new(http),
             url,
             sdk_key,
             cache: None,
+            default_headers,
         }
     }
 }
 
-impl FeatureRequester for ReqwestFeatureRequester {
-    fn get_all(&mut self) -> Result<AllData<Flag, Segment>, FeatureRequesterError> {
-        let mut request_builder = self
-            .http
-            .get(self.url.clone())
-            .header("Content-Type", "application/json")
-            .header("Authorization", self.sdk_key.clone())
-            .header("User-Agent", &*crate::USER_AGENT);
+impl<C> FeatureRequester for HyperFeatureRequester<C>
+where
+    C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
+{
+    fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>> {
+        Box::pin(async {
+            let uri = self.url.clone();
+            let key = self.sdk_key.clone();
 
-        if let Some(cache) = &self.cache {
-            request_builder = request_builder.header("If-None-Match", cache.1.clone());
-        }
+            let http = self.http.clone();
+            let cache = self.cache.clone();
 
-        let resp = request_builder.send();
+            let mut request_builder = hyper::http::Request::builder()
+                .uri(uri)
+                .method("GET")
+                .header("Content-Type", "application/json")
+                .header("Authorization", key)
+                .header("User-Agent", &*crate::USER_AGENT);
 
-        let mut response = match resp {
-            Ok(response) => response,
-            Err(e) => {
-                error!(
-                    "An error occurred while retrieving flag information {} (status: {})",
-                    e,
-                    e.status()
-                        .map_or(String::from("none"), |s| s.as_str().to_string())
-                );
-                return Err(match e.status() {
-                    // If there is no status code, then the error is recoverable.
-                    // If there is a status code, and the code is for a non-recoverable error,
-                    // then the failure is permanent.
-                    Some(status_code) if !is_http_error_recoverable(status_code) => {
-                        FeatureRequesterError::Permanent
-                    }
-                    _ => FeatureRequesterError::Temporary,
-                });
+            for default_header in &self.default_headers {
+                request_builder =
+                    request_builder.header(*default_header.0, default_header.1.as_str());
             }
-        };
 
-        if response.status() == StatusCode::NOT_MODIFIED && self.cache.is_some() {
-            let cache = self.cache.clone().unwrap();
-            debug!("Returning cached data. Etag: {}", cache.1);
-            return Ok(cache.0);
-        }
+            if let Some(cache) = &self.cache {
+                request_builder = request_builder.header("If-None-Match", cache.1.clone());
+            }
 
-        let etag: String = response
-            .headers()
-            .get(ETAG)
-            .unwrap_or(&HeaderValue::from_static(""))
-            .to_str()
-            .map_or_else(|_| "".into(), |s| s.into());
+            let result = http
+                .request(request_builder.body(Body::empty()).unwrap())
+                .await;
 
-        if response.status().is_success() {
-            return match response.json::<AllData<Flag, Segment>>() {
-                Ok(all_data) => {
-                    if !etag.is_empty() {
-                        debug!("Caching data for future use with etag: {}", etag);
-                        self.cache = Some(CachedEntry(all_data.clone(), etag));
-                    }
-                    Ok(all_data)
-                }
+            let mut response = match result {
+                Ok(response) => response,
                 Err(e) => {
-                    error!("An error occurred while parsing the json response: {}", e);
-                    Err(FeatureRequesterError::Permanent)
+                    // It appears this type of error will not be an HTTP error.
+                    // It will be a closed connection, aborted write, timeout, etc.
+                    error!("An error occurred while retrieving flag information {}", e,);
+                    return Err(FeatureRequesterError::Temporary);
                 }
             };
-        }
 
-        error!(
-            "An error occurred while retrieving flag information. (status: {})",
-            response.status().as_str()
-        );
+            if response.status() == hyper::StatusCode::NOT_MODIFIED && cache.is_some() {
+                if let Some(entry) = cache {
+                    return Ok(entry.0);
+                }
+            }
 
-        if !is_http_error_recoverable(response.status()) {
-            return Err(FeatureRequesterError::Permanent);
-        }
+            let etag: String = response
+                .headers()
+                .get("etag")
+                .unwrap_or(&crate::EMPTY_HEADER)
+                .to_str()
+                .map_or_else(|_| "".into(), |s| s.into());
 
-        Err(FeatureRequesterError::Temporary)
+            if response.status().is_success() {
+                let bytes = response.body_mut().data().await.unwrap().unwrap();
+                let json = serde_json::from_slice::<AllData<Flag, Segment>>(bytes.as_ref());
+
+                return match json {
+                    Ok(all_data) => {
+                        if !etag.is_empty() {
+                            debug!("Caching data for future use with etag: {}", etag);
+                            self.cache = Some(CachedEntry(all_data.clone(), etag));
+                        }
+                        Ok(all_data)
+                    }
+                    Err(e) => {
+                        error!("An error occurred while parsing the json response: {}", e);
+                        Err(FeatureRequesterError::Temporary)
+                    }
+                };
+            }
+
+            error!(
+                "An error occurred while retrieving flag information. (status: {})",
+                response.status().as_str()
+            );
+
+            if !is_http_error_recoverable(response.status().as_u16()) {
+                return Err(FeatureRequesterError::Permanent);
+            }
+
+            Err(FeatureRequesterError::Temporary)
+        })
     }
 }
 
@@ -121,10 +138,11 @@ impl FeatureRequester for ReqwestFeatureRequester {
 mod tests {
     use super::*;
     use mockito::mock;
+    use std::str::FromStr;
     use test_case::test_case;
 
-    #[test]
-    fn updates_etag_as_appropriate() {
+    #[tokio::test]
+    async fn updates_etag_as_appropriate() {
         let _initial_request = mock("GET", "/")
             .with_status(200)
             .with_header("etag", "INITIAL-TAG")
@@ -144,20 +162,20 @@ mod tests {
             .create();
 
         let mut requester = build_feature_requester();
-        let result = requester.get_all();
+        let result = requester.get_all().await;
 
         assert!(result.is_ok());
         if let Some(cache) = &requester.cache {
             assert_eq!("INITIAL-TAG", cache.1);
         }
 
-        let result = requester.get_all();
+        let result = requester.get_all().await;
         assert!(result.is_ok());
         if let Some(cache) = &requester.cache {
             assert_eq!("INITIAL-TAG", cache.1);
         }
 
-        let result = requester.get_all();
+        let result = requester.get_all().await;
         assert!(result.is_ok());
         if let Some(cache) = &requester.cache {
             assert_eq!("UPDATED-TAG", cache.1);
@@ -171,11 +189,15 @@ mod tests {
     #[test_case(429, FeatureRequesterError::Temporary)]
     #[test_case(430, FeatureRequesterError::Permanent)]
     #[test_case(500, FeatureRequesterError::Temporary)]
-    fn correctly_determines_unrecoverable_errors(status: usize, error: FeatureRequesterError) {
+    #[tokio::test]
+    async fn correctly_determines_unrecoverable_errors(
+        status: usize,
+        error: FeatureRequesterError,
+    ) {
         let _initial_request = mock("GET", "/").with_status(status).create();
 
         let mut requester = build_feature_requester();
-        let result = requester.get_all();
+        let result = requester.get_all().await;
 
         if let Err(err) = result {
             assert_eq!(err, error);
@@ -184,13 +206,16 @@ mod tests {
         }
     }
 
-    fn build_feature_requester() -> ReqwestFeatureRequester {
-        let http = r::Client::builder()
-            .build()
-            .expect("Failed building the client");
-        let url = reqwest::Url::parse(&mockito::server_url())
+    fn build_feature_requester() -> HyperFeatureRequester<hyper::client::HttpConnector> {
+        let http = hyper::Client::builder().build(hyper::client::HttpConnector::new());
+        let url = hyper::Uri::from_str(&mockito::server_url())
             .expect("Failed parsing the mock server url");
 
-        ReqwestFeatureRequester::new(http, url, "sdk-key".to_string())
+        HyperFeatureRequester::new(
+            http,
+            url,
+            "sdk-key".to_string(),
+            HashMap::<&str, String>::new(),
+        )
     }
 }

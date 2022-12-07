@@ -1,7 +1,8 @@
-use crate::feature_requester::FeatureRequester;
-use crate::feature_requester::ReqwestFeatureRequester;
+use crate::feature_requester::{FeatureRequester, HyperFeatureRequester};
 use crate::LAUNCHDARKLY_TAGS_HEADER;
-use reqwest as r;
+use hyper_rustls::HttpsConnectorBuilder;
+use std::collections::HashMap;
+use std::str::FromStr;
 use thiserror::Error;
 
 /// Error type used to represent failures when building a [FeatureRequesterFactory] instance.
@@ -22,12 +23,12 @@ pub trait FeatureRequesterFactory: Send {
     fn build(&self, tags: Option<String>) -> Result<Box<dyn FeatureRequester>, BuildError>;
 }
 
-pub struct ReqwestFeatureRequesterBuilder {
+pub struct HyperFeatureRequesterBuilder {
     url: String,
     sdk_key: String,
 }
 
-impl ReqwestFeatureRequesterBuilder {
+impl HyperFeatureRequesterBuilder {
     pub fn new(url: &str, sdk_key: &str) -> Self {
         Self {
             url: url.into(),
@@ -36,32 +37,35 @@ impl ReqwestFeatureRequesterBuilder {
     }
 }
 
-impl FeatureRequesterFactory for ReqwestFeatureRequesterBuilder {
+impl FeatureRequesterFactory for HyperFeatureRequesterBuilder {
     fn build(&self, tags: Option<String>) -> Result<Box<dyn FeatureRequester>, BuildError> {
         let url = format!("{}/sdk/latest-all", self.url);
-        let url = r::Url::parse(&url)
-            .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
 
-        let mut builder = r::Client::builder();
+        let builder = hyper::Client::builder();
+
+        let connector = HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build();
+
+        let http = builder.build(connector);
+
+        let mut default_headers = HashMap::<&str, String>::new();
 
         if let Some(tags) = tags {
-            let mut headers = r::header::HeaderMap::new();
-            headers.append(
-                LAUNCHDARKLY_TAGS_HEADER,
-                r::header::HeaderValue::from_str(&tags)
-                    .map_err(|e| BuildError::InvalidConfig(e.to_string()))?,
-            );
-            builder = builder.default_headers(headers);
+            default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
 
-        let http = builder
-            .build()
-            .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
+        let url = hyper::Uri::from_str(url.as_str())
+            .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
 
-        Ok(Box::new(ReqwestFeatureRequester::new(
+        Ok(Box::new(HyperFeatureRequester::new(
             http,
             url,
             self.sdk_key.clone(),
+            default_headers,
         )))
     }
 }
@@ -73,7 +77,7 @@ mod tests {
     #[test]
     fn factory_handles_url_parsing_failure() {
         let builder =
-            ReqwestFeatureRequesterBuilder::new("This is clearly not a valid URL", "sdk-key");
+            HyperFeatureRequesterBuilder::new("This is clearly not a valid URL", "sdk-key");
         let result = builder.build(None);
 
         match result {

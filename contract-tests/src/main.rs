@@ -7,6 +7,7 @@ use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Resu
 use client_entity::ClientEntity;
 use eventsource_client::HttpsConnector;
 use futures::executor;
+use launchdarkly_server_sdk::Reference;
 use serde::{self, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Mutex};
@@ -39,10 +40,8 @@ pub struct EventParameters {
     pub enable_diagnostics: bool,
     #[serde(default = "bool::default")]
     pub all_attributes_private: bool,
-    pub global_private_attributes: Option<HashSet<String>>,
+    pub global_private_attributes: Option<HashSet<Reference>>,
     pub flush_interval_ms: Option<u64>,
-    #[serde(default = "bool::default")]
-    pub inline_users: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -100,6 +99,7 @@ async fn status() -> impl Responder {
             "all-flags-details-only-for-tracked-flags".to_string(),
             "tags".to_string(),
             "service-endpoints".to_string(),
+            "context-type".to_string(),
         ],
     })
 }

@@ -1,19 +1,28 @@
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use hyper_rustls::HttpsConnectorBuilder;
+use launchdarkly_server_sdk_evaluation::Reference;
+use thiserror::Error;
+
+use crate::events::sender::HyperEventSender;
+use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
+
 use super::processor::{
     EventProcessor, EventProcessorError, EventProcessorImpl, NullEventProcessor,
 };
-use super::sender::{EventSender, ReqwestEventSender};
+use super::sender::EventSender;
 use super::EventsConfiguration;
-
-use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::Duration;
-use thiserror::Error;
 
 const DEFAULT_FLUSH_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_EVENT_CAPACITY: usize = 500;
-const DEFAULT_USER_KEY_SIZE: usize = 1000;
-const DEFAULT_USER_KEYS_FLUSH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+// The capacity will be set to max(DEFAULT_CONTEXT_KEY_CAPACITY, 1), meaning
+// caching cannot be entirely disabled.
+const DEFAULT_CONTEXT_KEY_CAPACITY: Option<NonZeroUsize> = NonZeroUsize::new(1000);
+const DEFAULT_CONTEXT_KEYS_FLUSH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Error type used to represent failures when building an [EventProcessor] instance.
 #[non_exhaustive]
@@ -61,12 +70,11 @@ pub trait EventProcessorFactory {
 pub struct EventProcessorBuilder {
     capacity: usize,
     flush_interval: Duration,
-    user_keys_capacity: usize,
-    user_keys_flush_interval: Duration,
-    inline_users_in_events: bool,
+    context_keys_capacity: NonZeroUsize,
+    context_keys_flush_interval: Duration,
     event_sender: Option<Arc<dyn EventSender>>,
     all_attributes_private: bool,
-    private_attributes: HashSet<String>,
+    private_attributes: HashSet<Reference>,
     // diagnostic_recording_interval: Duration
 }
 
@@ -77,39 +85,39 @@ impl EventProcessorFactory for EventProcessorBuilder {
         sdk_key: &str,
         tags: Option<String>,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
-        let url = format!("{}/bulk", endpoints.events_base_url());
-        let url = reqwest::Url::parse(&url).map_err(|e| {
-            BuildError::InvalidConfig(format!("couldn't parse events_base_url: {}", e))
-        })?;
+        let url_string = format!("{}/bulk", endpoints.events_base_url());
 
-        let mut builder = reqwest::Client::builder();
+        let mut default_headers = HashMap::<&str, String>::new();
 
         if let Some(tags) = tags {
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.append(
-                LAUNCHDARKLY_TAGS_HEADER,
-                reqwest::header::HeaderValue::from_str(&tags)
-                    .map_err(|e| BuildError::InvalidConfig(e.to_string()))?,
-            );
-            builder = builder.default_headers(headers);
+            default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
-
-        let http = builder.build().map_err(|e| {
-            BuildError::InvalidConfig(format!("unable to build reqwest client: {}", e))
-        })?;
 
         let event_sender = match &self.event_sender {
             Some(event_sender) => event_sender.clone(),
-            _ => Arc::new(ReqwestEventSender::new(http, url, sdk_key)),
+            _ => {
+                let connector = HttpsConnectorBuilder::new()
+                    .with_native_roots()
+                    .https_or_http()
+                    .enable_http1()
+                    .enable_http2()
+                    .build();
+
+                Arc::new(HyperEventSender::new(
+                    hyper::Client::builder().build(connector),
+                    hyper::Uri::from_str(url_string.as_str()).unwrap(),
+                    sdk_key,
+                    default_headers,
+                ))
+            }
         };
 
         let events_configuration = EventsConfiguration {
             event_sender,
             capacity: self.capacity,
             flush_interval: self.flush_interval,
-            inline_users_in_events: self.inline_users_in_events,
-            user_keys_capacity: self.user_keys_capacity,
-            user_keys_flush_interval: self.user_keys_flush_interval,
+            context_keys_capacity: self.context_keys_capacity,
+            context_keys_flush_interval: self.context_keys_flush_interval,
             all_attributes_private: self.all_attributes_private,
             private_attributes: self.private_attributes.clone(),
         };
@@ -131,9 +139,9 @@ impl EventProcessorBuilder {
         Self {
             capacity: DEFAULT_EVENT_CAPACITY,
             flush_interval: DEFAULT_FLUSH_POLL_INTERVAL,
-            user_keys_capacity: DEFAULT_USER_KEY_SIZE,
-            user_keys_flush_interval: DEFAULT_USER_KEYS_FLUSH_INTERVAL,
-            inline_users_in_events: false,
+            context_keys_capacity: DEFAULT_CONTEXT_KEY_CAPACITY
+                .unwrap_or_else(|| NonZeroUsize::new(1).unwrap()),
+            context_keys_flush_interval: DEFAULT_CONTEXT_KEYS_FLUSH_INTERVAL,
             event_sender: None,
             all_attributes_private: false,
             private_attributes: HashSet::new(),
@@ -159,34 +167,28 @@ impl EventProcessorBuilder {
         self
     }
 
-    /// Sets the number of user keys that the event processor can remember at any one time.
+    /// Sets the number of context keys that the event processor can remember at any one time.
     ///
-    /// To avoid sending duplicate user details in analytics events, the SDK maintains a cache of
-    /// recently seen user keys.
-    pub fn user_keys_capacity(&mut self, user_keys_capacity: usize) -> &mut Self {
-        self.user_keys_capacity = user_keys_capacity;
+    /// To avoid sending duplicate context details in analytics events, the SDK maintains a cache of
+    /// recently seen context keys.
+    pub fn context_keys_capacity(&mut self, context_keys_capacity: NonZeroUsize) -> &mut Self {
+        self.context_keys_capacity = context_keys_capacity;
         self
     }
 
-    /// Sets the interval at which the event processor will reset its cache of known user keys.
-    pub fn user_keys_flush_interval(&mut self, user_keys_flush_interval: Duration) -> &mut Self {
-        self.user_keys_flush_interval = user_keys_flush_interval;
-        self
-    }
-
-    /// Sets whether to include full user details in every analytics event.
-    ///
-    /// The default is false: events will only include the user key, except for one "index" event that provides
-    /// the full details for the user.
-    pub fn inline_users_in_events(&mut self, inline_users_in_events: bool) -> &mut Self {
-        self.inline_users_in_events = inline_users_in_events;
+    /// Sets the interval at which the event processor will reset its cache of known context keys.
+    pub fn context_keys_flush_interval(
+        &mut self,
+        context_keys_flush_interval: Duration,
+    ) -> &mut Self {
+        self.context_keys_flush_interval = context_keys_flush_interval;
         self
     }
 
     /// Sets whether or not all optional user attributes should be hidden from LaunchDarkly.
     ///
     /// If this is true, all user attribute values (other than the key) will be private, not just the attributes
-    /// specified with private_attribute_names or on a per-user basis with UserBuilder methods. By default, it is false.
+    /// specified with private_attributes or on a per-user basis with UserBuilder methods. By default, it is false.
     pub fn all_attributes_private(&mut self, all_attributes_private: bool) -> &mut Self {
         self.all_attributes_private = all_attributes_private;
         self
@@ -197,8 +199,11 @@ impl EventProcessorBuilder {
     /// Any users sent to LaunchDarkly with this configuration active will have attributes with these
     /// names removed. This is in addition to any attributes that were marked as private for an
     /// individual user with UserBuilder methods. Setting all_attribute_private to true overrides this.
-    pub fn private_attribute_names(&mut self, attributes: HashSet<String>) -> &mut Self {
-        self.private_attributes = attributes;
+    pub fn private_attributes<R>(&mut self, attributes: HashSet<R>) -> &mut Self
+    where
+        R: Into<Reference>,
+    {
+        self.private_attributes = attributes.into_iter().map(|a| a.into()).collect();
         self
     }
 
@@ -250,7 +255,7 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
-    use launchdarkly_server_sdk_evaluation::User;
+    use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use maplit::hashset;
     use mockito::{mock, Matcher};
     use test_case::test_case;
@@ -281,24 +286,21 @@ mod tests {
     }
 
     #[test]
-    fn user_keys_capacity_can_be_adjusted() {
+    fn context_keys_capacity_can_be_adjusted() {
         let mut builder = EventProcessorBuilder::new();
-        builder.user_keys_capacity(1234);
-        assert_eq!(builder.user_keys_capacity, 1234);
+        let cap = NonZeroUsize::new(1234).expect("1234 > 0");
+        builder.context_keys_capacity(cap);
+        assert_eq!(builder.context_keys_capacity, cap);
     }
 
     #[test]
-    fn user_keys_flush_interval_can_be_adjusted() {
+    fn context_keys_flush_interval_can_be_adjusted() {
         let mut builder = EventProcessorBuilder::new();
-        builder.user_keys_flush_interval(Duration::from_secs(1000));
-        assert_eq!(builder.user_keys_flush_interval, Duration::from_secs(1000));
-    }
-
-    #[test]
-    fn inline_users_in_events_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::new();
-        builder.inline_users_in_events(true);
-        assert!(builder.inline_users_in_events);
+        builder.context_keys_flush_interval(Duration::from_secs(1000));
+        assert_eq!(
+            builder.context_keys_flush_interval,
+            Duration::from_secs(1000)
+        );
     }
 
     #[test]
@@ -315,8 +317,8 @@ mod tests {
         let mut builder = EventProcessorBuilder::new();
 
         assert!(builder.private_attributes.is_empty());
-        builder.private_attribute_names(hashset!["name".to_string()]);
-        assert!(builder.private_attributes.contains("name"));
+        builder.private_attributes(hashset!["name"]);
+        assert!(builder.private_attributes.contains(&"name".into()));
     }
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
@@ -342,8 +344,10 @@ mod tests {
 
         let event_factory = EventFactory::new(false);
 
-        let user = User::with_key("bob").build();
-        let identify_event = event_factory.new_identify(user);
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let identify_event = event_factory.new_identify(context);
 
         processor.send(identify_event);
         processor.close();

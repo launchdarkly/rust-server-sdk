@@ -1,4 +1,5 @@
 use eventsource_client::HttpsConnector;
+use launchdarkly_server_sdk::{Context, ContextBuilder, MultiContextBuilder, Reference};
 use std::time::Duration;
 
 const DEFAULT_POLLING_BASE_URL: &str = "https://sdk.launchdarkly.com";
@@ -11,6 +12,9 @@ use launchdarkly_server_sdk::{
     ServiceEndpointsBuilder, StreamingDataSourceBuilder,
 };
 
+use crate::command_params::{
+    ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse,
+};
 use crate::{
     command_params::{
         CommandParams, CommandResponse, EvaluateAllFlagsParams, EvaluateAllFlagsResponse,
@@ -95,16 +99,14 @@ impl ClientEntity {
             if let Some(capacity) = events.capacity {
                 processor_builder.capacity(capacity);
             }
-            processor_builder
-                .inline_users_in_events(events.inline_users)
-                .all_attributes_private(events.all_attributes_private);
+            processor_builder.all_attributes_private(events.all_attributes_private);
 
             if let Some(interval) = events.flush_interval_ms {
                 processor_builder.flush_interval(Duration::from_millis(interval));
             }
 
             if let Some(attributes) = events.global_private_attributes {
-                processor_builder.private_attribute_names(attributes);
+                processor_builder.private_attributes(attributes);
             }
 
             config_builder.event_processor(&processor_builder)
@@ -139,7 +141,7 @@ impl ClientEntity {
 
                 match params.metric_value {
                     Some(mv) => self.client.track_metric(
-                        params.user,
+                        params.context,
                         params.event_key,
                         mv,
                         params
@@ -148,14 +150,14 @@ impl ClientEntity {
                     ),
                     None if params.data.is_some() => {
                         let _ = self.client.track_data(
-                            params.user,
+                            params.context,
                             params.event_key,
                             params
                                 .data
                                 .unwrap_or_else(|| serde_json::Value::Null.into()),
                         );
                     }
-                    None => self.client.track_event(params.user, params.event_key),
+                    None => self.client.track_event(params.context, params.event_key),
                 };
 
                 Ok(None)
@@ -165,21 +167,89 @@ impl ClientEntity {
                     command
                         .identify_event
                         .ok_or("Identify params should be set")?
-                        .user,
+                        .context,
                 );
-                Ok(None)
-            }
-            "aliasEvent" => {
-                let params = command.alias_event.ok_or("Alias params should be set")?;
-                self.client.alias(params.user, params.previous_user);
                 Ok(None)
             }
             "flushEvents" => {
                 self.client.flush();
                 Ok(None)
             }
-            command => return Err(format!("Invalid command requested: {}", command)),
+            "contextBuild" => {
+                let params = command
+                    .context_build
+                    .ok_or("ContextBuild params should be set")?;
+                Ok(Some(CommandResponse::ContextBuildOrConvert(
+                    ContextResponse::from(Self::context_build(params)),
+                )))
+            }
+            "contextConvert" => {
+                let params = command
+                    .context_convert
+                    .ok_or("ContextConvert params should be set")?;
+                Ok(Some(CommandResponse::ContextBuildOrConvert(
+                    ContextResponse::from(Self::context_convert(params)),
+                )))
+            }
+            command => Err(format!("Invalid command requested: {}", command)),
         }
+    }
+
+    fn context_build_single(single: ContextParam) -> Result<Context, String> {
+        let mut builder = ContextBuilder::new(single.key);
+        if let Some(kind) = single.kind {
+            builder.kind(kind);
+        }
+        if let Some(name) = single.name {
+            builder.name(name);
+        }
+        if let Some(anonymous) = single.anonymous {
+            builder.anonymous(anonymous);
+        }
+        if let Some(attribute_references) = single.private {
+            for attribute in attribute_references {
+                builder.add_private_attribute(Reference::new(attribute));
+            }
+        }
+        if let Some(attributes) = single.custom {
+            for (k, v) in attributes {
+                builder.set_value(k.as_str(), v);
+            }
+        }
+        builder.build()
+    }
+
+    fn build_context_from_params(params: ContextBuildParams) -> Result<String, String> {
+        if params.single.is_none() && params.multi.is_none() {
+            return Err("either 'single' or 'multi' required for contextBuild command".to_string());
+        }
+
+        if let Some(single) = params.single {
+            let context = Self::context_build_single(single)?;
+            return serde_json::to_string(&context).map_err(|e| e.to_string());
+        }
+
+        if let Some(multi) = params.multi {
+            let mut multi_builder = MultiContextBuilder::new();
+            for single in multi {
+                let c = Self::context_build_single(single)?;
+                multi_builder.add_context(c);
+            }
+            let context = multi_builder.build()?;
+            return serde_json::to_string(&context).map_err(|e| e.to_string());
+        }
+
+        unreachable!()
+    }
+
+    fn context_build(params: ContextBuildParams) -> Result<String, String> {
+        Self::build_context_from_params(params)
+    }
+
+    fn context_convert(params: ContextConvertParams) -> Result<String, String> {
+        serde_json::from_str::<Context>(&params.input)
+            .map_err(|e| e.to_string())
+            .and_then(|context| serde_json::to_string(&context).map_err(|e| e.to_string()))
     }
 
     fn evaluate(&self, params: EvaluateFlagParams) -> EvaluateFlagResponse {
@@ -188,7 +258,7 @@ impl ClientEntity {
                 "bool" => self
                     .client
                     .bool_variation_detail(
-                        &params.user,
+                        &params.context,
                         &params.flag_key,
                         params
                             .default_value
@@ -199,7 +269,7 @@ impl ClientEntity {
                 "int" => self
                     .client
                     .int_variation_detail(
-                        &params.user,
+                        &params.context,
                         &params.flag_key,
                         params
                             .default_value
@@ -210,7 +280,7 @@ impl ClientEntity {
                 "double" => self
                     .client
                     .float_variation_detail(
-                        &params.user,
+                        &params.context,
                         &params.flag_key,
                         params
                             .default_value
@@ -221,7 +291,7 @@ impl ClientEntity {
                 "string" => self
                     .client
                     .str_variation_detail(
-                        &params.user,
+                        &params.context,
                         &params.flag_key,
                         params
                             .default_value
@@ -232,7 +302,7 @@ impl ClientEntity {
                 _ => self
                     .client
                     .json_variation_detail(
-                        &params.user,
+                        &params.context,
                         &params.flag_key,
                         params
                             .default_value
@@ -253,7 +323,7 @@ impl ClientEntity {
             "bool" => self
                 .client
                 .bool_variation(
-                    &params.user,
+                    &params.context,
                     &params.flag_key,
                     params
                         .default_value
@@ -264,7 +334,7 @@ impl ClientEntity {
             "int" => self
                 .client
                 .int_variation(
-                    &params.user,
+                    &params.context,
                     &params.flag_key,
                     params
                         .default_value
@@ -275,7 +345,7 @@ impl ClientEntity {
             "double" => self
                 .client
                 .float_variation(
-                    &params.user,
+                    &params.context,
                     &params.flag_key,
                     params
                         .default_value
@@ -286,7 +356,7 @@ impl ClientEntity {
             "string" => self
                 .client
                 .str_variation(
-                    &params.user,
+                    &params.context,
                     &params.flag_key,
                     params
                         .default_value
@@ -297,7 +367,7 @@ impl ClientEntity {
             _ => self
                 .client
                 .json_variation(
-                    &params.user,
+                    &params.context,
                     &params.flag_key,
                     params
                         .default_value
@@ -329,7 +399,7 @@ impl ClientEntity {
             config.details_only_for_tracked_flags();
         }
 
-        let all_flags = self.client.all_flags_detail(&params.user, config);
+        let all_flags = self.client.all_flags_detail(&params.context, config);
 
         EvaluateAllFlagsResponse { state: all_flags }
     }
