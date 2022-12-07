@@ -2,6 +2,39 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [1.0.0] - 2022-12-07
+The latest version of this SDK supports LaunchDarkly's new custom contexts feature. Contexts are an evolution of a previously-existing concept, "users." Contexts let you create targeting rules for feature flags based on a variety of different information, including attributes pertaining to users, organizations, devices, and more. You can even combine contexts to create "multi-contexts." 
+
+This feature is only available to members of LaunchDarkly's Early Access Program (EAP). If you're in the EAP, you can use contexts by updating your SDK to the latest version and, if applicable, updating your Relay Proxy. Outdated SDK versions do not support contexts, and will cause unpredictable flag evaluation behavior.
+
+If you are not in the EAP, only use single contexts of kind "user", or continue to use the user type if available. If you try to create contexts, the context will be sent to LaunchDarkly, but any data not related to the user object will be ignored.
+
+
+For detailed information about this version, please refer to the list below. For information on how to upgrade from the previous version, please read the [migration guide](https://docs.launchdarkly.com/sdk/server-side/rust/implementation-v1).
+
+
+### Added:
+- Added: `hyper` @ `0.14.17`
+- Added: `hyper-rustls` @ `0.23.1`
+- Added: types `Context`, `ContextBuilder`, `MultiContextBuilder`, `Reference`, `Kind`
+
+### Changed:
+- All SDK methods that accepted users now accept contexts. 
+- The [MSRV](https://rust-lang.github.io/rfcs/2495-min-rust-version.html) is now 1.60.0
+- Updated: `lru` from `0.7.2` to `0.8.1`
+- Updated: `launchdarkly-server-sdk-evaluation` from `1.0.0-beta.5` to `1.0.0`
+- Updated: `moka` from `0.7.1` to `0.9.6`
+- Updated: `uuid` from `1.0.0-alpha.1` to `1.2.2`
+
+### Fixed:
+- Fixed handling of unexpected HTTP status codes.
+
+### Removed:
+- Removed `alias` method
+- Removed types `User`, `UserBuilder`. See `Context`, `ContextBuilder`, and `MultiContextBuilder` instead.
+- Removed `reqwest` dependency
+- Removed `threadpool` dependency
+
 ## [1.0.0-beta.4] - 2022-11-07
 ### Added:
 - Enforce ApplicationInfo length restrictions.
