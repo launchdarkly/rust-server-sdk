@@ -1,13 +1,11 @@
 #[macro_use]
 extern crate log;
-#[macro_use]
-extern crate maplit;
 
 use std::env;
 use std::process::exit;
 use std::time::Duration;
 
-use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder, User};
+use launchdarkly_server_sdk::{Client, ConfigBuilder, ContextBuilder, ServiceEndpointsBuilder};
 
 use env_logger::Env;
 use tokio::time;
@@ -34,7 +32,7 @@ async fn main() {
         } else if let [name] = bits {
             bool_flags.push(name.to_string());
         } else {
-            assert!(false, "impossible");
+            unreachable!();
         }
     }
     if bool_flags.is_empty() && str_flags.is_empty() {
@@ -47,10 +45,13 @@ async fn main() {
     let events_url_opt = env::var("LAUNCHDARKLY_EVENTS_URL");
     let polling_url_opt = env::var("LAUNCHDARKLY_POLLING_URL");
 
-    let alice = User::with_key("alice")
-        .custom(hashmap! { "team".into() => "Avengers".into() })
-        .build();
-    let bob = User::with_key("bob").build();
+    let alice = ContextBuilder::new("alice")
+        .set_value("team", "Avengers".into())
+        .build()
+        .expect("Failed to create context");
+    let bob = ContextBuilder::new("bob")
+        .build()
+        .expect("Failed to create context");
 
     let mut config_builder = ConfigBuilder::new(&sdk_key);
     match (stream_url_opt, events_url_opt, polling_url_opt) {
@@ -87,22 +88,22 @@ async fn main() {
     loop {
         interval.tick().await;
 
-        for user in &[&alice, &bob] {
+        for context in &[&alice, &bob] {
             for flag_key in &bool_flags {
-                let flag_detail = client.bool_variation_detail(user, flag_key, false);
+                let flag_detail = client.bool_variation_detail(context, flag_key, false);
                 info!(
-                    "user {:?}, flag {}: {:?}",
-                    user.key(),
+                    "context {:?}, flag {}: {:?}",
+                    context.key(),
                     flag_key,
                     flag_detail
                 );
             }
             for flag_key in &str_flags {
                 let flag_detail =
-                    client.str_variation_detail(user, flag_key, "default".to_string());
+                    client.str_variation_detail(context, flag_key, "default".to_string());
                 info!(
-                    "user {:?}, flag {}: {:?}",
-                    user.key(),
+                    "context {:?}, flag {}: {:?}",
+                    context.key(),
                     flag_key,
                     flag_detail
                 );

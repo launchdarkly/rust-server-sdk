@@ -18,7 +18,8 @@ extern crate serde_json;
 
 pub use launchdarkly_server_sdk_evaluation::Error as EvalError;
 pub use launchdarkly_server_sdk_evaluation::{
-    AttributeValue, Detail, FlagValue, Reason, TypeError, User, UserBuilder,
+    AttributeValue, Context, ContextBuilder, Detail, FlagValue, Kind, MultiContextBuilder, Reason,
+    Reference,
 };
 use lazy_static::lazy_static;
 
@@ -64,11 +65,15 @@ mod version;
 static LAUNCHDARKLY_EVENT_SCHEMA_HEADER: &str = "x-launchdarkly-event-schema";
 static LAUNCHDARKLY_PAYLOAD_ID_HEADER: &str = "x-launchdarkly-payload-id";
 static LAUNCHDARKLY_TAGS_HEADER: &str = "x-launchdarkly-tags";
-static CURRENT_EVENT_SCHEMA: &str = "3";
+static CURRENT_EVENT_SCHEMA: &str = "4";
 
 lazy_static! {
     pub(crate) static ref USER_AGENT: String =
         "RustServerClient/".to_owned() + built_info::PKG_VERSION;
+
+    // For cases where a statically empty header value are needed.
+    pub(crate) static ref EMPTY_HEADER: hyper::header::HeaderValue =
+        hyper::header::HeaderValue::from_static("");
 }
 
 #[allow(dead_code)]

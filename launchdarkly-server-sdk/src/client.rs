@@ -1,12 +1,11 @@
+use eval::Context;
 use parking_lot::RwLock;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use launchdarkly_server_sdk_evaluation::{
-    self as eval, Detail, FlagValue, PrerequisiteEvent, User,
-};
+use launchdarkly_server_sdk_evaluation::{self as eval, Detail, FlagValue, PrerequisiteEvent};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::{broadcast, Semaphore};
@@ -37,7 +36,7 @@ impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
     fn record(&self, event: PrerequisiteEvent) {
         let evt = self.event_factory.new_eval_event(
             &event.prerequisite_flag.key,
-            event.user.clone(),
+            event.context.clone(),
             &event.prerequisite_flag,
             event.prerequisite_result,
             FlagValue::Json(serde_json::Value::Null),
@@ -110,7 +109,7 @@ impl From<usize> for ClientInitState {
 
 /// A client for the LaunchDarkly API.
 ///
-/// In order to create a client instance you must first create a [crate::Config].
+/// In order to create a client instance, first create a config using [crate::ConfigBuilder].
 ///
 /// # Examples
 ///
@@ -150,8 +149,6 @@ pub struct Client {
     sdk_key: String,
     shutdown_broadcast: broadcast::Sender<()>,
     runtime: RwLock<Option<Runtime>>,
-    // TODO: Once we need the config for diagnostic events, then we should add this.
-    // config: Arc<Mutex<Config>>
 }
 
 impl Client {
@@ -254,7 +251,7 @@ impl Client {
         }
         self.started.store(true, Ordering::SeqCst);
 
-        let runtime = tokio::runtime::Runtime::new().map_err(StartError::SpawnFailed)?;
+        let runtime = Runtime::new().map_err(StartError::SpawnFailed)?;
         let _guard = runtime.enter();
         self.runtime.write().replace(runtime);
 
@@ -319,51 +316,27 @@ impl Client {
         self.event_processor.flush();
     }
 
-    /// Identify reports details about a user.
+    /// Identify reports details about a context.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/identify#rust>
-    pub fn identify(&self, user: User) {
+    pub fn identify(&self, context: Context) {
         if self.events_default.disabled {
             return;
         }
 
-        if user.key().is_empty() {
-            warn!("identify called with empty user key!");
-            return;
-        }
-
-        self.send_internal(self.events_default.event_factory.new_identify(user));
+        self.send_internal(self.events_default.event_factory.new_identify(context));
     }
 
-    /// Alias associates two users for analytics purposes.
-    ///
-    /// This can be helpful in the situation where a person is represented by multiple LaunchDarkly
-    /// users. This may happen, for example, when a person initially logs into an application-- the
-    /// person might be represented by an anonymous user prior to logging in and a different user
-    /// after logging in, as denoted by a different user key.
-    ///
-    /// For more information, see the Reference Guide:
-    /// <https://docs.launchdarkly.com/sdk/features/aliasing-users#rust>.
-    pub fn alias(&self, user: User, previous_user: User) {
-        if !self.events_default.disabled {
-            self.send_internal(
-                self.events_default
-                    .event_factory
-                    .new_alias(user, previous_user),
-            );
-        }
-    }
-
-    /// Returns the value of a boolean feature flag for a given user.
+    /// Returns the value of a boolean feature flag for a given context.
     ///
     /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
     /// off and has no off variation.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
-    pub fn bool_variation(&self, user: &User, flag_key: &str, default: bool) -> bool {
-        let val = self.variation(user, flag_key, default);
+    pub fn bool_variation(&self, context: &Context, flag_key: &str, default: bool) -> bool {
+        let val = self.variation(context, flag_key, default);
         if let Some(b) = val.as_bool() {
             b
         } else {
@@ -375,15 +348,15 @@ impl Client {
         }
     }
 
-    /// Returns the value of a string feature flag for a given user.
+    /// Returns the value of a string feature flag for a given context.
     ///
     /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
     /// off and has no off variation.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
-    pub fn str_variation(&self, user: &User, flag_key: &str, default: String) -> String {
-        let val = self.variation(user, flag_key, default.clone());
+    pub fn str_variation(&self, context: &Context, flag_key: &str, default: String) -> String {
+        let val = self.variation(context, flag_key, default.clone());
         if let Some(s) = val.as_string() {
             s
         } else {
@@ -395,15 +368,15 @@ impl Client {
         }
     }
 
-    /// Returns the value of a float feature flag for a given user.
+    /// Returns the value of a float feature flag for a given context.
     ///
     /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
     /// off and has no off variation.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
-    pub fn float_variation(&self, user: &User, flag_key: &str, default: f64) -> f64 {
-        let val = self.variation(user, flag_key, default);
+    pub fn float_variation(&self, context: &Context, flag_key: &str, default: f64) -> f64 {
+        let val = self.variation(context, flag_key, default);
         if let Some(f) = val.as_float() {
             f
         } else {
@@ -415,15 +388,15 @@ impl Client {
         }
     }
 
-    /// Returns the value of a integer feature flag for a given user.
+    /// Returns the value of a integer feature flag for a given context.
     ///
     /// Returns `default` if there is an error, if the flag doesn't exist, or the feature is turned
     /// off and has no off variation.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
-    pub fn int_variation(&self, user: &User, flag_key: &str, default: i64) -> i64 {
-        let val = self.variation(user, flag_key, default);
+    pub fn int_variation(&self, context: &Context, flag_key: &str, default: i64) -> i64 {
+        let val = self.variation(context, flag_key, default);
         if let Some(f) = val.as_int() {
             f
         } else {
@@ -435,7 +408,7 @@ impl Client {
         }
     }
 
-    /// Returns the value of a feature flag for the given user, allowing the value to be
+    /// Returns the value of a feature flag for the given context, allowing the value to be
     /// of any JSON type.
     ///
     /// The value is returned as an [serde_json::Value].
@@ -446,11 +419,11 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn json_variation(
         &self,
-        user: &User,
+        context: &Context,
         flag_key: &str,
         default: serde_json::Value,
     ) -> serde_json::Value {
-        self.variation(user, flag_key, default.clone())
+        self.variation(context, flag_key, default.clone())
             .as_json()
             .unwrap_or(default)
     }
@@ -463,11 +436,11 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn bool_variation_detail(
         &self,
-        user: &User,
+        context: &Context,
         flag_key: &str,
         default: bool,
     ) -> Detail<bool> {
-        self.variation_detail(user, flag_key, default).try_map(
+        self.variation_detail(context, flag_key, default).try_map(
             |val| val.as_bool(),
             default,
             eval::Error::WrongType,
@@ -482,11 +455,11 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn str_variation_detail(
         &self,
-        user: &User,
+        context: &Context,
         flag_key: &str,
         default: String,
     ) -> Detail<String> {
-        self.variation_detail(user, flag_key, default.clone())
+        self.variation_detail(context, flag_key, default.clone())
             .try_map(|val| val.as_string(), default, eval::Error::WrongType)
     }
 
@@ -496,8 +469,13 @@ impl Client {
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
-    pub fn float_variation_detail(&self, user: &User, flag_key: &str, default: f64) -> Detail<f64> {
-        self.variation_detail(user, flag_key, default).try_map(
+    pub fn float_variation_detail(
+        &self,
+        context: &Context,
+        flag_key: &str,
+        default: f64,
+    ) -> Detail<f64> {
+        self.variation_detail(context, flag_key, default).try_map(
             |val| val.as_float(),
             default,
             eval::Error::WrongType,
@@ -510,8 +488,13 @@ impl Client {
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
-    pub fn int_variation_detail(&self, user: &User, flag_key: &str, default: i64) -> Detail<i64> {
-        self.variation_detail(user, flag_key, default).try_map(
+    pub fn int_variation_detail(
+        &self,
+        context: &Context,
+        flag_key: &str,
+        default: i64,
+    ) -> Detail<i64> {
+        self.variation_detail(context, flag_key, default).try_map(
             |val| val.as_int(),
             default,
             eval::Error::WrongType,
@@ -526,26 +509,26 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn json_variation_detail(
         &self,
-        user: &User,
+        context: &Context,
         flag_key: &str,
         default: serde_json::Value,
     ) -> Detail<serde_json::Value> {
-        self.variation_detail(user, flag_key, default.clone())
+        self.variation_detail(context, flag_key, default.clone())
             .try_map(|val| val.as_json(), default, eval::Error::WrongType)
     }
 
-    /// Generates the secure mode hash value for a user.
+    /// Generates the secure mode hash value for a context.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/secure-mode#rust>.
-    pub fn secure_mode_hash(&self, user: &User) -> String {
+    pub fn secure_mode_hash(&self, context: &Context) -> String {
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
-        let tag = ring::hmac::sign(&key, user.key().as_bytes());
+        let tag = ring::hmac::sign(&key, context.key().as_bytes());
 
         data_encoding::HEXLOWER.encode(tag.as_ref())
     }
 
-    /// Returns an object that encapsulates the state of all feature flags for a given user. This
+    /// Returns an object that encapsulates the state of all feature flags for a given context. This
     /// includes the flag values, and also metadata that can be used on the front end.
     ///
     /// The most common use case for this method is to bootstrap a set of client-side feature flags
@@ -555,7 +538,11 @@ impl Client {
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/all-flags#rust>
-    pub fn all_flags_detail(&self, user: &User, flag_state_config: FlagDetailConfig) -> FlagDetail {
+    pub fn all_flags_detail(
+        &self,
+        context: &Context,
+        flag_state_config: FlagDetailConfig,
+    ) -> FlagDetail {
         if self.offline {
             warn!(
                 "all_flags_detail() called, but client is in offline mode. Returning empty state"
@@ -571,7 +558,7 @@ impl Client {
         let data_store = self.data_store.read();
 
         let mut flag_detail = FlagDetail::new(true);
-        flag_detail.populate(&*data_store, user, flag_state_config);
+        flag_detail.populate(&*data_store, context, flag_state_config);
 
         flag_detail
     }
@@ -583,14 +570,14 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/evaluation-reasons#rust>.
     pub fn variation_detail<T: Into<FlagValue> + Clone>(
         &self,
-        user: &User,
+        context: &Context,
         flag_key: &str,
         default: T,
     ) -> Detail<FlagValue> {
-        self.variation_internal(user, flag_key, default, &self.events_with_reasons)
+        self.variation_internal(context, flag_key, default, &self.events_with_reasons)
     }
 
-    /// This is a generic function which returns the value of a feature flag for a given user.
+    /// This is a generic function which returns the value of a feature flag for a given context.
     ///
     /// This method is an alternatively to the type specified methods (e.g.
     /// [Client::bool_variation], [Client::int_variation], etc.).
@@ -602,18 +589,16 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn variation<T: Into<FlagValue> + Clone>(
         &self,
-        user: &User,
+        context: &Context,
         flag_key: &str,
         default: T,
     ) -> FlagValue {
-        // unwrap is safe here because value should have been replaced with default if it was None.
-        // TODO(ch108604) that is ugly, use the type system to fix it
-        self.variation_internal(user, flag_key, default, &self.events_default)
+        self.variation_internal(context, flag_key, default, &self.events_default)
             .value
             .unwrap()
     }
 
-    /// Reports that a user has performed an event.
+    /// Reports that a context has performed an event.
     ///
     /// The `key` parameter is defined by the application and will be shown in analytics reports;
     /// it normally corresponds to the event name of a metric that you have created through the
@@ -622,11 +607,11 @@ impl Client {
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/events#rust>.
-    pub fn track_event(&self, user: User, key: impl Into<String>) {
-        let _ = self.track(user, key, None, serde_json::Value::Null);
+    pub fn track_event(&self, context: Context, key: impl Into<String>) {
+        let _ = self.track(context, key, None, serde_json::Value::Null);
     }
 
-    /// Reports that a user has performed an event, and associates it with custom data.
+    /// Reports that a context has performed an event, and associates it with custom data.
     ///
     /// The `key` parameter is defined by the application and will be shown in analytics reports;
     /// it normally corresponds to the event name of a metric that you have created through the
@@ -640,14 +625,14 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/events#rust>.
     pub fn track_data(
         &self,
-        user: User,
+        context: Context,
         key: impl Into<String>,
         data: impl Serialize,
     ) -> serde_json::Result<()> {
-        self.track(user, key, None, data)
+        self.track(context, key, None, data)
     }
 
-    /// Reports that a user has performed an event, and associates it with a numeric value. This
+    /// Reports that a context has performed an event, and associates it with a numeric value. This
     /// value is used by the LaunchDarkly experimentation feature in numeric custom metrics, and
     /// will also be returned as part of the custom event for Data Export.
     ///
@@ -659,17 +644,17 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/events#rust>.
     pub fn track_metric(
         &self,
-        user: User,
+        context: Context,
         key: impl Into<String>,
         value: f64,
         data: impl Serialize,
     ) {
-        let _ = self.track(user, key, Some(value), data);
+        let _ = self.track(context, key, Some(value), data);
     }
 
     fn track(
         &self,
-        user: User,
+        context: Context,
         key: impl Into<String>,
         metric_value: Option<f64>,
         data: impl Serialize,
@@ -678,7 +663,7 @@ impl Client {
             let event =
                 self.events_default
                     .event_factory
-                    .new_custom(user, key, metric_value, data)?;
+                    .new_custom(context, key, metric_value, data)?;
 
             self.send_internal(event);
         }
@@ -688,7 +673,7 @@ impl Client {
 
     fn variation_internal<T: Into<FlagValue> + Clone>(
         &self,
-        user: &User,
+        context: &Context,
         flag_key: &str,
         default: T,
         events_scope: &EventsScope,
@@ -709,7 +694,7 @@ impl Client {
                         let result = eval::evaluate(
                             data_store.to_store(),
                             &flag,
-                            user,
+                            context,
                             Some(&*events_scope.prerequisite_event_recorder),
                         )
                         .map(|v| v.clone())
@@ -729,7 +714,7 @@ impl Client {
             let event = match &flag {
                 Some(f) => events_scope.event_factory.new_eval_event(
                     flag_key,
-                    user.clone(),
+                    context.clone(),
                     f,
                     result.clone(),
                     default.into(),
@@ -737,7 +722,7 @@ impl Client {
                 ),
                 None => events_scope.event_factory.new_unknown_flag_event(
                     flag_key,
-                    user.clone(),
+                    context.clone(),
                     result.clone(),
                     default.into(),
                 ),
@@ -756,7 +741,8 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::Receiver;
-    use launchdarkly_server_sdk_evaluation::{Reason, User};
+    use eval::ContextBuilder;
+    use launchdarkly_server_sdk_evaluation::Reason;
     use std::collections::HashMap;
 
     use tokio::time::Instant;
@@ -816,12 +802,14 @@ mod tests {
         default: FlagValue,
         expected: FlagValue,
     ) {
-        let user = User::with_key("foo".to_string()).build();
+        let context = ContextBuilder::new("foo")
+            .build()
+            .expect("Failed to create context");
 
         let (client, _event_rx) = make_mocked_client();
 
-        let result = client.variation_detail(&user, "myFlag", default.clone());
-        assert_eq!(result.value.unwrap(), default.clone());
+        let result = client.variation_detail(&context, "myFlag", default.clone());
+        assert_eq!(result.value.unwrap(), default);
 
         client.start_with_default_executor();
         client
@@ -833,7 +821,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let result = client.variation_detail(&user, "myFlag", default);
+        let result = client.variation_detail(&context, "myFlag", default);
         assert_eq!(result.value.unwrap(), expected);
         assert!(matches!(
             result.reason,
@@ -855,9 +843,11 @@ mod tests {
                 PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
             )
             .expect("patch should apply");
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
+        let flag_value = client.variation(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(flag_value.as_bool().unwrap());
         client.flush();
@@ -870,11 +860,14 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                flag_key: "myFlag".into(),
                 version: Some(42),
                 variation: Some(1),
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("myFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -885,24 +878,27 @@ mod tests {
         let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
-        let user = User::with_key("bob").build();
-        let flag_value = client.variation(&user, "myFlag", FlagValue::Bool(false));
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let flag_value = client.variation(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(!flag_value.as_bool().unwrap());
         client.flush();
         client.close();
 
-        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert!(events.is_empty());
+        assert_eq!(event_rx.iter().count(), 0);
     }
 
     #[test]
     fn variation_handles_unknown_flags() {
         let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let flag_value = client.variation(&user, "non-existent-flag", FlagValue::Bool(false));
+        let flag_value = client.variation(&context, "non-existent-flag", FlagValue::Bool(false));
 
         assert!(!flag_value.as_bool().unwrap());
         client.flush();
@@ -915,11 +911,15 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                flag_key: "non-existent-flag".into(),
                 version: None,
                 variation: None,
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+
+            let feature = event_summary.features.get("non-existent-flag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -941,9 +941,11 @@ mod tests {
                 PatchTarget::Flag(StorageItem::Item(flag.clone())),
             )
             .expect("patch should apply");
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(detail.value.unwrap().as_bool().unwrap());
         assert!(matches!(
@@ -963,11 +965,15 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[2].clone() {
             let variation_key = VariationKey {
-                flag_key: "myFlag".into(),
                 version: Some(42),
                 variation: Some(1),
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+
+            let feature = event_summary.features.get("myFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -986,9 +992,11 @@ mod tests {
                 PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
             )
             .expect("patch should apply");
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(detail.value.unwrap().as_bool().unwrap());
         assert!(matches!(
@@ -1007,11 +1015,15 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                flag_key: "myFlag".into(),
                 version: Some(42),
                 variation: Some(1),
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+
+            let feature = event_summary.features.get("myFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -1022,9 +1034,11 @@ mod tests {
         let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(!detail.value.unwrap().as_bool().unwrap());
         assert!(matches!(
@@ -1036,8 +1050,7 @@ mod tests {
         client.flush();
         client.close();
 
-        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert!(events.is_empty());
+        assert_eq!(event_rx.iter().count(), 0);
     }
 
     #[test]
@@ -1053,9 +1066,11 @@ mod tests {
                 PatchTarget::Flag(StorageItem::Item(basic_off_flag("myFlag"))),
             )
             .expect("patch should apply");
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let result = client.variation(&user, "myFlag", FlagValue::Bool(false));
+        let result = client.variation(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(!result.as_bool().unwrap());
         client.flush();
@@ -1068,11 +1083,14 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                flag_key: "myFlag".into(),
                 version: Some(42),
                 variation: None,
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("myFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -1102,9 +1120,11 @@ mod tests {
             .write()
             .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
             .expect("patch should apply");
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let detail = client.variation_detail(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(detail.value.unwrap().as_bool().unwrap());
         assert!(matches!(
@@ -1125,17 +1145,24 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
-                flag_key: "myFlag".into(),
                 version: Some(42),
                 variation: Some(1),
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("myFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
+
             let variation_key = VariationKey {
-                flag_key: "prereqFlag".into(),
                 version: Some(42),
                 variation: Some(1),
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("prereqFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         }
     }
 
@@ -1163,9 +1190,11 @@ mod tests {
             .write()
             .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
             .expect("patch should apply");
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let detail = client.variation(&user, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation(&context, "myFlag", FlagValue::Bool(false));
 
         assert!(!detail.as_bool().unwrap());
         client.flush();
@@ -1180,17 +1209,24 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
-                flag_key: "myFlag".into(),
                 version: Some(42),
                 variation: Some(0),
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("myFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
+
             let variation_key = VariationKey {
-                flag_key: "prereqFlag".into(),
                 version: Some(42),
                 variation: None,
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("prereqFlag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         }
     }
 
@@ -1199,8 +1235,10 @@ mod tests {
         let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
-        let user = User::with_key("bob").build();
-        let detail = client.variation_detail(&user, "non-existent-flag", FlagValue::Bool(false));
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let detail = client.variation_detail(&context, "non-existent-flag", FlagValue::Bool(false));
 
         assert!(!detail.value.unwrap().as_bool().unwrap());
         assert!(matches!(
@@ -1219,11 +1257,14 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                flag_key: "non-existent-flag".into(),
                 version: None,
                 variation: None,
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("non-existent-flag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -1233,9 +1274,11 @@ mod tests {
     async fn variation_detail_handles_client_not_ready() {
         let (client, event_rx) = make_mocked_client_with_delay(u64::MAX, false);
         client.start_with_default_executor();
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        let detail = client.variation_detail(&user, "non-existent-flag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&context, "non-existent-flag", FlagValue::Bool(false));
 
         assert!(!detail.value.unwrap().as_bool().unwrap());
         assert!(matches!(
@@ -1254,11 +1297,14 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                flag_key: "non-existent-flag".into(),
                 version: None,
                 variation: None,
             };
-            assert!(event_summary.features.contains_key(&variation_key));
+            let feature = event_summary.features.get("non-existent-flag");
+            assert!(feature.is_some());
+
+            let feature = feature.unwrap();
+            assert!(feature.counters.contains_key(&variation_key));
         } else {
             panic!("Event should be a summary type");
         }
@@ -1269,9 +1315,11 @@ mod tests {
         let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        client.identify(user);
+        client.identify(context);
         client.flush();
         client.close();
 
@@ -1285,59 +1333,29 @@ mod tests {
         let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        client.identify(user);
+        client.identify(context);
         client.flush();
         client.close();
 
-        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert!(events.is_empty());
+        assert_eq!(event_rx.iter().count(), 0);
     }
 
     #[test]
     fn secure_mode_hash() {
         let config = ConfigBuilder::new("secret").offline(true).build();
         let client = Client::build(config).expect("Should be built.");
-        let user = User::with_key("Message").build();
+        let context = ContextBuilder::new("Message")
+            .build()
+            .expect("Failed to create context");
 
         assert_eq!(
-            client.secure_mode_hash(&user),
+            client.secure_mode_hash(&context),
             "aa747c502a898200f9e4fa21bac68136f886a0e27aec70ba06daf2e2a5cb5597"
         );
-    }
-
-    #[test]
-    fn alias_sends_alias_event() {
-        let (client, event_rx) = make_mocked_client();
-        client.start_with_default_executor();
-
-        let user = User::with_key("bob").build();
-        let previous_user = User::with_key("previous-bob").build();
-
-        client.alias(user, previous_user);
-        client.flush();
-        client.close();
-
-        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind(), "alias");
-    }
-
-    #[test]
-    fn alias_sends_nothing_in_offline_mode() {
-        let (client, event_rx) = make_mocked_offline_client();
-        client.start_with_default_executor();
-
-        let user = User::with_key("bob").build();
-        let previous_user = User::with_key("previous-bob").build();
-
-        client.alias(user, previous_user);
-        client.flush();
-        client.close();
-
-        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert!(events.is_empty());
     }
 
     #[derive(Serialize)]
@@ -1350,22 +1368,19 @@ mod tests {
         let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
 
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        client.track_event(user.clone(), "event-with-null");
-        client.track_data(user.clone(), "event-with-string", "string-data")?;
-        client.track_data(user.clone(), "event-with-json", json!({"answer": 42}))?;
+        client.track_event(context.clone(), "event-with-null");
+        client.track_data(context.clone(), "event-with-string", "string-data")?;
+        client.track_data(context.clone(), "event-with-json", json!({"answer": 42}))?;
         client.track_data(
-            user.clone(),
+            context.clone(),
             "event-with-struct",
             MyCustomData { answer: 42 },
         )?;
-        client.track_metric(
-            user.clone(),
-            "event-with-metric",
-            42.0,
-            serde_json::Value::Null,
-        );
+        client.track_metric(context, "event-with-metric", 42.0, serde_json::Value::Null);
 
         client.flush();
         client.close();
@@ -1392,28 +1407,24 @@ mod tests {
         let (client, event_rx) = make_mocked_offline_client();
         client.start_with_default_executor();
 
-        let user = User::with_key("bob").build();
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
 
-        client.track_event(user.clone(), "event-with-null");
-        client.track_data(user.clone(), "event-with-string", "string-data")?;
-        client.track_data(user.clone(), "event-with-json", json!({"answer": 42}))?;
+        client.track_event(context.clone(), "event-with-null");
+        client.track_data(context.clone(), "event-with-string", "string-data")?;
+        client.track_data(context.clone(), "event-with-json", json!({"answer": 42}))?;
         client.track_data(
-            user.clone(),
+            context.clone(),
             "event-with-struct",
             MyCustomData { answer: 42 },
         )?;
-        client.track_metric(
-            user.clone(),
-            "event-with-metric",
-            42.0,
-            serde_json::Value::Null,
-        );
+        client.track_metric(context, "event-with-metric", 42.0, serde_json::Value::Null);
 
         client.flush();
         client.close();
 
-        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert!(events.is_empty());
+        assert_eq!(event_rx.iter().count(), 0);
 
         Ok(())
     }
@@ -1424,7 +1435,7 @@ mod tests {
 
         let config = ConfigBuilder::new("sdk-key")
             .offline(offline)
-            .data_source(MockDataSourceBuilder::new().data_source(updates.clone()))
+            .data_source(MockDataSourceBuilder::new().data_source(updates))
             .event_processor(EventProcessorBuilder::new().event_sender(Arc::new(event_sender)))
             .build();
 

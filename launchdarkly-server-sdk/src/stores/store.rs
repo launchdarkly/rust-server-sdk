@@ -31,8 +31,7 @@ pub trait DataStore: Store + Send + Sync {
     fn to_store(&self) -> &dyn Store;
 }
 
-// TODO(ch108602) implement Error::ClientNotReady
-/// Default implementation of the DataStore which holds information in an in-memory data store.
+/// Default implementation of [DataStore] which holds information in-memory.
 pub struct InMemoryDataStore {
     pub data: AllData<StorageItem<Flag>, StorageItem<Segment>>,
 }
@@ -190,8 +189,8 @@ mod tests {
         let mut data_store = InMemoryDataStore::new();
         data_store.init(basic_data());
 
-        let mut flag = data_store.flag("flag-key").unwrap().clone();
-        flag.version = flag.version + 1;
+        let mut flag = data_store.flag("flag-key").unwrap();
+        flag.version += 1;
 
         assert!(data_store
             .upsert(
@@ -201,13 +200,13 @@ mod tests {
             .is_ok());
         assert!(data_store.flag("flag-key").is_none());
 
-        flag.version = flag.version - 1;
+        flag.version -= 1;
 
         let patch_target = PatchTarget::Flag(StorageItem::Item(flag.clone()));
         assert!(data_store.upsert("flag-key", patch_target).is_ok());
         assert!(data_store.flag("flag-key").is_none());
 
-        flag.version = flag.version + 2;
+        flag.version += 2;
         let patch_target = PatchTarget::Flag(StorageItem::Item(flag));
         assert!(data_store.upsert("flag-key", patch_target).is_ok());
         assert!(data_store.flag("flag-key").is_some());
@@ -222,10 +221,9 @@ mod tests {
         let mut data_store = InMemoryDataStore::new();
         data_store.init(basic_data());
 
-        let flag = data_store.flag("flag-key").unwrap();
+        let mut flag = data_store.flag("flag-key").unwrap();
         assert_eq!(42, flag.version);
 
-        let mut flag = flag.clone();
         flag.version = updated_version;
 
         let patch_target = PatchTarget::Flag(StorageItem::Item(flag));
@@ -267,8 +265,8 @@ mod tests {
         let mut data_store = InMemoryDataStore::new();
         data_store.init(basic_data());
 
-        let mut segment = data_store.segment("segment-key").unwrap().clone();
-        segment.version = segment.version + 1;
+        let mut segment = data_store.segment("segment-key").unwrap();
+        segment.version += 1;
 
         assert!(data_store
             .upsert(
@@ -278,13 +276,13 @@ mod tests {
             .is_ok());
         assert!(data_store.segment("segment-key").is_none());
 
-        segment.version = segment.version - 1;
+        segment.version -= 1;
 
         let patch_target = PatchTarget::Segment(StorageItem::Item(segment.clone()));
         assert!(data_store.upsert("segment-key", patch_target).is_ok());
         assert!(data_store.segment("segment-key").is_none());
 
-        segment.version = segment.version + 2;
+        segment.version += 2;
         let patch_target = PatchTarget::Segment(StorageItem::Item(segment));
         assert!(data_store.upsert("segment-key", patch_target).is_ok());
         assert!(data_store.segment("segment-key").is_some());
@@ -299,10 +297,9 @@ mod tests {
         let mut data_store = InMemoryDataStore::new();
         data_store.init(basic_data());
 
-        let segment = data_store.segment("segment-key").unwrap();
+        let mut segment = data_store.segment("segment-key").unwrap();
         assert_eq!(1, segment.version);
 
-        let mut segment = segment.clone();
         segment.version = updated_version;
 
         let patch_target = PatchTarget::Segment(StorageItem::Item(segment));

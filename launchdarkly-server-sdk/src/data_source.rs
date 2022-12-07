@@ -1,3 +1,9 @@
+use super::stores::store_types::{AllData, DataKind, PatchTarget, StorageItem};
+use crate::feature_requester::FeatureRequesterError;
+use crate::feature_requester_builders::FeatureRequesterFactory;
+use crate::reqwest::is_http_error_recoverable;
+use crate::stores::store::{DataStore, UpdateError};
+use crate::LAUNCHDARKLY_TAGS_HEADER;
 use es::{Client, ClientBuilder, HttpsConnector, ReconnectOptionsBuilder};
 use eventsource_client as es;
 use futures::StreamExt;
@@ -9,12 +15,6 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
-
-use super::stores::store_types::{AllData, DataKind, PatchTarget, StorageItem};
-use crate::feature_requester::FeatureRequesterError;
-use crate::feature_requester_builders::FeatureRequesterFactory;
-use crate::stores::store::{DataStore, UpdateError};
-use crate::LAUNCHDARKLY_TAGS_HEADER;
 
 const FLAGS_PREFIX: &str = "/flags/";
 const SEGMENTS_PREFIX: &str = "/segments/";
@@ -37,7 +37,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) struct PutData {
     #[serde(default = "String::default")]
     path: String,
-
     data: AllData<Flag, Segment>,
 }
 
@@ -84,6 +83,7 @@ impl StreamingDataSource {
                 ReconnectOptionsBuilder::new(true)
                     .retry_initial(true)
                     .delay(initial_reconnect_delay)
+                    .delay_max(Duration::from_secs(30))
                     .build(),
             )
             .header("Authorization", sdk_key)?
@@ -153,6 +153,16 @@ impl DataSource for StreamingDataSource {
                                 },
                                 es::SSE::Event(ev) => ev,
                             },
+                            Some(Err(es::Error::UnexpectedResponse(status_code))) => {
+                                match is_http_error_recoverable(status_code.as_u16()) {
+                                    true => continue,
+                                    _ => {
+                                        notify_init.call_once(|| (init_complete)(false));
+                                        warn!("Returned unrecoverable failure. Unexpected response {:?}", status_code);
+                                        break
+                                    }
+                                }
+                            },
                             Some(Err(e)) => {
                                 error!("error on event stream: {:?}", e);
 
@@ -188,12 +198,9 @@ impl DataSource for StreamingDataSource {
                             error!("error processing update: {:?}", e);
                         }
 
-                        // Only want to notify for the first event.
-                        // TODO: When error handling is added this should happen once we are successful,
-                        // or if we have encountered an unrecoverable error.
                         notify_init.call_once(|| (init_complete)(init_success));
                     },
-                };
+                }
             }
         });
     }
@@ -252,7 +259,7 @@ impl DataSource for PollingDataSource {
             loop {
                 futures::select! {
                     _ = interval.next() => {
-                        match feature_requester.get_all() {
+                        match feature_requester.get_all().await {
                             Ok(all_data) => {
                                 let mut data_store = data_store.write();
                                 data_store.init(all_data);
@@ -269,7 +276,7 @@ impl DataSource for PollingDataSource {
                         };
                     },
                     _ = shutdown_future => break
-                };
+                }
             }
         });
     }
@@ -301,7 +308,7 @@ pub(crate) struct MockDataSource {
 #[cfg(test)]
 impl MockDataSource {
     pub fn new_with_init_delay(delay_init: u64) -> Self {
-        return MockDataSource { delay_init };
+        MockDataSource { delay_init }
     }
 }
 
@@ -389,10 +396,8 @@ mod tests {
     use tokio::sync::broadcast;
 
     use super::{DataSource, PollingDataSource, StreamingDataSource};
-    use crate::{
-        feature_requester_builders::ReqwestFeatureRequesterBuilder,
-        stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER,
-    };
+    use crate::feature_requester_builders::HyperFeatureRequesterBuilder;
+    use crate::{stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER};
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
     #[test_case(None, Matcher::Missing)]
@@ -464,11 +469,10 @@ mod tests {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let reqwest_builder =
-            ReqwestFeatureRequesterBuilder::new(&mockito::server_url(), "sdk-key");
+        let hyper_builder = HyperFeatureRequesterBuilder::new(&mockito::server_url(), "sdk-key");
 
         let polling = PollingDataSource::new(
-            Arc::new(Mutex::new(Box::new(reqwest_builder))),
+            Arc::new(Mutex::new(Box::new(hyper_builder))),
             Duration::from_secs(10),
             tag,
         );

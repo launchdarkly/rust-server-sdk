@@ -56,7 +56,7 @@ impl PersistentDataStoreWrapper {
         Ok(was_updated)
     }
 
-    fn add_to_cache<T: 'static + std::marker::Sync + std::marker::Send + std::clone::Clone>(
+    fn add_to_cache<T: 'static + Sync + Send + Clone>(
         was_updated: bool,
         cache: &CachePair<T>,
         key: &str,

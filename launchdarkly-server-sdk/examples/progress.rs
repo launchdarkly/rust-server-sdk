@@ -9,8 +9,7 @@ use std::{
     time::Duration,
 };
 
-use launchdarkly_server_sdk as ld;
-use launchdarkly_server_sdk::{Client, ConfigBuilder, ServiceEndpointsBuilder};
+use launchdarkly_server_sdk::{Client, ConfigBuilder, ContextBuilder, ServiceEndpointsBuilder};
 
 const MAX_PROGRESS: usize = 100;
 
@@ -47,7 +46,9 @@ fn main() {
         eprintln!("Please enter a username on the command line.");
         exit(1);
     }
-    let mut user = ld::User::with_key(args[0].clone()).build();
+    let context = ContextBuilder::new(args[0].clone())
+        .build()
+        .expect("Failed to create context");
 
     let mut config_builder = ConfigBuilder::new(&sdk_key);
     match (stream_url_opt, events_url_opt, polling_url_opt) {
@@ -80,12 +81,10 @@ fn main() {
         counter.inc();
     }
     while counter.count < 100 {
-        user.attribute("progress", counter.count as f64).unwrap();
-
-        let millis = client.int_variation(&user, "progress-delay", 100);
+        let millis = client.int_variation(&context, "progress-delay", 100);
         thread::sleep(Duration::from_millis(millis as u64));
 
-        let increase = client.bool_variation(&user, "make-progress", false);
+        let increase = client.bool_variation(&context, "make-progress", false);
         if increase {
             counter.inc();
         }

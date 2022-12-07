@@ -1,12 +1,5 @@
 evaluation/all flags state/client not ready
 evaluation/client not ready
-streaming/retry behavior/do not retry after unrecoverable HTTP error on initial connect
-streaming/retry behavior/retry after recoverable HTTP error on initial connect
-streaming/retry behavior/retry after recoverable HTTP error on reconnect/error 400
-streaming/retry behavior/retry after recoverable HTTP error on reconnect/error 408
-streaming/retry behavior/retry after recoverable HTTP error on reconnect/error 429
-streaming/retry behavior/retry after recoverable HTTP error on reconnect/error 500
-streaming/retry behavior/retry after recoverable HTTP error on reconnect/error 503
 streaming/validation/drop and reconnect if stream event has malformed JSON/delete event
 streaming/validation/drop and reconnect if stream event has malformed JSON/patch event
 streaming/validation/drop and reconnect if stream event has malformed JSON/put event

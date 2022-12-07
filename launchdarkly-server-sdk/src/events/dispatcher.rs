@@ -2,9 +2,8 @@ use crossbeam_channel::{bounded, select, tick, Receiver, Sender};
 use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::time::SystemTime;
-use threadpool::ThreadPool;
 
-use launchdarkly_server_sdk_evaluation::User;
+use launchdarkly_server_sdk_evaluation::Context;
 use lru::LruCache;
 
 use super::event::FeatureRequestEvent;
@@ -71,31 +70,47 @@ impl Outbox {
 }
 
 pub(super) struct EventDispatcher {
-    flush_pool: ThreadPool,
     outbox: Outbox,
-    user_keys: LruCache<String, ()>,
+    context_keys: LruCache<String, ()>,
     events_configuration: EventsConfiguration,
     last_known_time: u128,
     disabled: bool,
+    thread_count: usize,
 }
 
 impl EventDispatcher {
     pub(super) fn new(events_configuration: EventsConfiguration) -> Self {
         Self {
-            flush_pool: ThreadPool::new(5),
             outbox: Outbox::new(events_configuration.capacity),
-            user_keys: LruCache::<String, ()>::new(events_configuration.user_keys_capacity),
+            context_keys: LruCache::<String, ()>::new(events_configuration.context_keys_capacity),
             events_configuration,
             last_known_time: 0,
             disabled: false,
+            thread_count: 5,
         }
     }
 
     pub(super) fn start(&mut self, inbox_rx: Receiver<EventDispatcherMessage>) {
-        let reset_user_cache_ticker = tick(self.events_configuration.user_keys_flush_interval);
+        let reset_context_cache_ticker =
+            tick(self.events_configuration.context_keys_flush_interval);
         let flush_ticker = tick(self.events_configuration.flush_interval);
-        let (event_result_tx, event_result_rx) =
-            bounded::<EventSenderResult>(self.flush_pool.max_count());
+        let (event_result_tx, event_result_rx) = bounded::<EventSenderResult>(self.thread_count);
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(self.thread_count)
+            .enable_io()
+            .enable_time()
+            .build();
+
+        let rt = match rt {
+            Ok(rt) => rt,
+            Err(e) => {
+                error!("Could not start runtime for event sending: {}", e);
+                return;
+            }
+        };
+
+        let (send, recv) = bounded::<()>(1);
 
         loop {
             debug!("waiting for a batch to send");
@@ -114,7 +129,7 @@ impl EventDispatcher {
                             return;
                         }
                     },
-                    recv(reset_user_cache_ticker) -> _ => self.user_keys.clear(),
+                    recv(reset_context_cache_ticker) -> _ => self.context_keys.clear(),
                     recv(flush_ticker) -> _ => break,
                     recv(inbox_rx) -> result => match result {
                         Ok(EventDispatcherMessage::Flush) => break,
@@ -124,7 +139,9 @@ impl EventDispatcher {
                             }
                         }
                         Ok(EventDispatcherMessage::Close(sender)) => {
-                            self.flush_pool.join();
+                            drop(send);
+                            //Should unblock once all the senders are dropped.
+                            let _ = recv.recv();
 
                             // We call drop here to make sure this receiver is completely
                             // disconnected. This ensures the event processor cannot send another
@@ -149,17 +166,17 @@ impl EventDispatcher {
                 continue;
             }
 
-            if !self.outbox.is_empty()
-                && self.flush_pool.max_count() != self.flush_pool.active_count()
-            {
+            if !self.outbox.is_empty() {
                 let payload = self.outbox.get_payload();
 
                 debug!("Sending batch of {} events", payload.len());
 
                 let sender = self.events_configuration.event_sender.clone();
                 let results = event_result_tx.clone();
-                self.flush_pool.execute(move || {
-                    let _ = sender.send_event_data(payload, results);
+                let send = send.clone();
+                rt.spawn(async move {
+                    sender.send_event_data(payload, results).await;
+                    drop(send);
                 });
             }
         }
@@ -170,10 +187,7 @@ impl EventDispatcher {
             InputEvent::FeatureRequest(fre) => {
                 self.outbox.add_to_summary(&fre);
 
-                let first_time_seeing_user = self.notice_user(&fre.base.user);
-                let will_send_full_user_details_in_event =
-                    fre.track_events && self.events_configuration.inline_users_in_events;
-                if !will_send_full_user_details_in_event && first_time_seeing_user {
+                if self.notice_context(&fre.base.context) {
                     self.outbox.add_event(OutputEvent::Index(fre.to_index_event(
                         self.events_configuration.all_attributes_private,
                         self.events_configuration.private_attributes.clone(),
@@ -197,19 +211,11 @@ impl EventDispatcher {
                 }
 
                 if fre.track_events {
-                    let event = match self.events_configuration.inline_users_in_events {
-                        true => fre.into_inline(
-                            self.events_configuration.all_attributes_private,
-                            self.events_configuration.private_attributes.clone(),
-                        ),
-                        false => fre,
-                    };
-
-                    self.outbox.add_event(OutputEvent::FeatureRequest(event));
+                    self.outbox.add_event(OutputEvent::FeatureRequest(fre));
                 }
             }
             InputEvent::Identify(identify) => {
-                self.notice_user(&identify.base.user);
+                self.notice_context(&identify.base.context);
                 self.outbox
                     .add_event(OutputEvent::Identify(identify.into_inline(
                         self.events_configuration.all_attributes_private,
@@ -218,13 +224,8 @@ impl EventDispatcher {
                         ),
                     )));
             }
-            InputEvent::Alias(alias) => {
-                self.outbox.add_event(OutputEvent::Alias(alias));
-            }
             InputEvent::Custom(custom) => {
-                if self.notice_user(&custom.base.user)
-                    && !self.events_configuration.inline_users_in_events
-                {
+                if self.notice_context(&custom.base.context) {
                     self.outbox
                         .add_event(OutputEvent::Index(custom.to_index_event(
                             self.events_configuration.all_attributes_private,
@@ -232,30 +233,20 @@ impl EventDispatcher {
                         )));
                 }
 
-                let event = match self.events_configuration.inline_users_in_events {
-                    true => custom.into_inline(
-                        self.events_configuration.all_attributes_private,
-                        HashSet::from_iter(
-                            self.events_configuration.private_attributes.iter().cloned(),
-                        ),
-                    ),
-                    false => custom,
-                };
-
-                self.outbox.add_event(OutputEvent::Custom(event));
+                self.outbox.add_event(OutputEvent::Custom(custom));
             }
         }
     }
 
-    fn notice_user(&mut self, user: &User) -> bool {
-        let key = user.key().to_string();
+    fn notice_context(&mut self, context: &Context) -> bool {
+        let key = context.canonical_key();
 
-        if self.user_keys.get(&key).is_none() {
-            trace!("noticing new user {:?}", key);
-            self.user_keys.put(key, ());
+        if self.context_keys.get(key).is_none() {
+            trace!("noticing new context {:?}", key);
+            self.context_keys.put(key.to_owned(), ());
             true
         } else {
-            trace!("ignoring already-seen user {:?}", key);
+            trace!("ignoring already-seen context {:?}", key);
             false
         }
     }
@@ -277,19 +268,21 @@ mod tests {
     use crate::events::event::{EventFactory, OutputEvent};
     use crate::events::{create_event_sender, create_events_configuration};
     use crate::test_common::basic_flag;
-    use launchdarkly_server_sdk_evaluation::{Detail, FlagValue, Reason};
+    use launchdarkly_server_sdk_evaluation::{ContextBuilder, Detail, FlagValue, Reason};
     use test_case::test_case;
 
     #[test]
     fn get_payload_from_outbox_empties_outbox() {
         let (event_sender, _) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let mut dispatcher = create_dispatcher(events_configuration);
 
-        let user = User::with_key("user".to_string()).build();
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
         let event_factory = EventFactory::new(true);
-        dispatcher.process_event(event_factory.new_identify(user.clone()));
+        dispatcher.process_event(event_factory.new_identify(context));
         let _ = dispatcher.outbox.get_payload();
 
         assert!(dispatcher.outbox.is_empty());
@@ -299,14 +292,16 @@ mod tests {
     fn dispatcher_ignores_events_over_capacity() {
         let (event_sender, _) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let mut dispatcher = create_dispatcher(events_configuration);
 
-        let user = User::with_key("user".to_string()).build();
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
         let event_factory = EventFactory::new(true);
 
         for _ in 0..10 {
-            dispatcher.process_event(event_factory.new_identify(user.clone()));
+            dispatcher.process_event(event_factory.new_identify(context.clone()));
         }
 
         assert_eq!(5, dispatcher.outbox.events.len());
@@ -315,17 +310,19 @@ mod tests {
             .events
             .iter()
             .all(|event| event.kind() == "identify"));
-        assert_eq!(1, dispatcher.user_keys.len());
+        assert_eq!(1, dispatcher.context_keys.len());
     }
 
     #[test]
     fn dispatcher_handles_feature_request_events_correctly() {
         let (event_sender, _) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let mut dispatcher = create_dispatcher(events_configuration);
 
-        let user = User::with_key("user".to_string()).build();
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
         let mut flag = basic_flag("flag");
         flag.debug_events_until_date = Some(64_060_606_800_000);
         flag.track_events = true;
@@ -341,7 +338,7 @@ mod tests {
         let event_factory = EventFactory::new(true);
         let feature_request_event = event_factory.new_eval_event(
             &flag.key,
-            user,
+            context,
             &flag,
             detail,
             FlagValue::from(false),
@@ -353,7 +350,7 @@ mod tests {
         assert_eq!("index", dispatcher.outbox.events[0].kind());
         assert_eq!("debug", dispatcher.outbox.events[1].kind());
         assert_eq!("feature", dispatcher.outbox.events[2].kind());
-        assert_eq!(1, dispatcher.user_keys.len());
+        assert_eq!(1, dispatcher.context_keys.len());
         assert_eq!(1, dispatcher.outbox.summary.features.len());
     }
 
@@ -367,7 +364,9 @@ mod tests {
     ) {
         let mut flag = basic_flag("flag");
         flag.debug_events_until_date = Some(debug_events_until_date);
-        let user = User::with_key("foo".to_string()).build();
+        let context = ContextBuilder::new("foo")
+            .build()
+            .expect("Failed to create context");
         let detail = Detail {
             value: Some(FlagValue::from(false)),
             variation_index: Some(1),
@@ -379,16 +378,16 @@ mod tests {
         let event_factory = EventFactory::new(true);
         let feature_request = event_factory.new_eval_event(
             &flag.key,
-            user,
+            context,
             &flag,
-            detail.clone(),
+            detail,
             FlagValue::from(false),
             None,
         );
 
         let (event_sender, event_rx) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, true, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let (inbox_tx, inbox_rx) = bounded(events_configuration.capacity);
 
         let mut dispatcher = create_dispatcher(events_configuration);
@@ -423,65 +422,52 @@ mod tests {
     }
 
     #[test]
-    fn dispatcher_does_not_notice_user_from_alias_event() {
-        let (event_sender, _) = create_event_sender();
-        let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
-        let mut dispatcher = create_dispatcher(events_configuration);
-
-        let user = User::with_key("user".to_string()).build();
-        let previous = User::with_key("previous".to_string()).build();
-        let event_factory = EventFactory::new(true);
-
-        dispatcher.process_event(event_factory.new_alias(user.clone(), previous));
-        assert_eq!(1, dispatcher.outbox.events.len());
-        assert_eq!("alias", dispatcher.outbox.events[0].kind());
-        assert_eq!(0, dispatcher.user_keys.len());
-    }
-
-    #[test]
     fn dispatcher_only_notices_identity_event_once() {
         let (event_sender, _) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let mut dispatcher = create_dispatcher(events_configuration);
 
-        let user = User::with_key("user".to_string()).build();
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
         let event_factory = EventFactory::new(true);
 
-        dispatcher.process_event(event_factory.new_identify(user.clone()));
-        dispatcher.process_event(event_factory.new_identify(user));
+        dispatcher.process_event(event_factory.new_identify(context.clone()));
+        dispatcher.process_event(event_factory.new_identify(context));
         assert_eq!(2, dispatcher.outbox.events.len());
         assert_eq!("identify", dispatcher.outbox.events[0].kind());
         assert_eq!("identify", dispatcher.outbox.events[1].kind());
-        assert_eq!(1, dispatcher.user_keys.len());
+        assert_eq!(1, dispatcher.context_keys.len());
     }
 
     #[test]
     fn dispatcher_adds_index_on_custom_event() {
         let (event_sender, _) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let mut dispatcher = create_dispatcher(events_configuration);
 
-        let user = User::with_key("user".to_string()).build();
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
         let event_factory = EventFactory::new(true);
         let custom_event = event_factory
-            .new_custom(user, "user", None, "")
+            .new_custom(context, "context", None, "")
             .expect("failed to make new custom event");
 
         dispatcher.process_event(custom_event);
         assert_eq!(2, dispatcher.outbox.events.len());
         assert_eq!("index", dispatcher.outbox.events[0].kind());
         assert_eq!("custom", dispatcher.outbox.events[1].kind());
-        assert_eq!(1, dispatcher.user_keys.len());
+        assert_eq!(1, dispatcher.context_keys.len());
     }
 
     #[test]
     fn can_process_events_successfully() {
         let (event_sender, event_rx) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_secs(100));
+            create_events_configuration(event_sender, Duration::from_secs(100));
         let (inbox_tx, inbox_rx) = bounded(events_configuration.capacity);
 
         let mut dispatcher = create_dispatcher(events_configuration);
@@ -489,12 +475,14 @@ mod tests {
             .spawn(move || dispatcher.start(inbox_rx))
             .unwrap();
 
-        let user = User::with_key("user".to_string()).build();
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
         let event_factory = EventFactory::new(true);
 
         inbox_tx
             .send(EventDispatcherMessage::EventMessage(
-                event_factory.new_identify(user),
+                event_factory.new_identify(context),
             ))
             .expect("event send failed");
         inbox_tx
@@ -508,15 +496,14 @@ mod tests {
         rx.recv().expect("failed to notify on close");
         dispatcher_handle.join().unwrap();
 
-        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
-        assert_eq!(1, events.len());
+        assert_eq!(event_rx.iter().count(), 1);
     }
 
     #[test]
     fn dispatcher_flushes_periodically() {
         let (event_sender, event_rx) = create_event_sender();
         let events_configuration =
-            create_events_configuration(event_sender, false, Duration::from_millis(200));
+            create_events_configuration(event_sender, Duration::from_millis(200));
         let (inbox_tx, inbox_rx) = bounded(events_configuration.capacity);
 
         let mut dispatcher = create_dispatcher(events_configuration);
@@ -524,18 +511,19 @@ mod tests {
             .spawn(move || dispatcher.start(inbox_rx))
             .unwrap();
 
-        let user = User::with_key("user".to_string()).build();
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
         let event_factory = EventFactory::new(true);
 
         inbox_tx
             .send(EventDispatcherMessage::EventMessage(
-                event_factory.new_identify(user),
+                event_factory.new_identify(context),
             ))
             .expect("event send failed");
 
-        std::thread::sleep(Duration::from_millis(300));
-        let events = event_rx.try_iter().collect::<Vec<OutputEvent>>();
-        assert_eq!(1, events.len());
+        thread::sleep(Duration::from_millis(300));
+        assert_eq!(event_rx.try_iter().count(), 1);
     }
 
     fn create_dispatcher(events_configuration: EventsConfiguration) -> EventDispatcher {

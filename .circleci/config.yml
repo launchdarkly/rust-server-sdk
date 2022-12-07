@@ -54,7 +54,7 @@ jobs:
 
   build-with-musl:
     docker:
-      - image: cimg/rust:1.59.0
+      - image: cimg/rust:1.60.0
     resource_class: medium+
     steps:
       - checkout

@@ -12,7 +12,7 @@ pub(super) struct CachePair<T> {
     cache_name: String,
 }
 
-impl<T: 'static + std::marker::Sync + std::marker::Send + std::clone::Clone> CachePair<T> {
+impl<T: 'static + Sync + Send + Clone> CachePair<T> {
     pub fn new(cache_name: String, cache_ttl: Option<Duration>) -> CachePair<T> {
         match cache_ttl {
             Some(ttl) => CachePair {
@@ -29,7 +29,7 @@ impl<T: 'static + std::marker::Sync + std::marker::Send + std::clone::Clone> Cac
     }
 
     pub fn cache_is_infinite(&self) -> bool {
-        self.all.time_to_live().is_none()
+        self.all.policy().time_to_live().is_none()
     }
 
     pub fn get_all(&self) -> Option<HashMap<String, StorageItem<T>>> {
@@ -53,7 +53,7 @@ impl<T: 'static + std::marker::Sync + std::marker::Send + std::clone::Clone> Cac
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        match cache.time_to_live() {
+        match cache.policy().time_to_live() {
             None => cache.insert(key, value),
             Some(duration) if !duration.is_zero() => cache.insert(key, value),
             _ => (),

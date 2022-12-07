@@ -102,7 +102,7 @@ mod tests {
     impl PersistentDataStoreFactory for InMemoryPersistentDataStoreFactory {
         fn create_persistent_data_store(
             &self,
-        ) -> std::result::Result<Box<(dyn PersistentDataStore + 'static)>, std::io::Error> {
+        ) -> Result<Box<(dyn PersistentDataStore + 'static)>, std::io::Error> {
             Ok(Box::new(InMemoryPersistentDataStore {
                 data: AllData {
                     flags: HashMap::new(),
