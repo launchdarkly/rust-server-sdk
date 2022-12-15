@@ -4,7 +4,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
+#[cfg(all(feature = "hypertls", not(feature = "rustls")))]
+use hyper_tls::HttpsConnector;
 use launchdarkly_server_sdk_evaluation::Reference;
 use thiserror::Error;
 
@@ -96,12 +99,16 @@ impl EventProcessorFactory for EventProcessorBuilder {
         let event_sender = match &self.event_sender {
             Some(event_sender) => event_sender.clone(),
             _ => {
+                #[cfg(feature = "rustls")]
                 let connector = HttpsConnectorBuilder::new()
                     .with_native_roots()
                     .https_or_http()
                     .enable_http1()
                     .enable_http2()
                     .build();
+
+                #[cfg(all(feature = "hypertls", not(feature = "rustls")))]
+                let connector = HttpsConnector::new();
 
                 Arc::new(HyperEventSender::new(
                     hyper::Client::builder().build(connector),

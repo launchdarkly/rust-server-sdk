@@ -5,7 +5,8 @@ use crate::command_params::CommandParams;
 use actix_web::error::{ErrorBadRequest, ErrorInternalServerError};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
 use client_entity::ClientEntity;
-use eventsource_client::HttpsConnector;
+#[cfg(any(feature = "hypertls", feature = "rustls"))]
+use eventsource_client::{https_connector, HttpsConnector};
 use futures::executor;
 use launchdarkly_server_sdk::Reference;
 use serde::{self, Deserialize, Serialize};
@@ -221,7 +222,16 @@ async fn main() -> std::io::Result<()> {
     let state = web::Data::new(AppState {
         counter: Mutex::new(0),
         client_entities: Mutex::new(HashMap::new()),
-        https_connector: HttpsConnector::with_native_roots(),
+        https_connector: {
+            #[cfg(not(any(feature = "hypertls", feature = "rustls")))]
+            {
+                compile_error!("one of the { \"hypertls\", \"rustls\" } features must be enabled");
+            }
+            #[cfg(any(feature = "hypertls", feature = "rustls"))]
+            {
+                https_connector()
+            }
+        },
     });
 
     let server = HttpServer::new(move || {

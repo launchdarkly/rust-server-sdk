@@ -1,6 +1,10 @@
 use crate::feature_requester::{FeatureRequester, HyperFeatureRequester};
 use crate::LAUNCHDARKLY_TAGS_HEADER;
+
+#[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
+#[cfg(all(feature = "hypertls", not(feature = "rustls")))]
+use hyper_tls::HttpsConnector;
 use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
@@ -43,12 +47,16 @@ impl FeatureRequesterFactory for HyperFeatureRequesterBuilder {
 
         let builder = hyper::Client::builder();
 
+        #[cfg(feature = "rustls")]
         let connector = HttpsConnectorBuilder::new()
             .with_native_roots()
             .https_or_http()
             .enable_http1()
             .enable_http2()
             .build();
+
+        #[cfg(all(feature = "hypertls", not(feature = "rustls")))]
+        let connector = HttpsConnector::new();
 
         let http = builder.build(connector);
 
