@@ -207,11 +207,13 @@ impl DataStore for PersistentDataStoreWrapper {
                         debug!("data store has been updated with new flag data");
                         self.cache_items(all_data.into());
                     }
-                    Err(e) if self.flags.cache_is_infinite() => {
-                        warn!("failed to init store. Updating non-expiring cache: {}", e);
-                        self.cache_items(all_data.into())
+                    Err(e) => {
+                        error!("failed to init store: {}", e);
+                        if self.flags.cache_is_infinite() {
+                            debug!("updating non-expiring cache");
+                            self.cache_items(all_data.into())
+                        }
                     }
-                    _ => (),
                 };
             }
         }
