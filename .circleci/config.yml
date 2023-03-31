@@ -2,7 +2,7 @@ version: 2
 jobs:
   build:
     docker:
-      - image: cimg/rust:1.60.0
+      - image: cimg/rust:1.63.0
     resource_class: large
     steps:
       - checkout
@@ -54,7 +54,7 @@ jobs:
 
   build-with-musl:
     docker:
-      - image: cimg/rust:1.60.0
+      - image: cimg/rust:1.63.0
     resource_class: medium+
     steps:
       - checkout

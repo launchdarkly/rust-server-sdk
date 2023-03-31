@@ -11,3 +11,5 @@ publications:
 jobs:
   - template:
       name: rust
+  - docker:
+      image: cimg/rust:1.63.0
