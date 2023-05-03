@@ -1,6 +1,5 @@
 use crate::reqwest::is_http_error_recoverable;
 use futures::future::BoxFuture;
-use hyper::body::HttpBody;
 use hyper::Body;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,7 +77,7 @@ where
                 .request(request_builder.body(Body::empty()).unwrap())
                 .await;
 
-            let mut response = match result {
+            let response = match result {
                 Ok(response) => response,
                 Err(e) => {
                     // It appears this type of error will not be an HTTP error.
@@ -102,7 +101,15 @@ where
                 .map_or_else(|_| "".into(), |s| s.into());
 
             if response.status().is_success() {
-                let bytes = response.body_mut().data().await.unwrap().unwrap();
+                let bytes = hyper::body::to_bytes(response.into_body())
+                    .await
+                    .map_err(|e| {
+                        error!(
+                            "An error occurred while reading the polling response body: {}",
+                            e
+                        );
+                        FeatureRequesterError::Temporary
+                    })?;
                 let json = serde_json::from_slice::<AllData<Flag, Segment>>(bytes.as_ref());
 
                 return match json {
@@ -180,6 +187,25 @@ mod tests {
         if let Some(cache) = &requester.cache {
             assert_eq!("UPDATED-TAG", cache.1);
         }
+    }
+
+    #[tokio::test]
+    async fn can_process_large_body() {
+        let payload = std::fs::read("test-data/large-polling-payload.json")
+            .expect("Failed to read polling payload file");
+        let payload =
+            String::from_utf8(payload).expect("Invalid UTF-8 characters in polling payload");
+
+        let _initial_request = mock("GET", "/")
+            .with_status(200)
+            .with_body(payload)
+            .expect(1)
+            .create();
+
+        let mut requester = build_feature_requester();
+        let result = requester.get_all().await;
+
+        assert!(result.is_ok());
     }
 
     #[test_case(400, FeatureRequesterError::Temporary)]
