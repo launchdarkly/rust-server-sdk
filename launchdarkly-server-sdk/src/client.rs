@@ -523,7 +523,7 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/secure-mode#rust>.
     pub fn secure_mode_hash(&self, context: &Context) -> String {
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
-        let tag = ring::hmac::sign(&key, context.key().as_bytes());
+        let tag = ring::hmac::sign(&key, context.canonical_key().as_bytes());
 
         data_encoding::HEXLOWER.encode(tag.as_ref())
     }
@@ -741,7 +741,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::Receiver;
-    use eval::ContextBuilder;
+    use eval::{ContextBuilder, MultiContextBuilder};
     use launchdarkly_server_sdk_evaluation::Reason;
     use std::collections::HashMap;
 
@@ -1355,6 +1355,31 @@ mod tests {
         assert_eq!(
             client.secure_mode_hash(&context),
             "aa747c502a898200f9e4fa21bac68136f886a0e27aec70ba06daf2e2a5cb5597"
+        );
+    }
+
+    #[test]
+    fn secure_mode_hash_with_multi_kind() {
+        let config = ConfigBuilder::new("secret").offline(true).build();
+        let client = Client::build(config).expect("Should be built.");
+
+        let org = ContextBuilder::new("org-key|1")
+            .kind("org")
+            .build()
+            .expect("Failed to create context");
+        let user = ContextBuilder::new("user-key:2")
+            .build()
+            .expect("Failed to create context");
+
+        let context = MultiContextBuilder::new()
+            .add_context(org)
+            .add_context(user)
+            .build()
+            .expect("failed to build multi-context");
+
+        assert_eq!(
+            client.secure_mode_hash(&context),
+            "5687e6383b920582ed50c2a96c98a115f1b6aad85a60579d761d9b8797415163"
         );
     }
 
