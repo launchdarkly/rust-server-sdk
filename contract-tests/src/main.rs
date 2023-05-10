@@ -139,7 +139,7 @@ async fn create_client(
     };
 
     *counter += 1;
-    let client_resource = match req.url_for("client_path", &[counter.to_string()]) {
+    let client_resource = match req.url_for("client_path", [counter.to_string()]) {
         Ok(sr) => sr,
         Err(_) => {
             return HttpResponse::InternalServerError()
