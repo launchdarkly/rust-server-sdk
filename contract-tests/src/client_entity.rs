@@ -13,7 +13,7 @@ use launchdarkly_server_sdk::{
 };
 
 use crate::command_params::{
-    ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse,
+    ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse, SecureModeHashResponse,
 };
 use crate::{
     command_params::{
@@ -189,6 +189,16 @@ impl ClientEntity {
                     .ok_or("ContextConvert params should be set")?;
                 Ok(Some(CommandResponse::ContextBuildOrConvert(
                     ContextResponse::from(Self::context_convert(params)),
+                )))
+            }
+            "secureModeHash" => {
+                let params = command
+                    .secure_mode_hash
+                    .ok_or("secureModeHash params should be set")?;
+                Ok(Some(CommandResponse::SecureModeHash(
+                    SecureModeHashResponse {
+                        result: self.client.secure_mode_hash(&params.context),
+                    },
                 )))
             }
             command => Err(format!("Invalid command requested: {}", command)),

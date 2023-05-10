@@ -8,6 +8,7 @@ pub enum CommandResponse {
     EvaluateFlag(EvaluateFlagResponse),
     EvaluateAll(EvaluateAllFlagsResponse),
     ContextBuildOrConvert(ContextResponse),
+    SecureModeHash(SecureModeHashResponse),
 }
 
 #[derive(Deserialize, Debug)]
@@ -20,6 +21,7 @@ pub struct CommandParams {
     pub identify_event: Option<IdentifyEventParams>,
     pub context_build: Option<ContextBuildParams>,
     pub context_convert: Option<ContextConvertParams>,
+    pub secure_mode_hash: Option<SecureModeHashParams>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -115,4 +117,16 @@ impl From<Result<String, String>> for ContextResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ContextConvertParams {
     pub input: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SecureModeHashParams {
+    pub context: Context,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SecureModeHashResponse {
+    pub result: String,
 }
