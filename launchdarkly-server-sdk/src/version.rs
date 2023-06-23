@@ -1,8 +1,6 @@
-use super::built_info;
-
 /// Return the SDK version
 pub fn version_string() -> &'static str {
-    built_info::PKG_VERSION
+    env!("CARGO_PKG_VERSION")
 }
 
 #[cfg(test)]

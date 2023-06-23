@@ -69,16 +69,11 @@ static CURRENT_EVENT_SCHEMA: &str = "4";
 
 lazy_static! {
     pub(crate) static ref USER_AGENT: String =
-        "RustServerClient/".to_owned() + built_info::PKG_VERSION;
+        format!("RustServerClient/{}", version_string());
 
     // For cases where a statically empty header value are needed.
     pub(crate) static ref EMPTY_HEADER: hyper::header::HeaderValue =
         hyper::header::HeaderValue::from_static("");
-}
-
-#[allow(dead_code)]
-mod built_info {
-    include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
 #[cfg(test)]
