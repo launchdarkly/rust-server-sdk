@@ -49,6 +49,3 @@ name = "print_flags"
 
 [[example]]
 name = "progress"
-
-[build-dependencies]
-built = "0.5.1"
