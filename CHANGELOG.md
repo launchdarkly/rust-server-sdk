@@ -2,6 +2,10 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [1.1.2] - 2023-06-26
+### Removed:
+- Removed reliance on `built` crate.
+
 ## [1.1.1] - 2023-05-10
 ### Fixed:
 - The secure mode hashing algorithm has been updated to use the context's fully qualified key.
