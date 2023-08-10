@@ -2,6 +2,10 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [1.1.3] - 2023-08-10
+### Fixed:
+- Fixed an issue with evaluating user targets as part of a multi-kind context.
+
 ## [1.1.2] - 2023-06-26
 ### Removed:
 - Removed reliance on `built` crate.
