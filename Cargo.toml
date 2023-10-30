@@ -4,3 +4,5 @@ members = [
     "contract-tests",
     "launchdarkly-server-sdk"
 ]
+
+resolver = "2"

@@ -1,10 +1,11 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
-use eventsource_client::HttpsConnector;
+use hyper::{client::connect::Connection, service::Service, Uri};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(test)]
 use super::data_source;
@@ -44,19 +45,20 @@ pub trait DataSourceFactory {
 /// Adjust the initial reconnect delay.
 /// ```
 /// # use launchdarkly_server_sdk::{StreamingDataSourceBuilder, ConfigBuilder};
+/// # use hyper::client::HttpConnector;
 /// # use std::time::Duration;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").data_source(StreamingDataSourceBuilder::new()
+///     ConfigBuilder::new("sdk-key").data_source(StreamingDataSourceBuilder::<hyper_rustls::HttpsConnector<HttpConnector>>::new()
 ///         .initial_reconnect_delay(Duration::from_secs(10)));
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct StreamingDataSourceBuilder {
+pub struct StreamingDataSourceBuilder<C> {
     initial_reconnect_delay: Duration,
-    connector: Option<HttpsConnector>,
+    connector: Option<C>,
 }
 
-impl StreamingDataSourceBuilder {
+impl<C> StreamingDataSourceBuilder<C> {
     /// Create a new instance of the [StreamingDataSourceBuilder] with default values.
     pub fn new() -> Self {
         Self {
@@ -71,18 +73,23 @@ impl StreamingDataSourceBuilder {
         self
     }
 
-    /// Sets the [eventsource_client::HttpsConnector] for the event
-    /// source client to use. This allows for re-use of a connector between
-    /// multiple client instances. This is especially useful for the `sdk-test-harness`
-    /// where many client instances are created throughout the test and reading
+    /// Sets the connector for the event source client to use. This allows for re-use of a
+    /// connector between multiple client instances. This is especially useful for the
+    /// `sdk-test-harness` where many client instances are created throughout the test and reading
     /// the native certificates is a substantial portion of the runtime.
-    pub fn https_connector(&mut self, connector: HttpsConnector) -> &mut Self {
+    pub fn https_connector(&mut self, connector: C) -> &mut Self {
         self.connector = Some(connector);
         self
     }
 }
 
-impl DataSourceFactory for StreamingDataSourceBuilder {
+impl<C> DataSourceFactory for StreamingDataSourceBuilder<C>
+where
+    C: Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C::Future: Send + 'static,
+    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
@@ -113,7 +120,7 @@ impl DataSourceFactory for StreamingDataSourceBuilder {
     }
 }
 
-impl Default for StreamingDataSourceBuilder {
+impl<C> Default for StreamingDataSourceBuilder<C> {
     fn default() -> Self {
         StreamingDataSourceBuilder::new()
     }
@@ -300,15 +307,51 @@ impl DataSourceFactory for MockDataSourceBuilder {
 
 #[cfg(test)]
 mod tests {
+    use hyper::client::HttpConnector;
+    use hyper_rustls::HttpsConnector;
+
     use super::*;
 
     #[test]
     fn default_stream_builder_has_correct_defaults() {
-        let builder = StreamingDataSourceBuilder::new();
+        let builder = StreamingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new();
         assert_eq!(
             builder.initial_reconnect_delay,
             DEFAULT_INITIAL_RECONNECT_DELAY
         );
+    }
+
+    #[test]
+    fn stream_builder_can_use_custom_connector() {
+        #[derive(Debug, Clone)]
+        struct TestConnector;
+        impl hyper::service::Service<hyper::Uri> for TestConnector {
+            type Response = tokio::net::TcpStream;
+            type Error = std::io::Error;
+            type Future = futures::future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+            fn poll_ready(
+                &mut self,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), Self::Error>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, _req: hyper::Uri) -> Self::Future {
+                // this won't be called during the test
+                unreachable!();
+            }
+        }
+
+        let mut builder = StreamingDataSourceBuilder::new();
+        builder.https_connector(TestConnector);
+        assert!(builder
+            .build(
+                &crate::ServiceEndpointsBuilder::new().build().unwrap(),
+                "test",
+                None
+            )
+            .is_ok());
     }
 
     #[test]
@@ -319,7 +362,7 @@ mod tests {
 
     #[test]
     fn initial_reconnect_delay_for_streaming_can_be_adjusted() {
-        let mut builder = StreamingDataSourceBuilder::new();
+        let mut builder = StreamingDataSourceBuilder::<()>::new();
         builder.initial_reconnect_delay(Duration::from_secs(1234));
         assert_eq!(builder.initial_reconnect_delay, Duration::from_secs(1234));
     }

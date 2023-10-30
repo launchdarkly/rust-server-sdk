@@ -1,4 +1,3 @@
-use eventsource_client::HttpsConnector;
 use launchdarkly_server_sdk::{Context, ContextBuilder, MultiContextBuilder, Reference};
 use std::time::Duration;
 
@@ -30,7 +29,7 @@ pub struct ClientEntity {
 impl ClientEntity {
     pub async fn new(
         create_instance_params: CreateInstanceParams,
-        connector: &HttpsConnector,
+        connector: &hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
     ) -> Result<Self, BuildError> {
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
