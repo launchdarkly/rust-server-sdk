@@ -144,31 +144,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mockito::mock;
     use std::str::FromStr;
     use test_case::test_case;
 
     #[tokio::test]
     async fn updates_etag_as_appropriate() {
-        let _initial_request = mock("GET", "/")
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/")
             .with_status(200)
             .with_header("etag", "INITIAL-TAG")
             .with_body(r#"{"flags": {}, "segments": {}}"#)
             .expect(1)
             .create();
-        let _second_request = mock("GET", "/")
+        server
+            .mock("GET", "/")
             .with_status(304)
             .match_header("If-None-Match", "INITIAL-TAG")
             .expect(1)
             .create();
-        let _third_request = mock("GET", "/")
+        server
+            .mock("GET", "/")
             .with_status(200)
             .match_header("If-None-Match", "INITIAL-TAG")
             .with_header("etag", "UPDATED-TAG")
             .with_body(r#"{"flags": {}, "segments": {}}"#)
             .create();
 
-        let mut requester = build_feature_requester();
+        let mut requester = build_feature_requester(server.url());
         let result = requester.get_all().await;
 
         assert!(result.is_ok());
@@ -196,13 +199,15 @@ mod tests {
         let payload =
             String::from_utf8(payload).expect("Invalid UTF-8 characters in polling payload");
 
-        let _initial_request = mock("GET", "/")
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/")
             .with_status(200)
             .with_body(payload)
             .expect(1)
             .create();
 
-        let mut requester = build_feature_requester();
+        let mut requester = build_feature_requester(server.url());
         let result = requester.get_all().await;
 
         assert!(result.is_ok());
@@ -220,9 +225,10 @@ mod tests {
         status: usize,
         error: FeatureRequesterError,
     ) {
-        let _initial_request = mock("GET", "/").with_status(status).create();
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/").with_status(status).create();
 
-        let mut requester = build_feature_requester();
+        let mut requester = build_feature_requester(server.url());
         let result = requester.get_all().await;
 
         if let Err(err) = result {
@@ -232,10 +238,9 @@ mod tests {
         }
     }
 
-    fn build_feature_requester() -> HyperFeatureRequester<hyper::client::HttpConnector> {
+    fn build_feature_requester(url: String) -> HyperFeatureRequester<hyper::client::HttpConnector> {
         let http = hyper::Client::builder().build(hyper::client::HttpConnector::new());
-        let url = hyper::Uri::from_str(&mockito::server_url())
-            .expect("Failed parsing the mock server url");
+        let url = hyper::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
         HyperFeatureRequester::new(
             http,

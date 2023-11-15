@@ -220,7 +220,6 @@ impl EventSender for InMemoryEventSender {
 mod tests {
     use super::*;
     use crossbeam_channel::bounded;
-    use mockito::mock;
     use std::str::FromStr;
     use test_case::test_case;
 
@@ -240,13 +239,15 @@ mod tests {
 
     #[tokio::test]
     async fn can_parse_server_time_from_response() {
-        let _mock = mock("POST", "/bulk")
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/bulk")
             .with_status(200)
             .with_header("date", "Fri, 13 Feb 2009 23:31:30 GMT")
             .create();
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
-        let event_sender = build_event_sender();
+        let event_sender = build_event_sender(server.url());
 
         event_sender.send_event_data(vec![], tx).await;
 
@@ -258,10 +259,11 @@ mod tests {
 
     #[tokio::test]
     async fn unrecoverable_failure_requires_shutdown() {
-        let _mock = mock("POST", "/bulk").with_status(401).create();
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/bulk").with_status(401).create();
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
-        let event_sender = build_event_sender();
+        let event_sender = build_event_sender(server.url());
 
         event_sender.send_event_data(vec![], tx).await;
 
@@ -272,10 +274,15 @@ mod tests {
 
     #[tokio::test]
     async fn recoverable_failures_are_attempted_multiple_times() {
-        let mock = mock("POST", "/bulk").with_status(400).expect(2).create();
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/bulk")
+            .with_status(400)
+            .expect(2)
+            .create();
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
-        let event_sender = build_event_sender();
+        let event_sender = build_event_sender(server.url());
 
         event_sender.send_event_data(vec![], tx).await;
 
@@ -287,14 +294,16 @@ mod tests {
 
     #[tokio::test]
     async fn retrying_requests_can_eventually_succeed() {
-        let _failed = mock("POST", "/bulk").with_status(400).create();
-        let _succeed = mock("POST", "/bulk")
+        let mut server = mockito::Server::new();
+        server.mock("POST", "/bulk").with_status(400).create();
+        server
+            .mock("POST", "/bulk")
             .with_status(200)
             .with_header("date", "Fri, 13 Feb 2009 23:31:30 GMT")
             .create();
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
-        let event_sender = build_event_sender();
+        let event_sender = build_event_sender(server.url());
 
         event_sender.send_event_data(vec![], tx).await;
 
@@ -304,8 +313,8 @@ mod tests {
         assert_eq!(sender_result.time_from_server, 1234567890000);
     }
 
-    fn build_event_sender() -> HyperEventSender<hyper::client::HttpConnector> {
-        let url = format!("{}/bulk", &mockito::server_url());
+    fn build_event_sender(url: String) -> HyperEventSender<hyper::client::HttpConnector> {
+        let url = format!("{}/bulk", &url);
         let url = hyper::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
         HyperEventSender::new(

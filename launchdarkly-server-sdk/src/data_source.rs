@@ -375,7 +375,7 @@ mod tests {
     };
 
     use hyper::client::HttpConnector;
-    use mockito::{mock, Matcher};
+    use mockito::Matcher;
     use parking_lot::RwLock;
     use test_case::test_case;
     use tokio::sync::broadcast;
@@ -391,7 +391,9 @@ mod tests {
         tag: Option<String>,
         matcher: impl Into<Matcher>,
     ) {
-        let mock_endpoint = mock("GET", "/all")
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/all")
             .with_status(200)
             .with_body("event:one\ndata:One\n\n")
             .expect_at_least(1)
@@ -402,7 +404,7 @@ mod tests {
         let initialized = Arc::new(AtomicBool::new(false));
 
         let streaming = StreamingDataSource::new(
-            &mockito::server_url(),
+            &server.url(),
             "sdk-key",
             Duration::from_secs(0),
             &tag,
@@ -434,8 +436,7 @@ mod tests {
         }
 
         let _ = shutdown_tx.send(());
-
-        mock_endpoint.assert();
+        mock.assert()
     }
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
@@ -445,7 +446,9 @@ mod tests {
         tag: Option<String>,
         matcher: impl Into<Matcher>,
     ) {
-        let mock_endpoint = mock("GET", "/sdk/latest-all")
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/sdk/latest-all")
             .with_status(200)
             .with_body("{}")
             .expect_at_least(1)
@@ -455,11 +458,8 @@ mod tests {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let hyper_builder = HyperFeatureRequesterBuilder::new(
-            &mockito::server_url(),
-            "sdk-key",
-            HttpConnector::new(),
-        );
+        let hyper_builder =
+            HyperFeatureRequesterBuilder::new(&server.url(), "sdk-key", HttpConnector::new());
 
         let polling = PollingDataSource::new(
             Arc::new(Mutex::new(Box::new(hyper_builder))),
@@ -492,6 +492,6 @@ mod tests {
 
         let _ = shutdown_tx.send(());
 
-        mock_endpoint.assert();
+        mock.assert()
     }
 }
