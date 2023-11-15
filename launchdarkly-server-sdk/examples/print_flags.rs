@@ -73,7 +73,7 @@ async fn main() {
         }
     }
 
-    let config = config_builder.build();
+    let config = config_builder.build().expect("config failed to build");
     let client = Client::build(config).expect("failed to start client");
     client.start_with_default_executor();
 

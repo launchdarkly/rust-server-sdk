@@ -73,12 +73,19 @@ pub struct StreamingDataSource {
 }
 
 impl StreamingDataSource {
-    fn new_builder(
+    pub fn new<C>(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
         tags: &Option<String>,
-    ) -> es::Result<ClientBuilder> {
+        connector: C,
+    ) -> std::result::Result<Self, es::Error>
+    where
+        C: Service<Uri> + Clone + Send + Sync + 'static,
+        C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+        C::Future: Send + 'static,
+        C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
         let stream_url = format!("{}/all", base_url);
 
         let client_builder = ClientBuilder::for_url(&stream_url)?;
@@ -96,39 +103,6 @@ impl StreamingDataSource {
         if let Some(tags) = tags {
             client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
         }
-
-        Ok(client_builder)
-    }
-
-    pub fn new(
-        base_url: &str,
-        sdk_key: &str,
-        initial_reconnect_delay: Duration,
-        tags: &Option<String>,
-    ) -> std::result::Result<Self, es::Error> {
-        let client_builder =
-            StreamingDataSource::new_builder(base_url, sdk_key, initial_reconnect_delay, tags)?;
-
-        Ok(Self {
-            es_client: Box::new(client_builder.build()),
-        })
-    }
-
-    pub fn new_with_connector<C>(
-        base_url: &str,
-        sdk_key: &str,
-        initial_reconnect_delay: Duration,
-        tags: &Option<String>,
-        connector: C,
-    ) -> std::result::Result<Self, es::Error>
-    where
-        C: Service<Uri> + Clone + Send + Sync + 'static,
-        C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-        C::Future: Send + 'static,
-        C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        let client_builder =
-            StreamingDataSource::new_builder(base_url, sdk_key, initial_reconnect_delay, tags)?;
 
         Ok(Self {
             es_client: Box::new(client_builder.build_with_conn(connector)),
@@ -400,6 +374,7 @@ mod tests {
         time::Duration,
     };
 
+    use hyper::client::HttpConnector;
     use mockito::{mock, Matcher};
     use parking_lot::RwLock;
     use test_case::test_case;
@@ -431,6 +406,7 @@ mod tests {
             "sdk-key",
             Duration::from_secs(0),
             &tag,
+            HttpConnector::new(),
         )
         .unwrap();
 
@@ -479,7 +455,11 @@ mod tests {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let hyper_builder = HyperFeatureRequesterBuilder::new(&mockito::server_url(), "sdk-key");
+        let hyper_builder = HyperFeatureRequesterBuilder::new(
+            &mockito::server_url(),
+            "sdk-key",
+            HttpConnector::new(),
+        );
 
         let polling = PollingDataSource::new(
             Arc::new(Mutex::new(Box::new(hyper_builder))),

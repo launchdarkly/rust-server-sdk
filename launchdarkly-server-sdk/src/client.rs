@@ -16,6 +16,7 @@ use super::data_source_builders::BuildError as DataSourceError;
 use super::evaluation::{FlagDetail, FlagDetailConfig};
 use super::stores::store::DataStore;
 use super::stores::store_builders::BuildError as DataStoreError;
+use crate::config::BuildError as ConfigBuildError;
 use crate::events::event::EventFactory;
 use crate::events::event::InputEvent;
 use crate::events::processor::EventProcessor;
@@ -51,7 +52,7 @@ impl eval::PrerequisiteEventRecorder for PrerequisiteEventRecorder {
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum BuildError {
-    /// Error used when a configuration setting is invalid. This typically invalids an invalid URL.
+    /// Error used when a configuration setting is invalid. This typically indicates an invalid URL.
     #[error("invalid client config: {0}")]
     InvalidConfig(String),
 }
@@ -70,6 +71,12 @@ impl From<DataStoreError> for BuildError {
 
 impl From<EventProcessorError> for BuildError {
     fn from(error: EventProcessorError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
+}
+
+impl From<ConfigBuildError> for BuildError {
+    fn from(error: ConfigBuildError) -> Self {
         Self::InvalidConfig(error.to_string())
     }
 }
@@ -117,7 +124,7 @@ impl From<usize> for ClientInitState {
 /// ```
 /// # use launchdarkly_server_sdk::{Client, ConfigBuilder, BuildError};
 /// # fn main() -> Result<(), BuildError> {
-///     let ld_client = Client::build(ConfigBuilder::new("sdk-key").build())?;
+///     let ld_client = Client::build(ConfigBuilder::new("sdk-key").build()?)?;
 /// #   Ok(())
 /// # }
 /// ```
@@ -129,7 +136,7 @@ impl From<usize> for ClientInitState {
 ///     let ld_client = Client::build(ConfigBuilder::new("sdk-key")
 ///         .service_endpoints(ServiceEndpointsBuilder::new()
 ///             .relay_proxy("http://my-relay-hostname:8080")
-///         ).build()
+///         ).build()?
 ///     )?;
 /// #   Ok(())
 /// # }
@@ -742,6 +749,7 @@ impl Client {
 mod tests {
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
+    use hyper::client::HttpConnector;
     use launchdarkly_server_sdk_evaluation::Reason;
     use std::collections::HashMap;
 
@@ -1346,7 +1354,10 @@ mod tests {
 
     #[test]
     fn secure_mode_hash() {
-        let config = ConfigBuilder::new("secret").offline(true).build();
+        let config = ConfigBuilder::new("secret")
+            .offline(true)
+            .build()
+            .expect("config should build");
         let client = Client::build(config).expect("Should be built.");
         let context = ContextBuilder::new("Message")
             .build()
@@ -1360,7 +1371,10 @@ mod tests {
 
     #[test]
     fn secure_mode_hash_with_multi_kind() {
-        let config = ConfigBuilder::new("secret").offline(true).build();
+        let config = ConfigBuilder::new("secret")
+            .offline(true)
+            .build()
+            .expect("config should build");
         let client = Client::build(config).expect("Should be built.");
 
         let org = ContextBuilder::new("org-key|1")
@@ -1461,8 +1475,11 @@ mod tests {
         let config = ConfigBuilder::new("sdk-key")
             .offline(offline)
             .data_source(MockDataSourceBuilder::new().data_source(updates))
-            .event_processor(EventProcessorBuilder::new().event_sender(Arc::new(event_sender)))
-            .build();
+            .event_processor(
+                EventProcessorBuilder::<HttpConnector>::new().event_sender(Arc::new(event_sender)),
+            )
+            .build()
+            .expect("config should build");
 
         let client = Client::build(config).expect("Should be built.");
 

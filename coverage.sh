@@ -10,7 +10,7 @@ cargo install cargo-llvm-cov
 # CI to pass in '--html' (or other formats).
 
 if [ -n "$1" ]; then
-  cargo llvm-cov --all-features --workspace "$1"
+  cargo llvm-cov --workspace "$1"
 else
-  cargo llvm-cov --all-features --workspace
+  cargo llvm-cov --workspace
 fi
