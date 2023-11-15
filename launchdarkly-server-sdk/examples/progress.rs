@@ -70,7 +70,8 @@ fn main() {
         }
     }
 
-    let client = Client::build(config_builder.build()).expect("failed to build client");
+    let config = config_builder.build().expect("config failed to build");
+    let client = Client::build(config).expect("failed to build client");
     client.start_with_runtime().expect("failed to start");
 
     let mut counter = ProgressCounter { count: 0 };

@@ -4,9 +4,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use hyper::client::connect::Connection;
+use hyper::service::Service;
+use hyper::Uri;
+#[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
 use launchdarkly_server_sdk_evaluation::Reference;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::events::sender::HyperEventSender;
 use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
@@ -60,14 +65,16 @@ pub trait EventProcessorFactory {
 /// Adjust the flush interval
 /// ```
 /// # use launchdarkly_server_sdk::{EventProcessorBuilder, ConfigBuilder};
+/// # use hyper_rustls::HttpsConnector;
+/// # use hyper::client::HttpConnector;
 /// # use std::time::Duration;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").event_processor(EventProcessorBuilder::new()
+///     ConfigBuilder::new("sdk-key").event_processor(EventProcessorBuilder::<HttpsConnector<HttpConnector>>::new()
 ///         .flush_interval(Duration::from_secs(10)));
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct EventProcessorBuilder {
+pub struct EventProcessorBuilder<C> {
     capacity: usize,
     flush_interval: Duration,
     context_keys_capacity: NonZeroUsize,
@@ -75,10 +82,17 @@ pub struct EventProcessorBuilder {
     event_sender: Option<Arc<dyn EventSender>>,
     all_attributes_private: bool,
     private_attributes: HashSet<Reference>,
+    connector: Option<C>,
     // diagnostic_recording_interval: Duration
 }
 
-impl EventProcessorFactory for EventProcessorBuilder {
+impl<C> EventProcessorFactory for EventProcessorBuilder<C>
+where
+    C: Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C::Future: Send + Unpin + 'static,
+    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
@@ -93,24 +107,39 @@ impl EventProcessorFactory for EventProcessorBuilder {
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
 
-        let event_sender = match &self.event_sender {
-            Some(event_sender) => event_sender.clone(),
-            _ => {
-                let connector = HttpsConnectorBuilder::new()
-                    .with_native_roots()
-                    .https_or_http()
-                    .enable_http1()
-                    .enable_http2()
-                    .build();
-
-                Arc::new(HyperEventSender::new(
-                    hyper::Client::builder().build(connector),
+        let event_sender_result: Result<Arc<dyn EventSender>, BuildError> =
+            if let Some(event_sender) = &self.event_sender {
+                Ok(event_sender.clone())
+            } else if let Some(connector) = &self.connector {
+                Ok(Arc::new(HyperEventSender::new(
+                    connector.clone(),
                     hyper::Uri::from_str(url_string.as_str()).unwrap(),
                     sdk_key,
                     default_headers,
+                )))
+            } else {
+                #[cfg(feature = "rustls")]
+                {
+                    let connector = HttpsConnectorBuilder::new()
+                        .with_native_roots()
+                        .https_or_http()
+                        .enable_http1()
+                        .enable_http2()
+                        .build();
+
+                    Ok(Arc::new(HyperEventSender::new(
+                        connector,
+                        hyper::Uri::from_str(url_string.as_str()).unwrap(),
+                        sdk_key,
+                        default_headers,
+                    )))
+                }
+                #[cfg(not(feature = "rustls"))]
+                Err(BuildError::InvalidConfig(
+                    "https connector is required when rustls is disabled".into(),
                 ))
-            }
-        };
+            };
+        let event_sender = event_sender_result?;
 
         let events_configuration = EventsConfiguration {
             event_sender,
@@ -133,7 +162,7 @@ impl EventProcessorFactory for EventProcessorBuilder {
     }
 }
 
-impl EventProcessorBuilder {
+impl<C> EventProcessorBuilder<C> {
     /// Create a new [EventProcessorBuilder] with all default values.
     pub fn new() -> Self {
         Self {
@@ -145,6 +174,7 @@ impl EventProcessorBuilder {
             event_sender: None,
             all_attributes_private: false,
             private_attributes: HashSet::new(),
+            connector: None,
         }
     }
 
@@ -207,6 +237,15 @@ impl EventProcessorBuilder {
         self
     }
 
+    /// Sets the connector for the event sender to use. This allows for re-use of a connector
+    /// between multiple client instances. This is especially useful for the `sdk-test-harness`
+    /// where many client instances are created throughout the test and reading the native
+    /// certificates is a substantial portion of the runtime.
+    pub fn https_connector(&mut self, connector: C) -> &mut Self {
+        self.connector = Some(connector);
+        self
+    }
+
     #[cfg(test)]
     pub fn event_sender(&mut self, event_sender: Arc<dyn EventSender>) -> &mut Self {
         self.event_sender = Some(event_sender);
@@ -214,7 +253,7 @@ impl EventProcessorBuilder {
     }
 }
 
-impl Default for EventProcessorBuilder {
+impl<C> Default for EventProcessorBuilder<C> {
     fn default() -> Self {
         Self::new()
     }
@@ -255,6 +294,7 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
+    use hyper::client::HttpConnector;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use maplit::hashset;
     use mockito::{mock, Matcher};
@@ -266,28 +306,28 @@ mod tests {
 
     #[test]
     fn default_builder_has_correct_defaults() {
-        let builder = EventProcessorBuilder::new();
+        let builder = EventProcessorBuilder::<HttpConnector>::new();
         assert_eq!(builder.capacity, DEFAULT_EVENT_CAPACITY);
         assert_eq!(builder.flush_interval, DEFAULT_FLUSH_POLL_INTERVAL);
     }
 
     #[test]
     fn capacity_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::new();
+        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
         builder.capacity(1234);
         assert_eq!(builder.capacity, 1234);
     }
 
     #[test]
     fn flush_interval_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::new();
+        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
         builder.flush_interval(Duration::from_secs(1234));
         assert_eq!(builder.flush_interval, Duration::from_secs(1234));
     }
 
     #[test]
     fn context_keys_capacity_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::new();
+        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
         let cap = NonZeroUsize::new(1234).expect("1234 > 0");
         builder.context_keys_capacity(cap);
         assert_eq!(builder.context_keys_capacity, cap);
@@ -295,7 +335,7 @@ mod tests {
 
     #[test]
     fn context_keys_flush_interval_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::new();
+        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
         builder.context_keys_flush_interval(Duration::from_secs(1000));
         assert_eq!(
             builder.context_keys_flush_interval,
@@ -305,7 +345,7 @@ mod tests {
 
     #[test]
     fn all_attribute_private_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::new();
+        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
 
         assert!(!builder.all_attributes_private);
         builder.all_attributes_private(true);
@@ -314,7 +354,7 @@ mod tests {
 
     #[test]
     fn attribte_names_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::new();
+        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
 
         assert!(builder.private_attributes.is_empty());
         builder.private_attributes(hashset!["name"]);
@@ -337,7 +377,7 @@ mod tests {
             .build()
             .expect("Service endpoints failed to be created");
 
-        let builder = EventProcessorBuilder::new();
+        let builder = EventProcessorBuilder::<HttpConnector>::new();
         let processor = builder
             .build(&service_endpoints, "sdk-key", tag)
             .expect("Processor failed to build");

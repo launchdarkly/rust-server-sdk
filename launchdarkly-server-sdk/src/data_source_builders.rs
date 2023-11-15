@@ -2,6 +2,8 @@ use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
 use hyper::{client::connect::Connection, service::Service, Uri};
+#[cfg(feature = "rustls")]
+use hyper_rustls::HttpsConnectorBuilder;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -14,7 +16,7 @@ use super::data_source;
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum BuildError {
-    /// Error used when a configuration setting is invalid. This typically invalids an invalid URL.
+    /// Error used when a configuration setting is invalid. This typically indicates an invalid URL.
     #[error("data source factory failed to build: {0}")]
     InvalidConfig(String),
 }
@@ -45,6 +47,7 @@ pub trait DataSourceFactory {
 /// Adjust the initial reconnect delay.
 /// ```
 /// # use launchdarkly_server_sdk::{StreamingDataSourceBuilder, ConfigBuilder};
+/// # use hyper_rustls::HttpsConnector;
 /// # use hyper::client::HttpConnector;
 /// # use std::time::Duration;
 /// # fn main() {
@@ -96,22 +99,37 @@ where
         sdk_key: &str,
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
-        let data_source = match &self.connector {
-            None => StreamingDataSource::new(
-                endpoints.streaming_base_url(),
-                sdk_key,
-                self.initial_reconnect_delay,
-                &tags,
-            ),
-            Some(connector) => StreamingDataSource::new_with_connector(
+        let data_source_result = match &self.connector {
+            #[cfg(feature = "rustls")]
+            None => {
+                let connector = HttpsConnectorBuilder::new()
+                    .with_native_roots()
+                    .https_or_http()
+                    .enable_http1()
+                    .enable_http2()
+                    .build();
+                Ok(StreamingDataSource::new(
+                    endpoints.streaming_base_url(),
+                    sdk_key,
+                    self.initial_reconnect_delay,
+                    &tags,
+                    connector,
+                ))
+            }
+            #[cfg(not(feature = "rustls"))]
+            None => Err(BuildError::InvalidConfig(
+                "https connector required when rustls is disabled".into(),
+            )),
+            Some(connector) => Ok(StreamingDataSource::new(
                 endpoints.streaming_base_url(),
                 sdk_key,
                 self.initial_reconnect_delay,
                 &tags,
                 connector.clone(),
-            ),
-        }
-        .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
+            )),
+        };
+        let data_source = data_source_result?
+            .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
         Ok(Arc::new(data_source))
     }
 
@@ -171,16 +189,18 @@ impl Default for NullDataSourceBuilder {
 /// Adjust the initial reconnect delay.
 /// ```
 /// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
+/// # use hyper_rustls::HttpsConnector;
+/// # use hyper::client::HttpConnector;
 /// # use std::time::Duration;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::new()
+///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new()
 ///         .poll_interval(Duration::from_secs(60)));
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct PollingDataSourceBuilder {
+pub struct PollingDataSourceBuilder<C> {
     poll_interval: Duration,
-    feature_requester_factory: Option<Arc<Mutex<Box<dyn FeatureRequesterFactory>>>>,
+    connector: Option<C>,
 }
 
 /// Contains methods for configuring the polling data source.
@@ -200,17 +220,19 @@ pub struct PollingDataSourceBuilder {
 /// ```
 /// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
 /// # use std::time::Duration;
+/// # use hyper_rustls::HttpsConnector;
+/// # use hyper::client::HttpConnector;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::new()
+///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new()
 ///         .poll_interval(Duration::from_secs(60)));
 /// # }
 /// ```
-impl PollingDataSourceBuilder {
+impl<C> PollingDataSourceBuilder<C> {
     /// Create a new instance of the [PollingDataSourceBuilder] with default values.
     pub fn new() -> Self {
         Self {
             poll_interval: MINIMUM_POLL_INTERVAL,
-            feature_requester_factory: None,
+            connector: None,
         }
     }
 
@@ -223,33 +245,59 @@ impl PollingDataSourceBuilder {
         self
     }
 
-    /// Sets the feature requester factory for use by this polling data source.
-    ///
-    /// The default implementation relies on reqwest and handles basic caching.
-    pub fn feature_requester_factory(
-        &mut self,
-        feature_requester_factory: Box<dyn FeatureRequesterFactory>,
-    ) -> &mut Self {
-        self.feature_requester_factory = Some(Arc::new(Mutex::new(feature_requester_factory)));
+    /// Sets the connector for the polling client to use. This allows for re-use of a connector
+    /// between multiple client instances. This is especially useful for the `sdk-test-harness`
+    /// where many client instances are created throughout the test and reading the native
+    /// certificates is a substantial portion of the runtime.
+    pub fn https_connector(&mut self, connector: C) -> &mut Self {
+        self.connector = Some(connector);
         self
     }
 }
 
-impl DataSourceFactory for PollingDataSourceBuilder {
+impl<C> DataSourceFactory for PollingDataSourceBuilder<C>
+where
+    C: Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C::Future: Send + Unpin + 'static,
+    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
-        let feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>> =
-            match &self.feature_requester_factory {
-                Some(factory) => factory.clone(),
-                _ => Arc::new(Mutex::new(Box::new(HyperFeatureRequesterBuilder::new(
+        let feature_requester_builder: Result<Box<dyn FeatureRequesterFactory>, BuildError> =
+            match &self.connector {
+                #[cfg(feature = "rustls")]
+                None => {
+                    let connector = HttpsConnectorBuilder::new()
+                        .with_native_roots()
+                        .https_or_http()
+                        .enable_http1()
+                        .enable_http2()
+                        .build();
+
+                    Ok(Box::new(HyperFeatureRequesterBuilder::new(
+                        endpoints.polling_base_url(),
+                        sdk_key,
+                        connector,
+                    )))
+                }
+                #[cfg(not(feature = "rustls"))]
+                None => Err(BuildError::InvalidConfig(
+                    "https connector required when rustls is disabled".into(),
+                )),
+                Some(connector) => Ok(Box::new(HyperFeatureRequesterBuilder::new(
                     endpoints.polling_base_url(),
                     sdk_key,
-                )))),
+                    connector.clone(),
+                ))),
             };
+
+        let feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>> =
+            Arc::new(Mutex::new(feature_requester_builder?));
 
         let data_source =
             PollingDataSource::new(feature_requester_factory, self.poll_interval, tags);
@@ -261,7 +309,7 @@ impl DataSourceFactory for PollingDataSourceBuilder {
     }
 }
 
-impl Default for PollingDataSourceBuilder {
+impl<C> Default for PollingDataSourceBuilder<C> {
     fn default() -> Self {
         PollingDataSourceBuilder::new()
     }
@@ -308,13 +356,13 @@ impl DataSourceFactory for MockDataSourceBuilder {
 #[cfg(test)]
 mod tests {
     use hyper::client::HttpConnector;
-    use hyper_rustls::HttpsConnector;
 
     use super::*;
 
     #[test]
     fn default_stream_builder_has_correct_defaults() {
-        let builder = StreamingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new();
+        let builder: StreamingDataSourceBuilder<HttpConnector> = StreamingDataSourceBuilder::new();
+
         assert_eq!(
             builder.initial_reconnect_delay,
             DEFAULT_INITIAL_RECONNECT_DELAY
@@ -356,7 +404,7 @@ mod tests {
 
     #[test]
     fn default_polling_builder_has_correct_defaults() {
-        let builder = PollingDataSourceBuilder::new();
+        let builder = PollingDataSourceBuilder::<HttpConnector>::new();
         assert_eq!(builder.poll_interval, MINIMUM_POLL_INTERVAL,);
     }
 

@@ -14,6 +14,7 @@ use launchdarkly_server_sdk::{
 use crate::command_params::{
     ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse, SecureModeHashResponse,
 };
+use crate::HttpsConnector;
 use crate::{
     command_params::{
         CommandParams, CommandResponse, EvaluateAllFlagsParams, EvaluateAllFlagsResponse,
@@ -29,7 +30,7 @@ pub struct ClientEntity {
 impl ClientEntity {
     pub async fn new(
         create_instance_params: CreateInstanceParams,
-        connector: &hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
+        connector: HttpsConnector,
     ) -> Result<Self, BuildError> {
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
@@ -85,8 +86,16 @@ impl ClientEntity {
             if let Some(delay) = polling.poll_interval_ms {
                 polling_builder.poll_interval(Duration::from_millis(delay));
             }
+            polling_builder.https_connector(connector.clone());
 
             config_builder = config_builder.data_source(&polling_builder);
+        } else {
+            // If we didn't specify streaming or polling, we fall back to basic streaming. The only
+            // customization we provide is the https connector to support testing multiple
+            // connectors.
+            let mut streaming_builder = StreamingDataSourceBuilder::new();
+            streaming_builder.https_connector(connector.clone());
+            config_builder = config_builder.data_source(&streaming_builder);
         }
 
         config_builder = if let Some(events) = create_instance_params.configuration.events {
@@ -107,6 +116,7 @@ impl ClientEntity {
             if let Some(attributes) = events.global_private_attributes {
                 processor_builder.private_attributes(attributes);
             }
+            processor_builder.https_connector(connector.clone());
 
             config_builder.event_processor(&processor_builder)
         } else {
@@ -115,7 +125,7 @@ impl ClientEntity {
 
         config_builder = config_builder.service_endpoints(&service_endpoints_builder);
 
-        let config = config_builder.build();
+        let config = config_builder.build()?;
         let client = Client::build(config)?;
         client.start_with_default_executor();
         client.initialized_async().await;

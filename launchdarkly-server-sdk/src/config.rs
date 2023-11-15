@@ -1,4 +1,4 @@
-use hyper::client::HttpConnector;
+use thiserror::Error;
 
 use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
 use crate::events::processor_builders::{
@@ -166,6 +166,15 @@ impl Config {
     }
 }
 
+/// Error type used to represent failures when building a Config instance.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum BuildError {
+    /// Error used when a configuration setting is invalid.
+    #[error("config failed to build: {0}")]
+    InvalidConfig(String),
+}
+
 /// Used to create a [Config] struct for creating [crate::Client] instances.
 ///
 /// For usage examples see:
@@ -249,7 +258,7 @@ impl ConfigBuilder {
     }
 
     /// Create a new instance of [Config] based on the [ConfigBuilder] configuration.
-    pub fn build(self) -> Config {
+    pub fn build(self) -> Result<Config, BuildError> {
         let service_endpoints_builder = match &self.service_endpoints_builder {
             None => ServiceEndpointsBuilder::new(),
             Some(service_endpoints_builder) => service_endpoints_builder.clone(),
@@ -260,35 +269,50 @@ impl ConfigBuilder {
             Some(_data_store_builder) => self.data_store_builder.unwrap(),
         };
 
-        let data_source_builder: Box<dyn DataSourceFactory> = match &self.data_source_builder {
-            None if self.offline => Box::new(NullDataSourceBuilder::new()),
-            Some(_) if self.offline => {
-                warn!("Custom data source builders will be ignored when in offline mode");
-                Box::new(NullDataSourceBuilder::new())
-            }
-            None => Box::new(StreamingDataSourceBuilder::<
-                hyper_rustls::HttpsConnector<HttpConnector>,
-            >::new()),
-            Some(_data_source_builder) => self.data_source_builder.unwrap(),
-        };
+        let data_source_builder_result: Result<Box<dyn DataSourceFactory>, BuildError> =
+            match self.data_source_builder {
+                None if self.offline => Ok(Box::new(NullDataSourceBuilder::new())),
+                Some(_) if self.offline => {
+                    warn!("Custom data source builders will be ignored when in offline mode");
+                    Ok(Box::new(NullDataSourceBuilder::new()))
+                }
+                Some(builder) => Ok(builder),
+                #[cfg(feature = "rustls")]
+                None => Ok(Box::new(StreamingDataSourceBuilder::<
+                    hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
+                >::new())),
+                #[cfg(not(feature = "rustls"))]
+                None => Err(BuildError::InvalidConfig(
+                    "data source builder required when rustls is disabled".into(),
+                )),
+            };
+        let data_source_builder = data_source_builder_result?;
 
-        let event_processor_builder: Box<dyn EventProcessorFactory> =
-            match &self.event_processor_builder {
-                None if self.offline => Box::new(NullEventProcessorBuilder::new()),
+        let event_processor_builder_result: Result<Box<dyn EventProcessorFactory>, BuildError> =
+            match self.event_processor_builder {
+                None if self.offline => Ok(Box::new(NullEventProcessorBuilder::new())),
                 Some(_) if self.offline => {
                     warn!("Custom event processor builders will be ignored when in offline mode");
-                    Box::new(NullEventProcessorBuilder::new())
+                    Ok(Box::new(NullEventProcessorBuilder::new()))
                 }
-                None => Box::new(EventProcessorBuilder::new()),
-                Some(_event_processor_builder) => self.event_processor_builder.unwrap(),
+                Some(builder) => Ok(builder),
+                #[cfg(feature = "rustls")]
+                None => Ok(Box::new(EventProcessorBuilder::<
+                    hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
+                >::new())),
+                #[cfg(not(feature = "rustls"))]
+                None => Err(BuildError::InvalidConfig(
+                    "event processor factory required when rustls is disabled".into(),
+                )),
             };
+        let event_processor_builder = event_processor_builder_result?;
 
         let application_tag = match self.application_info {
             Some(tb) => tb.build(),
             _ => None,
         };
 
-        Config {
+        Ok(Config {
             sdk_key: self.sdk_key,
             service_endpoints_builder,
             data_store_builder,
@@ -296,7 +320,7 @@ impl ConfigBuilder {
             event_processor_builder,
             application_tag,
             offline: self.offline,
-        }
+        })
     }
 }
 
@@ -327,7 +351,7 @@ mod tests {
     #[test]
     fn unconfigured_config_builder_handles_application_tags_correctly() {
         let builder = ConfigBuilder::new("sdk-key");
-        let config = builder.build();
+        let config = builder.build().expect("config should build");
 
         assert_eq!(None, config.application_tag);
     }
@@ -346,7 +370,10 @@ mod tests {
             .application_identifier(id)
             .application_version(version);
         let builder = ConfigBuilder::new("sdk-key");
-        let config = builder.application_info(application_info).build();
+        let config = builder
+            .application_info(application_info)
+            .build()
+            .expect("config should build");
 
         assert_eq!(expected, config.application_tag);
     }

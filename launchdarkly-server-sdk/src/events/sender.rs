@@ -7,7 +7,11 @@ use std::collections::HashMap;
 use chrono::DateTime;
 use crossbeam_channel::Sender;
 use futures::future::BoxFuture;
-use tokio::time::{sleep, Duration};
+use hyper::{client::connect::Connection, service::Service, Uri};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    time::{sleep, Duration},
+};
 use uuid::Uuid;
 
 use super::event::OutputEvent;
@@ -34,9 +38,15 @@ pub struct HyperEventSender<C> {
     default_headers: HashMap<&'static str, String>,
 }
 
-impl<C> HyperEventSender<C> {
+impl<C> HyperEventSender<C>
+where
+    C: Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C::Future: Send + Unpin + 'static,
+    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     pub fn new(
-        http: hyper::Client<C>,
+        connector: C,
         url: hyper::Uri,
         sdk_key: &str,
         default_headers: HashMap<&'static str, String>,
@@ -44,7 +54,7 @@ impl<C> HyperEventSender<C> {
         Self {
             url,
             sdk_key: sdk_key.to_owned(),
-            http,
+            http: hyper::Client::builder().build(connector),
             default_headers,
         }
     }
@@ -67,7 +77,10 @@ impl<C> HyperEventSender<C> {
 
 impl<C> EventSender for HyperEventSender<C>
 where
-    C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
+    C: Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C::Future: Send + Unpin + 'static,
+    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     fn send_event_data(
         &self,
@@ -292,10 +305,14 @@ mod tests {
     }
 
     fn build_event_sender() -> HyperEventSender<hyper::client::HttpConnector> {
-        let http = hyper::Client::builder().build(hyper::client::HttpConnector::new());
         let url = format!("{}/bulk", &mockito::server_url());
         let url = hyper::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
-        HyperEventSender::new(http, url, "sdk-key", HashMap::<&str, String>::new())
+        HyperEventSender::new(
+            hyper::client::HttpConnector::new(),
+            url,
+            "sdk-key",
+            HashMap::<&str, String>::new(),
+        )
     }
 }
