@@ -297,7 +297,7 @@ mod tests {
     use hyper::client::HttpConnector;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use maplit::hashset;
-    use mockito::{mock, Matcher};
+    use mockito::Matcher;
     use test_case::test_case;
 
     use crate::{events::event::EventFactory, ServiceEndpointsBuilder};
@@ -364,16 +364,18 @@ mod tests {
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
     #[test_case(None, Matcher::Missing)]
     fn processor_sends_correct_headers(tag: Option<String>, matcher: impl Into<Matcher>) {
-        let mock_endpoint = mock("POST", "/bulk")
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/bulk")
             .with_status(200)
             .expect_at_least(1)
             .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
             .create();
 
         let service_endpoints = ServiceEndpointsBuilder::new()
-            .events_base_url(&mockito::server_url())
-            .polling_base_url(&mockito::server_url())
-            .streaming_base_url(&mockito::server_url())
+            .events_base_url(&server.url())
+            .polling_base_url(&server.url())
+            .streaming_base_url(&server.url())
             .build()
             .expect("Service endpoints failed to be created");
 
@@ -392,6 +394,6 @@ mod tests {
         processor.send(identify_event);
         processor.close();
 
-        mock_endpoint.assert();
+        mock.assert()
     }
 }
