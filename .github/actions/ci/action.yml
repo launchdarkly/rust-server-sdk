@@ -1,0 +1,17 @@
+name: CI Workflow
+description: 'Shared CI workflow.'
+
+runs:
+  using: composite
+  steps:
+    - name: Check formatting
+      shell: bash
+      run: cargo fmt --check
+
+    - name: Run tests
+      shell: bash
+      run: cargo test -p launchdarkly-server-sdk
+
+    - name: Run clippy checks
+      shell: bash
+      run: cargo clippy -p launchdarkly-server-sdk -- -D warnings
