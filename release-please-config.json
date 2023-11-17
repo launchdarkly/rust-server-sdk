@@ -1,0 +1,9 @@
+{
+  "release-type": "rust",
+  "bump-minor-pre-major": true,
+  "versioning": "default",
+  "include-component-in-tag": false,
+  "packages": {
+    "launchdarkly-server-sdk": {}
+  }
+}
