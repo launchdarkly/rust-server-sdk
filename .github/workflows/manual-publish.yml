@@ -22,16 +22,7 @@ jobs:
           rustup override set 1.68
           rustup component add rustfmt clippy
 
-      - name: 'Run contract tests with hyper_rustls'
-        uses: ./.github/actions/contract-tests
-        with:
-          tls_feature: 'rustls'
-
-      - name: 'Run contract tests with hyper_tls'
-        uses: ./.github/actions/contract-tests
-        with:
-          tls_feature: 'tls'
-
+      - uses: ./.github/actions/ci
       - uses: ./.github/actions/build-docs
 
       - uses: launchdarkly/gh-actions/actions/release-secrets@release-secrets-v1.0.0

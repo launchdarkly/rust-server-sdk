@@ -10,7 +10,7 @@ runs:
   steps:
     - name: Build contract tests
       shell: bash
-      run: TLS_FEATURE=${{ input.tls_feature }} make build-contract-tests
+      run: TLS_FEATURE="${{ inputs.tls_feature }}" make build-contract-tests
 
     - name: Start contract test service
       shell: bash
