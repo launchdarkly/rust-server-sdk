@@ -2,6 +2,19 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.0.0](https://github.com/launchdarkly/rust-server-sdk/compare/1.1.3...2.0.0) (2023-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* Make rustls dependency optional ([#136](https://github.com/launchdarkly/rust-server-sdk/issues/136))
+* Update to latest event source client ([#135](https://github.com/launchdarkly/rust-server-sdk/issues/135))
+
+### Features
+
+* Make rustls dependency optional ([#136](https://github.com/launchdarkly/rust-server-sdk/issues/136)) ([fac8df7](https://github.com/launchdarkly/rust-server-sdk/commit/fac8df750ed4ab233edb62fc6d77277ed18e5dba))
+* Update to latest event source client ([#135](https://github.com/launchdarkly/rust-server-sdk/issues/135)) ([91f7297](https://github.com/launchdarkly/rust-server-sdk/commit/91f72970908c786c351958311e0ff76ffde715d9))
+
 ## [1.1.3] - 2023-08-10
 ### Fixed:
 - Fixed an issue with evaluating user targets as part of a multi-kind context.
