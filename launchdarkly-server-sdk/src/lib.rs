@@ -27,7 +27,7 @@ pub use client::Client;
 
 // Re-export
 pub use client::{BuildError, StartError};
-pub use config::{ApplicationInfo, Config, ConfigBuilder};
+pub use config::{ApplicationInfo, BuildError as ConfigBuildError, Config, ConfigBuilder};
 pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
 };
