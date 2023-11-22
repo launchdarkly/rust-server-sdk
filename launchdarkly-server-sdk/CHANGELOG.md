@@ -2,6 +2,13 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.0.1](https://github.com/launchdarkly/rust-server-sdk/compare/2.0.0...2.0.1) (2023-11-22)
+
+
+### Bug Fixes
+
+* Export config::BuildError as ConfigBuildError ([#57](https://github.com/launchdarkly/rust-server-sdk/issues/57)) ([28e8d78](https://github.com/launchdarkly/rust-server-sdk/commit/28e8d78ad485f025a5d12d198fb5a67fd157d815))
+
 ## [2.0.0](https://github.com/launchdarkly/rust-server-sdk/compare/1.1.3...2.0.0) (2023-11-17)
 
 
