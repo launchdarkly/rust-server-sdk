@@ -24,6 +24,12 @@ cargo run --example EXAMPLE_NAME
 
 Read our [documentation](https://docs.launchdarkly.com) for in-depth instructions on configuring and using LaunchDarkly. You can also head straight to the [complete reference guide for this SDK](https://docs.launchdarkly.com/sdk/server-side/rust).
 
+## Minimum Supported Rust Version
+
+This project aims to maintain a rolling minimum supported rust version (MSRV) policy of at least six months. Whenever possible, an MSRV bump will not if the version has not been released for at least six months.
+
+Version updates may occur more frequently than the policy guideline states if external forces require it. For example, a CVE in a downstream dependency requiring an MSRV bump would be considered an acceptable reason to violate the six month guideline.
+
 ## Testing
 
 We run integration tests for all our SDKs using a centralized test harness. This approach gives us the ability to test for consistency across SDKs, as well as test networking behavior in a long-running application. These tests cover each method in the SDK, and verify that event sending, flag evaluation, stream reconnection, and other aspects of the SDK all behave correctly.
