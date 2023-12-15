@@ -26,7 +26,7 @@ Read our [documentation](https://docs.launchdarkly.com) for in-depth instruction
 
 ## Minimum Supported Rust Version
 
-This project aims to maintain a rolling minimum supported rust version (MSRV) policy of at least six months. Whenever possible, an MSRV bump will not if the version has not been released for at least six months.
+This project aims to maintain compatibility with a Rust version that is at least six months old.
 
 Version updates may occur more frequently than the policy guideline states if external forces require it. For example, a CVE in a downstream dependency requiring an MSRV bump would be considered an acceptable reason to violate the six month guideline.
 
