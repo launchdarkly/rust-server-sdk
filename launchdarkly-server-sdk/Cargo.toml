@@ -27,7 +27,7 @@ launchdarkly-server-sdk-evaluation = "1.1.1"
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = { version = "1.0.73", features = ["float_roundtrip"] }
 thiserror = "1.0"
-tokio = { version = "1.2.0", features = ["rt-multi-thread"] }
+tokio = { version = "1.17.0", features = ["rt-multi-thread"] }
 parking_lot = "0.12.0"
 tokio-stream = { version = "0.1.8", features = ["sync"] }
 moka = { version = "0.12.1", features = ["sync"] }
@@ -39,7 +39,7 @@ hyper-rustls = { version = "0.24.1" , optional = true}
 maplit = "1.0.1"
 env_logger = "0.10.0"
 serde_json = { version = "1.0.73", features = ["preserve_order"] } # for deterministic JSON testing
-tokio = { version = "1.2.0", features = ["macros", "time"] }
+tokio = { version = "1.17.0", features = ["macros", "time"] }
 test-case = "3.2.1"
 mockito = "1.2.0"
 assert-json-diff = "2.0.2"
