@@ -102,6 +102,7 @@ async fn status() -> impl Responder {
             "context-type".to_string(),
             "secure-mode-hash".to_string(),
             "inline-context".to_string(),
+            "anonymous-redaction".to_string(),
         ],
     })
 }
