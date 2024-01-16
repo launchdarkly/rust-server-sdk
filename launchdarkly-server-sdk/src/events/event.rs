@@ -17,6 +17,7 @@ pub struct BaseEvent {
     // the right structure
     inline: bool,
     all_attribute_private: bool,
+    redact_anonymous: bool,
     global_private_attributes: HashSet<Reference>,
 }
 
@@ -29,11 +30,19 @@ impl Serialize for BaseEvent {
         state.serialize_field("creationDate", &self.creation_date)?;
 
         if self.inline {
-            let context_attribute = ContextAttributes::from_context(
-                self.context.clone(),
-                self.all_attribute_private,
-                self.global_private_attributes.clone(),
-            );
+            let context_attribute: ContextAttributes = if self.redact_anonymous {
+                ContextAttributes::from_context_with_anonymous_redaction(
+                    self.context.clone(),
+                    self.all_attribute_private,
+                    self.global_private_attributes.clone(),
+                )
+            } else {
+                ContextAttributes::from_context(
+                    self.context.clone(),
+                    self.all_attribute_private,
+                    self.global_private_attributes.clone(),
+                )
+            };
             state.serialize_field("context", &context_attribute)?;
         } else {
             state.serialize_field("contextKeys", &self.context.context_keys())?;
@@ -51,6 +60,7 @@ impl BaseEvent {
             inline: false,
             all_attribute_private: false,
             global_private_attributes: HashSet::new(),
+            redact_anonymous: false,
         }
     }
 
@@ -63,6 +73,20 @@ impl BaseEvent {
             inline: true,
             all_attribute_private,
             global_private_attributes,
+            ..self
+        }
+    }
+
+    pub(crate) fn into_inline_with_anonymous_redaction(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<Reference>,
+    ) -> Self {
+        Self {
+            inline: true,
+            all_attribute_private,
+            global_private_attributes,
+            redact_anonymous: true,
             ..self
         }
     }
@@ -111,6 +135,20 @@ impl FeatureRequestEvent {
             base: self
                 .base
                 .into_inline(all_attribute_private, global_private_attributes),
+            ..self
+        }
+    }
+
+    pub(crate) fn into_inline_with_anonymous_redaction(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<Reference>,
+    ) -> Self {
+        Self {
+            base: self.base.into_inline_with_anonymous_redaction(
+                all_attribute_private,
+                global_private_attributes,
+            ),
             ..self
         }
     }
@@ -705,6 +743,132 @@ mod tests {
                 "key": "alice",
                 "kind": "user",
                 "anonymous": true
+              },
+              "key": "flag",
+              "value": false,
+              "variation": 1,
+              "default": false,
+              "reason": {
+                "kind": "FALLTHROUGH"
+              },
+              "version": 42
+            });
+
+            assert_json_eq!(output_event, event_json);
+        }
+    }
+
+    #[test]
+    fn serializes_feature_request_event_with_anonymous_attribute_redaction() {
+        let flag = basic_flag("flag");
+        let default = FlagValue::from(false);
+        let context = ContextBuilder::new("alice")
+            .anonymous(true)
+            .set_value("foo", AttributeValue::Bool(true))
+            .build()
+            .expect("Failed to create context");
+        let fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let event_factory = EventFactory::new(true);
+        let mut feature_request_event =
+            event_factory.new_eval_event(&flag.key, context, &flag, fallthrough, default, None);
+        // fix creation date so JSON is predictable
+        feature_request_event.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::FeatureRequest(feature_request_event) = feature_request_event {
+            let output_event = OutputEvent::FeatureRequest(
+                feature_request_event.into_inline_with_anonymous_redaction(false, HashSet::new()),
+            );
+            let event_json = json!({
+              "kind": "feature",
+              "creationDate": 1234,
+              "context": {
+                "_meta": {
+                  "redactedAttributes" : ["foo"]
+                },
+                "key": "alice",
+                "kind": "user",
+                "anonymous": true
+              },
+              "key": "flag",
+              "value": false,
+              "variation": 1,
+              "default": false,
+              "reason": {
+                "kind": "FALLTHROUGH"
+              },
+              "version": 42
+            });
+
+            assert_json_eq!(output_event, event_json);
+        }
+    }
+
+    #[test]
+    fn serializes_feature_request_event_with_anonymous_attribute_redaction_in_multikind_context() {
+        let flag = basic_flag("flag");
+        let default = FlagValue::from(false);
+        let user_context = ContextBuilder::new("alice")
+            .anonymous(true)
+            .set_value("foo", AttributeValue::Bool(true))
+            .build()
+            .expect("Failed to create user context");
+        let org_context = ContextBuilder::new("LaunchDarkly")
+            .kind("org")
+            .set_value("foo", AttributeValue::Bool(true))
+            .build()
+            .expect("Failed to create org context");
+        let multi_context = MultiContextBuilder::new()
+            .add_context(user_context)
+            .add_context(org_context)
+            .build()
+            .expect("Failed to create multi context");
+        let fallthrough = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let event_factory = EventFactory::new(true);
+        let mut feature_request_event = event_factory.new_eval_event(
+            &flag.key,
+            multi_context,
+            &flag,
+            fallthrough,
+            default,
+            None,
+        );
+        // fix creation date so JSON is predictable
+        feature_request_event.base_mut().unwrap().creation_date = 1234;
+
+        if let InputEvent::FeatureRequest(feature_request_event) = feature_request_event {
+            let output_event = OutputEvent::FeatureRequest(
+                feature_request_event.into_inline_with_anonymous_redaction(false, HashSet::new()),
+            );
+            let event_json = json!({
+              "kind": "feature",
+              "creationDate": 1234,
+              "context": {
+                "kind": "multi",
+                "user": {
+                    "_meta": {
+                    "redactedAttributes" : ["foo"]
+                    },
+                    "key": "alice",
+                    "anonymous": true
+                },
+                "org": {
+                    "foo": true,
+                    "key": "LaunchDarkly"
+                }
               },
               "key": "flag",
               "value": false,

@@ -187,7 +187,7 @@ impl EventDispatcher {
             InputEvent::FeatureRequest(fre) => {
                 self.outbox.add_to_summary(&fre);
 
-                let inlined = fre.clone().into_inline(
+                let inlined = fre.clone().into_inline_with_anonymous_redaction(
                     self.events_configuration.all_attributes_private,
                     self.events_configuration.private_attributes.clone(),
                 );
@@ -207,7 +207,11 @@ impl EventDispatcher {
                 if let Some(debug_events_until_date) = fre.debug_events_until_date {
                     let time = u128::from(debug_events_until_date);
                     if time > now && time > self.last_known_time {
-                        self.outbox.add_event(OutputEvent::Debug(inlined.clone()));
+                        self.outbox
+                            .add_event(OutputEvent::Debug(fre.clone().into_inline(
+                                self.events_configuration.all_attributes_private,
+                                self.events_configuration.private_attributes.clone(),
+                            )));
                     }
                 }
 
