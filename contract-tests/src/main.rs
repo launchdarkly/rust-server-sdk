@@ -101,6 +101,7 @@ async fn status() -> impl Responder {
             "service-endpoints".to_string(),
             "context-type".to_string(),
             "secure-mode-hash".to_string(),
+            "inline-context".to_string(),
         ],
     })
 }
