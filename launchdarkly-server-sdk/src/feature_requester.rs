@@ -1,5 +1,6 @@
 use crate::reqwest::is_http_error_recoverable;
 use futures::future::BoxFuture;
+use hyper::body::HttpBody;
 use hyper::Body;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -77,7 +78,7 @@ where
                 .request(request_builder.body(Body::empty()).unwrap())
                 .await;
 
-            let response = match result {
+            let mut response = match result {
                 Ok(response) => response,
                 Err(e) => {
                     // It appears this type of error will not be an HTTP error.
