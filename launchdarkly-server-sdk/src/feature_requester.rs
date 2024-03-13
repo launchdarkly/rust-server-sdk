@@ -101,15 +101,16 @@ where
                 .map_or_else(|_| "".into(), |s| s.into());
 
             if response.status().is_success() {
-                let bytes = hyper::body::to_bytes(response.into_body())
-                    .await
-                    .map_err(|e| {
-                        error!(
-                            "An error occurred while reading the polling response body: {}",
-                            e
-                        );
-                        FeatureRequesterError::Temporary
-                    })?;
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.body_mut().data().await {
+                    match chunk {
+                        Ok(chunk) => bytes.extend(chunk.as_ref()),
+                        Err(e) => {
+                            error!("An error occurred while fetching response data: {}", e);
+                            return Err(FeatureRequesterError::Temporary);
+                        }
+                    }
+                }
                 let json = serde_json::from_slice::<AllData<Flag, Segment>>(bytes.as_ref());
 
                 return match json {
