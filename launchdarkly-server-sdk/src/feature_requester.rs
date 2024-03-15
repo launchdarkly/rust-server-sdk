@@ -149,27 +149,30 @@ mod tests {
 
     #[tokio::test]
     async fn updates_etag_as_appropriate() {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         server
             .mock("GET", "/")
             .with_status(200)
             .with_header("etag", "INITIAL-TAG")
             .with_body(r#"{"flags": {}, "segments": {}}"#)
             .expect(1)
-            .create();
+            .create_async()
+            .await;
         server
             .mock("GET", "/")
             .with_status(304)
             .match_header("If-None-Match", "INITIAL-TAG")
             .expect(1)
-            .create();
+            .create_async()
+            .await;
         server
             .mock("GET", "/")
             .with_status(200)
             .match_header("If-None-Match", "INITIAL-TAG")
             .with_header("etag", "UPDATED-TAG")
             .with_body(r#"{"flags": {}, "segments": {}}"#)
-            .create();
+            .create_async()
+            .await;
 
         let mut requester = build_feature_requester(server.url());
         let result = requester.get_all().await;
@@ -199,13 +202,14 @@ mod tests {
         let payload =
             String::from_utf8(payload).expect("Invalid UTF-8 characters in polling payload");
 
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         server
             .mock("GET", "/")
             .with_status(200)
             .with_body(payload)
             .expect(1)
-            .create();
+            .create_async()
+            .await;
 
         let mut requester = build_feature_requester(server.url());
         let result = requester.get_all().await;
@@ -225,8 +229,12 @@ mod tests {
         status: usize,
         error: FeatureRequesterError,
     ) {
-        let mut server = mockito::Server::new();
-        server.mock("GET", "/").with_status(status).create();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/")
+            .with_status(status)
+            .create_async()
+            .await;
 
         let mut requester = build_feature_requester(server.url());
         let result = requester.get_all().await;
