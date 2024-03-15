@@ -2,6 +2,14 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.1.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.0.2...2.1.0) (2024-03-15)
+
+
+### Features
+
+* Inline contexts for all evaluation events ([#63](https://github.com/launchdarkly/rust-server-sdk/issues/63)) ([b31b5e7](https://github.com/launchdarkly/rust-server-sdk/commit/b31b5e77cc2a0edf7fdbed84974c76df7b3a02d4))
+* Redact anonymous attributes within feature events ([#64](https://github.com/launchdarkly/rust-server-sdk/issues/64)) ([66e2e54](https://github.com/launchdarkly/rust-server-sdk/commit/66e2e54106cbed5c2f35806eaff0165f5351ccc6))
+
 ## [2.0.2](https://github.com/launchdarkly/rust-server-sdk/compare/2.0.1...2.0.2) (2023-12-21)
 
 
