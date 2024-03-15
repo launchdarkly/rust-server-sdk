@@ -391,14 +391,15 @@ mod tests {
         tag: Option<String>,
         matcher: impl Into<Matcher>,
     ) {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/all")
             .with_status(200)
             .with_body("event:one\ndata:One\n\n")
             .expect_at_least(1)
             .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
-            .create();
+            .create_async()
+            .await;
 
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));
@@ -446,14 +447,15 @@ mod tests {
         tag: Option<String>,
         matcher: impl Into<Matcher>,
     ) {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/sdk/latest-all")
             .with_status(200)
             .with_body("{}")
             .expect_at_least(1)
             .match_header(LAUNCHDARKLY_TAGS_HEADER, matcher)
-            .create();
+            .create_async()
+            .await;
 
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));

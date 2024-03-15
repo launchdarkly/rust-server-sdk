@@ -239,12 +239,13 @@ mod tests {
 
     #[tokio::test]
     async fn can_parse_server_time_from_response() {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         server
             .mock("POST", "/bulk")
             .with_status(200)
             .with_header("date", "Fri, 13 Feb 2009 23:31:30 GMT")
-            .create();
+            .create_async()
+            .await;
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
@@ -259,8 +260,12 @@ mod tests {
 
     #[tokio::test]
     async fn unrecoverable_failure_requires_shutdown() {
-        let mut server = mockito::Server::new();
-        server.mock("POST", "/bulk").with_status(401).create();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/bulk")
+            .with_status(401)
+            .create_async()
+            .await;
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
@@ -274,12 +279,13 @@ mod tests {
 
     #[tokio::test]
     async fn recoverable_failures_are_attempted_multiple_times() {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/bulk")
             .with_status(400)
             .expect(2)
-            .create();
+            .create_async()
+            .await;
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
@@ -294,13 +300,18 @@ mod tests {
 
     #[tokio::test]
     async fn retrying_requests_can_eventually_succeed() {
-        let mut server = mockito::Server::new();
-        server.mock("POST", "/bulk").with_status(400).create();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/bulk")
+            .with_status(400)
+            .create_async()
+            .await;
         server
             .mock("POST", "/bulk")
             .with_status(200)
             .with_header("date", "Fri, 13 Feb 2009 23:31:30 GMT")
-            .create();
+            .create_async()
+            .await;
 
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
