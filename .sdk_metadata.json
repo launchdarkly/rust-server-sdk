@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "sdks": {
+    "rust-server-sdk": {
+      "name": "Rust Server SDK",
+      "type": "server-side",
+      "languages": [
+        "Rust"
+      ]
+    }
+  }
+}
+
