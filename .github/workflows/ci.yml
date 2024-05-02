@@ -29,11 +29,13 @@ jobs:
         uses: ./.github/actions/contract-tests
         with:
           tls_feature: 'rustls'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 'Run contract tests with hyper_tls'
         uses: ./.github/actions/contract-tests
         with:
           tls_feature: 'tls'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: ./.github/actions/build-docs
 

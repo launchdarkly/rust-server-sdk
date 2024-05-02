@@ -4,6 +4,9 @@ inputs:
   tls_feature:
     description: 'Which TLS feature do you want to enable?'
     required: true
+  token:
+    description: 'GH Token used for retrieving SDK test harness.'
+    required: true
 
 runs:
   using: composite
@@ -16,6 +19,8 @@ runs:
       shell: bash
       run: make start-contract-test-service-bg
 
-    - name: Run contract tests
-      shell: bash
-      run: make run-contract-tests
+    - uses: launchdarkly/gh-actions/actions/contract-tests@contract-tests-v1.0.1
+      with:
+        test_service_port: 8000
+        token: ${{ inputs.token }}
+        extra_params: "-skip-from ./contract-tests/testharness-suppressions.txt"
