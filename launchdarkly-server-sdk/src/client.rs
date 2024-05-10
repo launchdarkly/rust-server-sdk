@@ -18,8 +18,8 @@ use super::evaluation::{FlagDetail, FlagDetailConfig};
 use super::stores::store::DataStore;
 use super::stores::store_builders::BuildError as DataStoreError;
 use crate::config::BuildError as ConfigBuildError;
-use crate::events::event::EventFactory;
 use crate::events::event::InputEvent;
+use crate::events::event::{EventFactory, MigrationOpEvent};
 use crate::events::processor::EventProcessor;
 use crate::events::processor_builders::BuildError as EventProcessorError;
 
@@ -701,6 +701,16 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    /// track_migration_op_reports a migration operation event.
+    ///
+    /// The measurements included in the event are used by LaunchDarkly to enhance support and
+    /// visibility during migration-assisted technology migrations.
+    ///
+    /// Migration operation events can be created with a [crate::MigrationOpTracker].
+    pub fn track_migration_op(_event: MigrationOpEvent) {
+        // TODO: Implement in a future commit.
     }
 
     fn variation_internal<T: Into<FlagValue> + Clone>(
