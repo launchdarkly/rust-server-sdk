@@ -1,12 +1,15 @@
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
+use std::time::Duration;
 
 use launchdarkly_server_sdk_evaluation::{
     Context, ContextAttributes, Detail, Flag, FlagValue, Kind, Reason, Reference, VariationIndex,
 };
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
+
+use crate::migrations::{Operation, Origin, Stage};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseEvent {
@@ -90,6 +93,23 @@ impl BaseEvent {
             ..self
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// MigrationOpEventData is generated through the migration op tracker provided through the SDK.
+pub struct MigrationOpEvent {
+    #[serde(flatten)]
+    pub(crate) base: BaseEvent,
+    pub(crate) flag: Flag,
+    pub(crate) operation: Operation,
+    pub(crate) default_stage: Stage,
+    pub(crate) evaluation: Detail<FlagValue>,
+    pub(crate) invoked: HashSet<Origin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) consistency_check: Option<bool>,
+    pub(crate) errors: HashSet<Origin>,
+    pub(crate) latency: HashMap<Origin, Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -290,7 +310,7 @@ impl EventFactory {
         Self { send_reason }
     }
 
-    fn now() -> u64 {
+    pub(crate) fn now() -> u64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
