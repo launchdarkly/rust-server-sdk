@@ -3,6 +3,7 @@ use parking_lot::RwLock;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 
 use launchdarkly_server_sdk_evaluation::{self as eval, Detail, FlagValue, PrerequisiteEvent};
@@ -270,7 +271,33 @@ impl Client {
     /// This is an async method that will resolve once initialization is complete.
     /// Initialization being complete does not mean that initialization was a success.
     /// The return value from the method indicates if the client successfully initialized.
+    #[deprecated(
+        note = "blocking without a timeout is discouraged, use wait_for_initialization instead"
+    )]
     pub async fn initialized_async(&self) -> bool {
+        self.initialized_async_internal().await
+    }
+
+    /// This is an async method that will resolve once initialization is complete or the specified
+    /// timeout has occurred.
+    ///
+    /// If the timeout is triggered, this method will return `None`. Otherwise, the method will
+    /// return a boolean indicating whether or not the SDK has successfully initialized.
+    pub async fn wait_for_initialization(&self, timeout: Duration) -> Option<bool> {
+        if timeout > Duration::from_secs(60) {
+            warn!("wait_for_initialization was configured to block for up to {} seconds. We recommend blocking no longer than 60.", timeout.as_secs());
+        }
+        // We need o try initialized_async and also start a timer that figures after timeout.
+        // If the timer figures, I want to return None. Otherwise, we should return the result of
+        // initialized_async.
+        let initialized = tokio::time::timeout(timeout, self.initialized_async_internal()).await;
+        match initialized {
+            Ok(result) => Some(result),
+            Err(_) => None,
+        }
+    }
+
+    async fn initialized_async_internal(&self) -> bool {
         if self.offline {
             return true;
         }
@@ -790,6 +817,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn client_asynchronously_initializes_within_timeout() {
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false);
+        client.start_with_default_executor();
+
+        let now = Instant::now();
+        let initialized = client
+            .wait_for_initialization(Duration::from_millis(1500))
+            .await;
+        let elapsed_time = now.elapsed();
+        // Give ourself a good margin for thread scheduling.
+        assert!(elapsed_time.as_millis() > 500);
+        assert_eq!(initialized, Some(true));
+    }
+
+    #[tokio::test]
+    async fn client_asynchronously_initializes_slower_than_timeout() {
+        let (client, _event_rx) = make_mocked_client_with_delay(2000, false);
+        client.start_with_default_executor();
+
+        let now = Instant::now();
+        let initialized = client
+            .wait_for_initialization(Duration::from_millis(500))
+            .await;
+        let elapsed_time = now.elapsed();
+        // Give ourself a good margin for thread scheduling.
+        assert!(elapsed_time.as_millis() < 750);
+        assert!(initialized.is_none());
+    }
+
+    #[tokio::test]
     async fn client_initializes_immediately_in_offline_mode() {
         let (client, _event_rx) = make_mocked_client_with_delay(1000, true);
         client.start_with_default_executor();
@@ -797,9 +854,11 @@ mod tests {
         assert!(client.initialized());
 
         let now = Instant::now();
-        let initialized = client.initialized_async().await;
+        let initialized = client
+            .wait_for_initialization(Duration::from_millis(2000))
+            .await;
         let elapsed_time = now.elapsed();
-        assert!(initialized);
+        assert_eq!(initialized, Some(true));
         assert!(elapsed_time.as_millis() < 500)
     }
 

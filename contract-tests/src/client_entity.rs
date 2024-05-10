@@ -128,7 +128,7 @@ impl ClientEntity {
         let config = config_builder.build()?;
         let client = Client::build(config)?;
         client.start_with_default_executor();
-        client.initialized_async().await;
+        client.wait_for_initialization(Duration::from_secs(5)).await;
 
         Ok(Self { client })
     }
