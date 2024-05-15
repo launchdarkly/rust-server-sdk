@@ -2,7 +2,7 @@ use eval::Context;
 use parking_lot::RwLock;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
@@ -18,8 +18,8 @@ use super::evaluation::{FlagDetail, FlagDetailConfig};
 use super::stores::store::DataStore;
 use super::stores::store_builders::BuildError as DataStoreError;
 use crate::config::BuildError as ConfigBuildError;
+use crate::events::event::EventFactory;
 use crate::events::event::InputEvent;
-use crate::events::event::{EventFactory, MigrationOpEvent};
 use crate::events::processor::EventProcessor;
 use crate::events::processor_builders::BuildError as EventProcessorError;
 use crate::{MigrationOpTracker, Stage};
@@ -731,13 +731,13 @@ impl Client {
         Ok(())
     }
 
-    /// track_migration_op_reports a migration operation event.
+    /// Tracks the results of a migrations operation. This event includes measurements which can be
+    /// used to enhance the observability of a migration within the LaunchDarkly UI.
     ///
-    /// The measurements included in the event are used by LaunchDarkly to enhance support and
-    /// visibility during migration-assisted technology migrations.
-    ///
-    /// Migration operation events can be created with a [crate::MigrationOpTracker].
-    pub fn track_migration_op(_event: MigrationOpEvent) {
+    /// This event should be generated through [crate::MigrationOpTracker]. If you are using the
+    /// [crate::Migrator] to handle migrations, this event will be created and emitted
+    /// automatically.
+    pub fn track_migration_op(&self, _tracker: Arc<Mutex<MigrationOpTracker>>) {
         // TODO: Implement in a future commit.
     }
 
