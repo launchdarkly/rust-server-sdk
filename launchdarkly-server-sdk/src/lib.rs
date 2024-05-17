@@ -41,7 +41,7 @@ pub use feature_requester_builders::{
     BuildError as FeatureRequestBuilderError, FeatureRequesterFactory,
 };
 pub use launchdarkly_server_sdk_evaluation::{Flag, Segment, Versioned};
-pub use migrations::{MigrationOpTracker, Operation, Origin, Stage};
+pub use migrations::{ExecutionOrder, MigrationOpTracker, Operation, Origin, Stage};
 pub use service_endpoints::ServiceEndpointsBuilder;
 pub use stores::persistent_store::{PersistentDataStore, PersistentStoreError};
 pub use stores::persistent_store_builders::{
