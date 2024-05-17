@@ -33,7 +33,7 @@ pub struct MigrationWriteResult {
 // provided results are equal, this method will return true and false otherwise.
 type MigrationComparisonFn = fn(serde_json::Value, serde_json::Value) -> bool;
 
-// MigrationImplFn represents the customer defined migration operation function. This method is
+// MigrationImplFn represents the user defined migration operation function. This method is
 // expected to return a meaningful value if the function succeeds, and an error otherwise.
 type MigrationImplFn =
     fn(serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>>;
@@ -116,7 +116,7 @@ impl MigratorBuilder {
     /// [Migrator] instance.
     ///
     /// Users are required to provide two different read methods -- one to read from the old migration origin, and one
-    /// to read from the new origin. Additionally, customers can opt-in to consistency tracking by providing a
+    /// to read from the new origin. Additionally, users can opt-in to consistency tracking by providing a
     /// comparison function.
     ///
     /// Depending on the migration stage, one or both of these read methods may be called.
