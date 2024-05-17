@@ -197,7 +197,7 @@ mod tests {
         tracker.invoked(Origin::Old);
         tracker.invoked(Origin::New);
 
-        return tracker;
+        tracker
     }
 
     #[test]
@@ -345,8 +345,7 @@ mod tests {
 
         let failure = tracker
             .build()
-            .err()
-            .expect("tracker should have failed to build event");
+            .expect_err("tracker should have failed to build event");
 
         assert_eq!(failure, "no origins were invoked");
     }
@@ -372,8 +371,7 @@ mod tests {
 
         let failure = tracker
             .build()
-            .err()
-            .expect("tracker should have failed to build event");
+            .expect_err("tracker should have failed to build event");
 
         assert_eq!(failure, "operation not provided");
     }
