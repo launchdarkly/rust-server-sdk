@@ -79,7 +79,10 @@ async fn main() {
 
     let mut interval = time::interval(Duration::from_secs(5));
 
-    let initialized = client.initialized_async().await;
+    let initialized = client
+        .wait_for_initialization(Duration::from_secs(5))
+        .await
+        .unwrap_or(false); // A timeout (None) can be treated as initialization failure
 
     if !initialized {
         error!("The client failed to initialize!");
