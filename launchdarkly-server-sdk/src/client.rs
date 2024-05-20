@@ -285,11 +285,9 @@ impl Client {
     /// return a boolean indicating whether or not the SDK has successfully initialized.
     pub async fn wait_for_initialization(&self, timeout: Duration) -> Option<bool> {
         if timeout > Duration::from_secs(60) {
-            warn!("wait_for_initialization was configured to block for up to {} seconds. We recommend blocking no longer than 60.", timeout.as_secs());
+            warn!("wait_for_initialization was configured to block for up to {} seconds. We recommend blocking no longer than 60 seconds.", timeout.as_secs());
         }
-        // We need o try initialized_async and also start a timer that figures after timeout.
-        // If the timer figures, I want to return None. Otherwise, we should return the result of
-        // initialized_async.
+
         let initialized = tokio::time::timeout(timeout, self.initialized_async_internal()).await;
         match initialized {
             Ok(result) => Some(result),
