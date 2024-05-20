@@ -1,7 +1,11 @@
+use core::fmt;
+use std::fmt::{Display, Formatter};
+
+use launchdarkly_server_sdk_evaluation::FlagValue;
 use serde::Serialize;
 
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Eq, Hash, PartialEq)]
+#[derive(Debug, Copy, Clone, Serialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "lowercase")]
 /// Origin represents the source of origin for a migration-related operation.
 pub enum Origin {
@@ -12,7 +16,7 @@ pub enum Origin {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Copy, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
 /// Operation represents a type of migration operation; namely, read or write.
 pub enum Operation {
@@ -23,7 +27,7 @@ pub enum Operation {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 /// Stage denotes one of six possible stages a technology migration could be a
 /// part of, progressing through the following order.
@@ -42,6 +46,45 @@ pub enum Stage {
     Rampdown,
     /// Complete - migration is done
     Complete,
+}
+
+impl Display for Stage {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Stage::Off => write!(f, "off"),
+            Stage::DualWrite => write!(f, "dualwrite"),
+            Stage::Shadow => write!(f, "shadow"),
+            Stage::Live => write!(f, "live"),
+            Stage::Rampdown => write!(f, "rampdown"),
+            Stage::Complete => write!(f, "complete"),
+        }
+    }
+}
+
+impl From<Stage> for FlagValue {
+    fn from(stage: Stage) -> FlagValue {
+        FlagValue::Str(stage.to_string())
+    }
+}
+
+impl TryFrom<FlagValue> for Stage {
+    type Error = String;
+
+    fn try_from(value: FlagValue) -> Result<Self, Self::Error> {
+        if let FlagValue::Str(value) = value {
+            match value.as_str() {
+                "off" => Ok(Stage::Off),
+                "dualwrite" => Ok(Stage::DualWrite),
+                "shadow" => Ok(Stage::Shadow),
+                "live" => Ok(Stage::Live),
+                "rampdown" => Ok(Stage::Rampdown),
+                "complete" => Ok(Stage::Complete),
+                _ => Err(format!("Invalid stage: {}", value)),
+            }
+        } else {
+            Err("Cannot convert non-string value to Stage".to_string())
+        }
+    }
 }
 
 #[non_exhaustive]
