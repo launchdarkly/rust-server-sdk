@@ -22,6 +22,7 @@ use crate::events::event::InputEvent;
 use crate::events::event::{EventFactory, MigrationOpEvent};
 use crate::events::processor::EventProcessor;
 use crate::events::processor_builders::BuildError as EventProcessorError;
+use crate::{MigrationOpTracker, Stage};
 
 struct EventsScope {
     disabled: bool,
@@ -606,7 +607,9 @@ impl Client {
         flag_key: &str,
         default: T,
     ) -> Detail<FlagValue> {
-        self.variation_internal(context, flag_key, default, &self.events_with_reasons)
+        let (detail, _) =
+            self.variation_internal(context, flag_key, default, &self.events_with_reasons);
+        detail
     }
 
     /// This is a generic function which returns the value of a feature flag for a given context.
@@ -625,9 +628,34 @@ impl Client {
         flag_key: &str,
         default: T,
     ) -> FlagValue {
-        self.variation_internal(context, flag_key, default, &self.events_default)
-            .value
-            .unwrap()
+        let (detail, _) = self.variation_internal(context, flag_key, default, &self.events_default);
+        detail.value.unwrap()
+    }
+
+    /// This method returns the migration stage of the migration feature flag for the given
+    /// evaluation context.
+    ///
+    /// This method returns the default stage if there is an error or the flag does not exist.
+    pub fn migration_variation(
+        &self,
+        context: &Context,
+        flag_key: &str,
+        default_stage: Stage,
+    ) -> (Stage, MigrationOpTracker) {
+        let (detail, flag) =
+            self.variation_internal(context, flag_key, default_stage, &self.events_default);
+
+        let migration_detail =
+            detail.try_map(|v| v.try_into().ok(), default_stage, eval::Error::WrongType);
+        let tracker = MigrationOpTracker::new(
+            flag_key.into(),
+            flag,
+            context.clone(),
+            migration_detail.clone(),
+            default_stage,
+        );
+
+        (migration_detail.value.unwrap_or(default_stage), tracker)
     }
 
     /// Reports that a context has performed an event.
@@ -719,9 +747,12 @@ impl Client {
         flag_key: &str,
         default: T,
         events_scope: &EventsScope,
-    ) -> Detail<FlagValue> {
+    ) -> (Detail<FlagValue>, Option<eval::Flag>) {
         if self.offline {
-            return Detail::err_default(eval::Error::ClientNotReady, default.into());
+            return (
+                Detail::err_default(eval::Error::ClientNotReady, default.into()),
+                None,
+            );
         }
 
         let (flag, result) = match self.initialized() {
@@ -772,7 +803,7 @@ impl Client {
             self.send_internal(event);
         }
 
-        result
+        (result, flag)
     }
 
     fn send_internal(&self, event: InputEvent) {
@@ -797,7 +828,8 @@ mod tests {
     use crate::events::processor_builders::EventProcessorBuilder;
     use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::{
-        self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_off_flag,
+        self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_migration_flag,
+        basic_off_flag,
     };
     use crate::ConfigBuilder;
     use test_case::test_case;
@@ -1533,6 +1565,71 @@ mod tests {
         assert_eq!(event_rx.iter().count(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn migration_handles_flag_not_found() {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let (stage, _tracker) =
+            client.migration_variation(&context, "non-existent-flag-key", Stage::Off);
+
+        assert_eq!(stage, Stage::Off);
+    }
+
+    #[test]
+    fn migration_uses_non_migration_flag() {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "boolean-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("boolean-flag"))),
+            )
+            .expect("patch should apply");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let (stage, _tracker) = client.migration_variation(&context, "boolean-flag", Stage::Off);
+
+        assert_eq!(stage, Stage::Off);
+    }
+
+    #[test_case(Stage::Off)]
+    #[test_case(Stage::DualWrite)]
+    #[test_case(Stage::Shadow)]
+    #[test_case(Stage::Live)]
+    #[test_case(Stage::Rampdown)]
+    #[test_case(Stage::Complete)]
+    fn migration_can_determine_correct_stage_from_flag(stage: Stage) {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "stage-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
+            )
+            .expect("patch should apply");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let (evaluated_stage, _tracker) =
+            client.migration_variation(&context, "stage-flag", Stage::Off);
+
+        assert_eq!(evaluated_stage, stage);
     }
 
     fn make_mocked_client_with_delay(delay: u64, offline: bool) -> (Client, Receiver<OutputEvent>) {

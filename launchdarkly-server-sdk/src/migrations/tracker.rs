@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use launchdarkly_server_sdk_evaluation::{Context, Detail, Flag, FlagValue};
+use launchdarkly_server_sdk_evaluation::{Context, Detail, Flag};
 
 use crate::events::event::{BaseEvent, EventFactory, MigrationOpEvent};
 
@@ -15,9 +15,10 @@ use super::{Operation, Origin, Stage};
 ///
 /// Example measurements include latency, errors, and consistency.
 pub struct MigrationOpTracker {
-    flag: Flag,
+    key: String,
+    flag: Option<Flag>,
     context: Context,
-    detail: Detail<FlagValue>,
+    detail: Detail<Stage>,
     default_stage: Stage,
 
     mutex: Mutex<()>,
@@ -30,10 +31,15 @@ pub struct MigrationOpTracker {
 }
 
 impl MigrationOpTracker {
-    // TODO: Temporary until further migration work has been completed
-    #[allow(dead_code)]
-    fn new(flag: Flag, context: Context, detail: Detail<FlagValue>, default_stage: Stage) -> Self {
+    pub(crate) fn new(
+        key: String,
+        flag: Option<Flag>,
+        context: Context,
+        detail: Detail<Stage>,
+        default_stage: Stage,
+    ) -> Self {
         Self {
+            key,
             flag,
             context,
             detail,
@@ -117,10 +123,13 @@ impl MigrationOpTracker {
 
         let operation = self
             .operation
-            .clone()
             .ok_or_else(|| "operation not provided".to_string())?;
 
         self.check_invoked_consistency()?;
+
+        if self.key.is_empty() {
+            return Err("operation cannot contain an empty key".to_string());
+        }
 
         let invoked = self.invoked.clone();
         if invoked.is_empty() {
@@ -129,9 +138,10 @@ impl MigrationOpTracker {
 
         Ok(MigrationOpEvent {
             base: BaseEvent::new(EventFactory::now(), self.context.clone()),
-            flag: self.flag.clone(),
+            key: self.key.clone(),
+            version: self.flag.as_ref().map(|f| f.version),
             operation,
-            default_stage: self.default_stage.clone(),
+            default_stage: self.default_stage,
             evaluation: self.detail.clone(),
             invoked,
             consistency_check: self.consistent,
@@ -172,7 +182,7 @@ impl MigrationOpTracker {
 #[cfg(test)]
 mod tests {
 
-    use launchdarkly_server_sdk_evaluation::{ContextBuilder, Detail, FlagValue, Reason};
+    use launchdarkly_server_sdk_evaluation::{ContextBuilder, Detail, Reason};
     use test_case::test_case;
 
     use super::{MigrationOpTracker, Operation, Origin, Stage};
@@ -180,12 +190,13 @@ mod tests {
 
     fn minimal_tracker() -> MigrationOpTracker {
         let mut tracker = MigrationOpTracker::new(
-            basic_flag("flag-key"),
+            "flag-key".into(),
+            Some(basic_flag("flag-key")),
             ContextBuilder::new("user")
                 .build()
                 .expect("failed to build context"),
             Detail {
-                value: Some(FlagValue::Bool(true)),
+                value: Some(Stage::Live),
                 variation_index: Some(1),
                 reason: Reason::Fallthrough {
                     in_experiment: false,
@@ -208,16 +219,26 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn build_without_flag() {
+        let mut tracker = minimal_tracker();
+        tracker.flag = None;
+        let result = tracker.build();
+
+        assert!(result.is_ok());
+    }
+
     #[test_case(Origin::Old)]
     #[test_case(Origin::New)]
     fn track_invocations_individually(origin: Origin) {
         let mut tracker = MigrationOpTracker::new(
-            basic_flag("flag-key"),
+            "flag-key".into(),
+            Some(basic_flag("flag-key")),
             ContextBuilder::new("user")
                 .build()
                 .expect("failed to build context"),
             Detail {
-                value: Some(FlagValue::Bool(true)),
+                value: Some(Stage::Live),
                 variation_index: Some(1),
                 reason: Reason::Fallthrough {
                     in_experiment: false,
@@ -236,12 +257,13 @@ mod tests {
     #[test]
     fn tracks_both_invocations() {
         let mut tracker = MigrationOpTracker::new(
-            basic_flag("flag-key"),
+            "flag-key".into(),
+            Some(basic_flag("flag-key")),
             ContextBuilder::new("user")
                 .build()
                 .expect("failed to build context"),
             Detail {
-                value: Some(FlagValue::Bool(true)),
+                value: Some(Stage::Live),
                 variation_index: Some(1),
                 reason: Reason::Fallthrough {
                     in_experiment: false,
@@ -328,12 +350,13 @@ mod tests {
     #[test]
     fn fails_without_calling_invocations() {
         let mut tracker = MigrationOpTracker::new(
-            basic_flag("flag-key"),
+            "flag-key".into(),
+            Some(basic_flag("flag-key")),
             ContextBuilder::new("user")
                 .build()
                 .expect("failed to build context"),
             Detail {
-                value: Some(FlagValue::Bool(true)),
+                value: Some(Stage::Live),
                 variation_index: Some(1),
                 reason: Reason::Fallthrough {
                     in_experiment: false,
@@ -353,12 +376,13 @@ mod tests {
     #[test]
     fn fails_without_operation() {
         let mut tracker = MigrationOpTracker::new(
-            basic_flag("flag-key"),
+            "flag-key".into(),
+            Some(basic_flag("flag-key")),
             ContextBuilder::new("user")
                 .build()
                 .expect("failed to build context"),
             Detail {
-                value: Some(FlagValue::Bool(true)),
+                value: Some(Stage::Live),
                 variation_index: Some(1),
                 reason: Reason::Fallthrough {
                     in_experiment: false,

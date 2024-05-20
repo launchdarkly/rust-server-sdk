@@ -101,10 +101,11 @@ impl BaseEvent {
 pub struct MigrationOpEvent {
     #[serde(flatten)]
     pub(crate) base: BaseEvent,
-    pub(crate) flag: Flag,
+    pub(crate) key: String,
+    pub(crate) version: Option<u64>,
     pub(crate) operation: Operation,
     pub(crate) default_stage: Stage,
-    pub(crate) evaluation: Detail<FlagValue>,
+    pub(crate) evaluation: Detail<Stage>,
     pub(crate) invoked: HashSet<Origin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) consistency_check: Option<bool>,
