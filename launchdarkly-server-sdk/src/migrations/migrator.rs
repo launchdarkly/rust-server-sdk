@@ -72,7 +72,7 @@ pub trait Migrator {
 /// migrator can be used to perform LaunchDarkly assisted technology migrations through the use of
 /// migration-based feature flags.
 pub struct MigratorBuilder {
-    client: Client,
+    client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
@@ -83,7 +83,7 @@ pub struct MigratorBuilder {
 
 impl MigratorBuilder {
     /// Create a new migrator builder instance with the provided client.
-    pub fn new(client: Client) -> Self {
+    pub fn new(client: Arc<Client>) -> Self {
         MigratorBuilder {
             client,
             read_execution_order: ExecutionOrder::Parallel,
@@ -171,7 +171,7 @@ impl MigratorBuilder {
 }
 
 struct MigratorImpl {
-    client: Client,
+    client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
@@ -181,7 +181,7 @@ struct MigratorImpl {
 
 impl MigratorImpl {
     fn new(
-        client: Client,
+        client: Arc<Client>,
         read_execution_order: ExecutionOrder,
         measure_latency: bool,
         measure_errors: bool,
@@ -434,7 +434,7 @@ mod tests {
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use test_case::test_case;
 
-    fn default_builder(client: Client) -> MigratorBuilder {
+    fn default_builder(client: Arc<Client>) -> MigratorBuilder {
         MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
@@ -456,7 +456,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         let migrator = default_builder(client).build();
 
         assert!(migrator.is_ok());
@@ -469,7 +469,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
         let (sender, receiver) = mpsc::channel();
@@ -514,7 +514,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
         let (sender, receiver) = mpsc::channel();
@@ -562,7 +562,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
         let (sender, receiver) = mpsc::channel();
@@ -615,7 +615,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
         let migrator = default_builder(client)
@@ -656,7 +656,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
         let migrator = default_builder(client)
@@ -700,7 +700,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
         let (sender, receiver) = mpsc::channel();
@@ -756,7 +756,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
         let (sender, receiver) = mpsc::channel();
@@ -809,7 +809,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         let migrator = default_builder(client)
             .read_execution_order(execution_order)
             .build();
@@ -824,7 +824,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         let migrator = MigratorBuilder::new(client)
             .write(
                 Arc::new(|_| Ok(serde_json::Value::Null)),
@@ -843,7 +843,7 @@ mod tests {
             .build()
             .expect("config failed to build");
 
-        let client = Client::build(config).expect("client failed to build");
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
         let migrator = MigratorBuilder::new(client)
             .read(
                 Arc::new(|_| Ok(serde_json::Value::Null)),

@@ -26,6 +26,7 @@ pub struct MigrationOpTracker {
     operation: Option<Operation>,
     invoked: HashSet<Origin>,
     consistent: Option<bool>,
+    consistent_ratio: Option<u64>,
     errors: HashSet<Origin>,
     latencies: HashMap<Origin, Duration>,
 }
@@ -38,6 +39,14 @@ impl MigrationOpTracker {
         detail: Detail<Stage>,
         default_stage: Stage,
     ) -> Self {
+        let consistent_ratio = match &flag {
+            Some(f) => f
+                .migration_settings
+                .as_ref()
+                .map(|s| s.check_ratio.unwrap_or(1)),
+            None => None,
+        };
+
         Self {
             key,
             flag,
@@ -48,6 +57,7 @@ impl MigrationOpTracker {
             operation: None,
             invoked: HashSet::new(),
             consistent: None,
+            consistent_ratio,
             errors: HashSet::new(),
             latencies: HashMap::new(),
         }
@@ -144,6 +154,7 @@ impl MigrationOpTracker {
             default_stage: self.default_stage,
             evaluation: self.detail.clone(),
             invoked,
+            consistency_check_ratio: self.consistent_ratio,
             consistency_check: self.consistent,
             errors: self.errors.clone(),
             latency: self.latencies.clone(),
