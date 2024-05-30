@@ -247,7 +247,7 @@ mod tests {
             Stage::Live,
         );
         tracker.operation(Operation::Read);
-        tracker.invoked(origin.clone());
+        tracker.invoked(origin);
 
         let event = tracker.build().expect("failed to build event");
         assert_eq!(event.invoked.len(), 1);
@@ -296,7 +296,7 @@ mod tests {
     #[test_case(Origin::New)]
     fn track_errors_individually(origin: Origin) {
         let mut tracker = minimal_tracker();
-        tracker.error(origin.clone());
+        tracker.error(origin);
 
         let event = tracker.build().expect("failed to build event");
         assert_eq!(event.errors.len(), 1);
@@ -319,7 +319,7 @@ mod tests {
     #[test_case(Origin::New)]
     fn track_latencies_individually(origin: Origin) {
         let mut tracker = minimal_tracker();
-        tracker.latency(origin.clone(), std::time::Duration::from_millis(100));
+        tracker.latency(origin, std::time::Duration::from_millis(100));
 
         let event = tracker.build().expect("failed to build event");
         assert_eq!(event.latency.len(), 1);
