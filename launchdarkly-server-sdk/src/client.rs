@@ -737,8 +737,31 @@ impl Client {
     /// This event should be generated through [crate::MigrationOpTracker]. If you are using the
     /// [crate::Migrator] to handle migrations, this event will be created and emitted
     /// automatically.
-    pub fn track_migration_op(&self, _tracker: Arc<Mutex<MigrationOpTracker>>) {
-        // TODO: Implement in a future commit.
+    pub fn track_migration_op(&self, tracker: Arc<Mutex<MigrationOpTracker>>) {
+        if self.events_default.disabled {
+            return;
+        }
+
+        match tracker.lock() {
+            Ok(tracker) => {
+                let event = tracker.build();
+                match event {
+                    Ok(event) => {
+                        self.send_internal(
+                            self.events_default.event_factory.new_migration_op(event),
+                        );
+                    }
+                    Err(e) => error!(
+                        "Failed to build migration event, no event will be sent: {}",
+                        e
+                    ),
+                }
+            }
+            Err(e) => error!(
+                "Failed to lock migration tracker, no event will be sent: {}",
+                e
+            ),
+        }
     }
 
     fn variation_internal<T: Into<FlagValue> + Clone>(
@@ -831,7 +854,7 @@ mod tests {
         self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_migration_flag,
         basic_off_flag,
     };
-    use crate::ConfigBuilder;
+    use crate::{ConfigBuilder, MigratorBuilder, Operation, Origin};
     use test_case::test_case;
 
     use super::*;
@@ -1630,6 +1653,431 @@ mod tests {
             client.migration_variation(&context, "stage-flag", Stage::Off);
 
         assert_eq!(evaluated_stage, stage);
+    }
+
+    #[test_case(Stage::Off, Operation::Read, vec![Origin::Old])]
+    #[test_case(Stage::DualWrite, Operation::Read, vec![Origin::Old])]
+    #[test_case(Stage::Shadow, Operation::Read, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Live, Operation::Read, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Rampdown, Operation::Read, vec![Origin::New])]
+    #[test_case(Stage::Complete, Operation::Read, vec![Origin::New])]
+    #[test_case(Stage::Off, Operation::Write, vec![Origin::Old])]
+    #[test_case(Stage::DualWrite, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Shadow, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Live, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Rampdown, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Complete, Operation::Write, vec![Origin::New])]
+    fn migration_tracks_invoked_correctly(
+        stage: Stage,
+        operation: Operation,
+        origins: Vec<Origin>,
+    ) {
+        let (client, event_rx) = make_mocked_client();
+        let client = Arc::new(client);
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "stage-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
+            )
+            .expect("patch should apply");
+
+        let migrator = MigratorBuilder::new(client.clone())
+            .read(
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+                Some(|_, _| true),
+            )
+            .write(
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+            )
+            .build()
+            .expect("migrator should build");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        if let Operation::Read = operation {
+            migrator.read(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            );
+        } else {
+            migrator.write(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            );
+        }
+
+        client.flush();
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            OutputEvent::MigrationOp(event) => {
+                assert!(event.invoked.len() == origins.len());
+                assert!(event.invoked.iter().all(|i| origins.contains(&i)));
+            }
+            _ => panic!("Expected migration event"),
+        }
+    }
+
+    #[test_case(Stage::Off, Operation::Read, vec![Origin::Old])]
+    #[test_case(Stage::DualWrite, Operation::Read, vec![Origin::Old])]
+    #[test_case(Stage::Shadow, Operation::Read, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Live, Operation::Read, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Rampdown, Operation::Read, vec![Origin::New])]
+    #[test_case(Stage::Complete, Operation::Read, vec![Origin::New])]
+    #[test_case(Stage::Off, Operation::Write, vec![Origin::Old])]
+    #[test_case(Stage::DualWrite, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Shadow, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Live, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Rampdown, Operation::Write, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Complete, Operation::Write, vec![Origin::New])]
+    fn migration_tracks_latency(stage: Stage, operation: Operation, origins: Vec<Origin>) {
+        let (client, event_rx) = make_mocked_client();
+        let client = Arc::new(client);
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "stage-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
+            )
+            .expect("patch should apply");
+
+        let migrator = MigratorBuilder::new(client.clone())
+            .track_latency(true)
+            .read(
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::Null)
+                }),
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::Null)
+                }),
+                Some(|_, _| true),
+            )
+            .write(
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::Null)
+                }),
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::Null)
+                }),
+            )
+            .build()
+            .expect("migrator should build");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        if let Operation::Read = operation {
+            migrator.read(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            );
+        } else {
+            migrator.write(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            );
+        }
+
+        client.flush();
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            OutputEvent::MigrationOp(event) => {
+                assert!(event.latency.len() == origins.len());
+                assert!(event
+                    .latency
+                    .values()
+                    .into_iter()
+                    .all(|l| l > &Duration::from_millis(100)));
+            }
+            _ => panic!("Expected migration event"),
+        }
+    }
+
+    #[test_case(Stage::Off, vec![Origin::Old])]
+    #[test_case(Stage::DualWrite, vec![Origin::Old])]
+    #[test_case(Stage::Shadow, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Live, vec![Origin::Old, Origin::New])]
+    #[test_case(Stage::Rampdown, vec![Origin::New])]
+    #[test_case(Stage::Complete, vec![Origin::New])]
+    fn migration_tracks_read_errors(stage: Stage, origins: Vec<Origin>) {
+        let (client, event_rx) = make_mocked_client();
+        let client = Arc::new(client);
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "stage-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
+            )
+            .expect("patch should apply");
+
+        let migrator = MigratorBuilder::new(client.clone())
+            .track_latency(true)
+            .read(
+                Arc::new(|_| Err("fail".into())),
+                Arc::new(|_| Err("fail".into())),
+                Some(|_, _| true),
+            )
+            .write(
+                Arc::new(|_| Err("fail".into())),
+                Arc::new(|_| Err("fail".into())),
+            )
+            .build()
+            .expect("migrator should build");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        migrator.read(
+            "stage-flag".into(),
+            context,
+            Stage::Off,
+            serde_json::Value::Null,
+        );
+        client.flush();
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            OutputEvent::MigrationOp(event) => {
+                assert!(event.errors.len() == origins.len());
+                assert!(event.errors.iter().all(|i| origins.contains(&i)));
+            }
+            _ => panic!("Expected migration event"),
+        }
+    }
+
+    #[test_case(Stage::Off, vec![Origin::Old])]
+    #[test_case(Stage::DualWrite, vec![Origin::Old])]
+    #[test_case(Stage::Shadow, vec![Origin::Old])]
+    #[test_case(Stage::Live, vec![Origin::New])]
+    #[test_case(Stage::Rampdown, vec![Origin::New])]
+    #[test_case(Stage::Complete, vec![Origin::New])]
+    fn migration_tracks_authoritative_write_errors(stage: Stage, origins: Vec<Origin>) {
+        let (client, event_rx) = make_mocked_client();
+        let client = Arc::new(client);
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "stage-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
+            )
+            .expect("patch should apply");
+
+        let migrator = MigratorBuilder::new(client.clone())
+            .track_latency(true)
+            .read(
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+                None,
+            )
+            .write(
+                Arc::new(|_| Err("fail".into())),
+                Arc::new(|_| Err("fail".into())),
+            )
+            .build()
+            .expect("migrator should build");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        migrator.write(
+            "stage-flag".into(),
+            context,
+            Stage::Off,
+            serde_json::Value::Null,
+        );
+
+        client.flush();
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            OutputEvent::MigrationOp(event) => {
+                assert!(event.errors.len() == origins.len());
+                assert!(event.errors.iter().all(|i| origins.contains(&i)));
+            }
+            _ => panic!("Expected migration event"),
+        }
+    }
+
+    #[test_case(Stage::DualWrite, false, true, vec![Origin::New])]
+    #[test_case(Stage::Shadow, false, true, vec![Origin::New])]
+    #[test_case(Stage::Live, true, false, vec![Origin::Old])]
+    #[test_case(Stage::Rampdown, true, false, vec![Origin::Old])]
+    fn migration_tracks_nonauthoritative_write_errors(
+        stage: Stage,
+        fail_old: bool,
+        fail_new: bool,
+        origins: Vec<Origin>,
+    ) {
+        let (client, event_rx) = make_mocked_client();
+        let client = Arc::new(client);
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "stage-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
+            )
+            .expect("patch should apply");
+
+        let migrator = MigratorBuilder::new(client.clone())
+            .track_latency(true)
+            .read(
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+                Arc::new(|_| Ok(serde_json::Value::Null)),
+                None,
+            )
+            .write(
+                Arc::new(move |_| {
+                    if fail_old {
+                        Err("fail".into())
+                    } else {
+                        Ok(serde_json::Value::Null)
+                    }
+                }),
+                Arc::new(move |_| {
+                    if fail_new {
+                        Err("fail".into())
+                    } else {
+                        Ok(serde_json::Value::Null)
+                    }
+                }),
+            )
+            .build()
+            .expect("migrator should build");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        migrator.write(
+            "stage-flag".into(),
+            context,
+            Stage::Off,
+            serde_json::Value::Null,
+        );
+
+        client.flush();
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            OutputEvent::MigrationOp(event) => {
+                assert!(event.errors.len() == origins.len());
+                assert!(event.errors.iter().all(|i| origins.contains(&i)));
+            }
+            _ => panic!("Expected migration event"),
+        }
+    }
+
+    #[test_case(Stage::Shadow, "same", "same", true)]
+    #[test_case(Stage::Shadow, "same", "different", false)]
+    #[test_case(Stage::Live, "same", "same", true)]
+    #[test_case(Stage::Live, "same", "different", false)]
+    fn migration_tracks_consistency(
+        stage: Stage,
+        old_return: &'static str,
+        new_return: &'static str,
+        expected_consistency: bool,
+    ) {
+        let (client, event_rx) = make_mocked_client();
+        let client = Arc::new(client);
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "stage-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
+            )
+            .expect("patch should apply");
+
+        let migrator = MigratorBuilder::new(client.clone())
+            .track_latency(true)
+            .read(
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::String(old_return.to_string()))
+                }),
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::String(new_return.to_string()))
+                }),
+                Some(|lhs, rhs| lhs == rhs),
+            )
+            .write(
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::Null)
+                }),
+                Arc::new(|_| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(serde_json::Value::Null)
+                }),
+            )
+            .build()
+            .expect("migrator should build");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        migrator.read(
+            "stage-flag".into(),
+            context,
+            Stage::Off,
+            serde_json::Value::Null,
+        );
+
+        client.flush();
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert_eq!(events.len(), 3);
+        match &events[1] {
+            OutputEvent::MigrationOp(event) => {
+                assert!(event.consistency_check == Some(expected_consistency))
+            }
+            _ => panic!("Expected migration event"),
+        }
     }
 
     fn make_mocked_client_with_delay(delay: u64, offline: bool) -> (Client, Receiver<OutputEvent>) {

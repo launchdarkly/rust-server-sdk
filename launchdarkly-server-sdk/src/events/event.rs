@@ -95,11 +95,9 @@ impl BaseEvent {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 /// MigrationOpEventData is generated through the migration op tracker provided through the SDK.
+#[derive(Clone, Debug)]
 pub struct MigrationOpEvent {
-    #[serde(flatten)]
     pub(crate) base: BaseEvent,
     pub(crate) key: String,
     pub(crate) version: Option<u64>,
@@ -107,10 +105,123 @@ pub struct MigrationOpEvent {
     pub(crate) default_stage: Stage,
     pub(crate) evaluation: Detail<Stage>,
     pub(crate) invoked: HashSet<Origin>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) consistency_check: Option<bool>,
+    pub(crate) consistency_check_ratio: Option<u64>,
     pub(crate) errors: HashSet<Origin>,
     pub(crate) latency: HashMap<Origin, Duration>,
+}
+
+impl Serialize for MigrationOpEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("MigrationOpEvent", 10)?;
+        state.serialize_field("kind", "migration_op")?;
+        state.serialize_field("creationDate", &self.base.creation_date)?;
+        state.serialize_field("contextKeys", &self.base.context.context_keys())?;
+        state.serialize_field("operation", &self.operation)?;
+
+        let evaluation = MigrationOpEvaluation {
+            key: self.key.clone(),
+            value: self.evaluation.value,
+            // QUESTION: In the ruby implementation, this can be nil. Why not here?
+            reason: self.evaluation.reason.clone(),
+            variation_index: self.evaluation.variation_index,
+            version: self.version,
+        };
+        state.serialize_field("evaluation", &evaluation)?;
+        state.serialize_field("default", &self.default_stage)?;
+
+        // TODO: Add sampling here if it is set and not 1
+
+        let mut measurements = vec![];
+        if self.invoked.is_empty() {
+            measurements.push(MigrationOpMeasurement::Invoked(&self.invoked));
+        }
+
+        // TODO: There is something here to do with consistency check ratio
+        if let Some(consistency_check) = self.consistency_check {
+            measurements.push(MigrationOpMeasurement::ConsistencyCheck(
+                consistency_check,
+                self.consistency_check_ratio,
+            ));
+        }
+
+        if !self.errors.is_empty() {
+            measurements.push(MigrationOpMeasurement::Errors(&self.errors));
+        }
+
+        if !self.latency.is_empty() {
+            measurements.push(MigrationOpMeasurement::Latency(&self.latency));
+        }
+
+        state.end()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MigrationOpEvaluation {
+    pub key: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<Stage>,
+
+    pub reason: Reason,
+
+    #[serde(rename = "variation", skip_serializing_if = "Option::is_none")]
+    pub variation_index: Option<VariationIndex>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+}
+
+enum MigrationOpMeasurement<'a> {
+    Invoked(&'a HashSet<Origin>),
+    ConsistencyCheck(bool, Option<u64>),
+    Errors(&'a HashSet<Origin>),
+    Latency(&'a HashMap<Origin, Duration>),
+}
+
+impl Serialize for MigrationOpMeasurement<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            MigrationOpMeasurement::Invoked(invoked) => {
+                let mut state = serializer.serialize_struct("invoked", 2)?;
+                state.serialize_field("key", "invoked")?;
+                state.serialize_field("values", &invoked)?;
+                state.end()
+            }
+            MigrationOpMeasurement::ConsistencyCheck(consistency_check, consistency_ratio) => {
+                let mut state = serializer.serialize_struct("consistency", 2)?;
+                state.serialize_field("key", "consistent")?;
+                state.serialize_field("value", &consistency_check)?;
+
+                match consistency_ratio {
+                    None | Some(1) => (),
+                    Some(ratio) => state.serialize_field("samplingRatio", &ratio)?,
+                }
+
+                state.end()
+            }
+            MigrationOpMeasurement::Errors(errors) => {
+                let mut state = serializer.serialize_struct("errors", 2)?;
+                state.serialize_field("key", "errors")?;
+                state.serialize_field("values", &errors)?;
+                state.end()
+            }
+            MigrationOpMeasurement::Latency(latency) => {
+                let mut state = serializer.serialize_struct("latencies", 2)?;
+                state.serialize_field("key", "latency_ms")?;
+                state.serialize_field("values", &latency)?;
+                state.end()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -260,6 +371,9 @@ pub enum OutputEvent {
 
     #[serde(rename = "summary")]
     Summary(EventSummary),
+
+    #[serde(rename = "migration_op")]
+    MigrationOp(MigrationOpEvent),
 }
 
 impl OutputEvent {
@@ -272,6 +386,7 @@ impl OutputEvent {
             OutputEvent::Identify { .. } => "identify",
             OutputEvent::Custom { .. } => "custom",
             OutputEvent::Summary { .. } => "summary",
+            OutputEvent::MigrationOp { .. } => "migration_op",
         }
     }
 }
@@ -281,6 +396,7 @@ pub enum InputEvent {
     FeatureRequest(FeatureRequestEvent),
     Identify(IdentifyEvent),
     Custom(CustomEvent),
+    MigrationOp(MigrationOpEvent),
 }
 
 impl InputEvent {
@@ -290,6 +406,7 @@ impl InputEvent {
             InputEvent::FeatureRequest(FeatureRequestEvent { base, .. }) => Some(base),
             InputEvent::Identify(IdentifyEvent { base, .. }) => Some(base),
             InputEvent::Custom(CustomEvent { base, .. }) => Some(base),
+            InputEvent::MigrationOp(MigrationOpEvent { base, .. }) => Some(base),
         }
     }
 }
@@ -392,6 +509,10 @@ impl EventFactory {
             key: context.key().to_owned(),
             base: BaseEvent::new(Self::now(), context),
         })
+    }
+
+    pub(crate) fn new_migration_op(&self, event: MigrationOpEvent) -> InputEvent {
+        InputEvent::MigrationOp(event)
     }
 
     pub fn new_custom(
