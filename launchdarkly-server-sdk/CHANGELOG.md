@@ -2,6 +2,19 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.2.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.1.0...2.2.0) (2024-05-31)
+
+
+### Features
+
+* Add wait_for_initialization with timeout parameter ([#76](https://github.com/launchdarkly/rust-server-sdk/issues/76)) ([45e3451](https://github.com/launchdarkly/rust-server-sdk/commit/45e3451b80e4f3104795410655e845cf9bfb7962))
+
+
+### Bug Fixes
+
+* Bump rustc to 1.74 ([#78](https://github.com/launchdarkly/rust-server-sdk/issues/78)) ([0c1c58d](https://github.com/launchdarkly/rust-server-sdk/commit/0c1c58d446b1f8c4cbaaf0813ee1855683cd319f))
+* Limit triomphe dependency to &lt;=0.1.10 ([#83](https://github.com/launchdarkly/rust-server-sdk/issues/83)) ([5a52e41](https://github.com/launchdarkly/rust-server-sdk/commit/5a52e4143f06567abdc5bf391d23343dd88de886))
+
 ## [2.1.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.0.2...2.1.0) (2024-03-15)
 
 
