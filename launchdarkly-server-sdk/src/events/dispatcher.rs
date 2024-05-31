@@ -182,6 +182,9 @@ impl EventDispatcher {
 
     fn process_event(&mut self, event: InputEvent) {
         match event {
+            InputEvent::MigrationOp(migration_op) => self
+                .outbox
+                .add_event(OutputEvent::MigrationOp(migration_op)),
             InputEvent::FeatureRequest(fre) => {
                 self.outbox.add_to_summary(&fre);
 

@@ -103,6 +103,7 @@ pub enum ExecutionOrder {
     Parallel,
 }
 
+pub use migrator::MigratorBuilder;
 pub use tracker::MigrationOpTracker;
 
 mod migrator;
