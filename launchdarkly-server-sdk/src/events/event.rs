@@ -104,9 +104,10 @@ pub struct MigrationOpEvent {
     pub(crate) operation: Operation,
     pub(crate) default_stage: Stage,
     pub(crate) evaluation: Detail<Stage>,
+    pub(crate) sampling_ratio: Option<u32>,
     pub(crate) invoked: HashSet<Origin>,
     pub(crate) consistency_check: Option<bool>,
-    pub(crate) consistency_check_ratio: Option<u64>,
+    pub(crate) consistency_check_ratio: Option<u32>,
     pub(crate) errors: HashSet<Origin>,
     pub(crate) latency: HashMap<Origin, Duration>,
 }
@@ -121,6 +122,10 @@ impl Serialize for MigrationOpEvent {
         state.serialize_field("creationDate", &self.base.creation_date)?;
         state.serialize_field("contextKeys", &self.base.context.context_keys())?;
         state.serialize_field("operation", &self.operation)?;
+
+        if !is_default_ratio(&self.sampling_ratio) {
+            state.serialize_field("samplingRatio", &self.sampling_ratio.unwrap_or(1))?;
+        }
 
         let evaluation = MigrationOpEvaluation {
             key: self.key.clone(),
@@ -179,7 +184,7 @@ struct MigrationOpEvaluation {
 
 enum MigrationOpMeasurement<'a> {
     Invoked(&'a HashSet<Origin>),
-    ConsistencyCheck(bool, Option<u64>),
+    ConsistencyCheck(bool, Option<u32>),
     Errors(&'a HashSet<Origin>),
     Latency(&'a HashMap<Origin, Duration>),
 }
@@ -244,6 +249,12 @@ pub struct FeatureRequestEvent {
 
     #[serde(skip)]
     pub(crate) debug_events_until_date: Option<u64>,
+
+    #[serde(skip_serializing_if = "is_default_ratio")]
+    pub(crate) sampling_ratio: Option<u32>,
+
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) exclude_from_summaries: bool,
 }
 
 impl FeatureRequestEvent {
@@ -308,6 +319,8 @@ pub struct IdentifyEvent {
     #[serde(flatten)]
     pub(crate) base: BaseEvent,
     key: String,
+    #[serde(skip_serializing_if = "is_default_ratio")]
+    pub(crate) sampling_ratio: Option<u32>,
 }
 
 impl IdentifyEvent {
@@ -335,6 +348,8 @@ pub struct CustomEvent {
     metric_value: Option<f64>,
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     data: serde_json::Value,
+    #[serde(skip_serializing_if = "is_default_ratio")]
+    pub(crate) sampling_ratio: Option<u32>,
 }
 
 impl CustomEvent {
@@ -473,15 +488,21 @@ impl EventFactory {
         let flag_track_events;
         let require_experiment_data;
         let debug_events_until_date;
+        let sampling_ratio;
+        let exclude_from_summaries;
 
         if let Some(f) = flag {
             flag_track_events = f.track_events;
             require_experiment_data = f.is_experimentation_enabled(&detail.reason);
             debug_events_until_date = f.debug_events_until_date;
+            sampling_ratio = f.sampling_ratio;
+            exclude_from_summaries = f.exclude_from_summaries;
         } else {
             flag_track_events = false;
             require_experiment_data = false;
-            debug_events_until_date = None
+            debug_events_until_date = None;
+            sampling_ratio = None;
+            exclude_from_summaries = false;
         }
 
         let reason = if self.send_reason || require_experiment_data {
@@ -501,6 +522,8 @@ impl EventFactory {
             prereq_of,
             track_events: flag_track_events || require_experiment_data,
             debug_events_until_date,
+            sampling_ratio,
+            exclude_from_summaries,
         })
     }
 
@@ -508,6 +531,7 @@ impl EventFactory {
         InputEvent::Identify(IdentifyEvent {
             key: context.key().to_owned(),
             base: BaseEvent::new(Self::now(), context),
+            sampling_ratio: None,
         })
     }
 
@@ -529,6 +553,7 @@ impl EventFactory {
             key: key.into(),
             metric_value,
             data,
+            sampling_ratio: None,
         }))
     }
 }
@@ -733,6 +758,11 @@ impl From<(VariationKey, VariationSummary)> for VariationCounterOutput {
             variation: variation_key.variation,
         }
     }
+}
+
+// Used strictly for serialization to determine if a ratio should be included in the JSON.
+fn is_default_ratio(sampling_ratio: &Option<u32>) -> bool {
+    sampling_ratio.unwrap_or(1) == 1
 }
 
 #[cfg(test)]
@@ -1338,6 +1368,8 @@ mod tests {
             prereq_of: None,
             track_events: false,
             debug_events_until_date: None,
+            sampling_ratio: flag.sampling_ratio,
+            exclude_from_summaries: flag.exclude_from_summaries,
         };
 
         summary.add(&fallthrough_request);
