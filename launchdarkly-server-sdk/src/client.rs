@@ -1725,7 +1725,7 @@ mod tests {
         match &events[1] {
             OutputEvent::MigrationOp(event) => {
                 assert!(event.invoked.len() == origins.len());
-                assert!(event.invoked.iter().all(|i| origins.contains(&i)));
+                assert!(event.invoked.iter().all(|i| origins.contains(i)));
             }
             _ => panic!("Expected migration event"),
         }
@@ -1813,7 +1813,6 @@ mod tests {
                 assert!(event
                     .latency
                     .values()
-                    .into_iter()
                     .all(|l| l > &Duration::from_millis(100)));
             }
             _ => panic!("Expected migration event"),
@@ -1871,7 +1870,7 @@ mod tests {
         match &events[1] {
             OutputEvent::MigrationOp(event) => {
                 assert!(event.errors.len() == origins.len());
-                assert!(event.errors.iter().all(|i| origins.contains(&i)));
+                assert!(event.errors.iter().all(|i| origins.contains(i)));
             }
             _ => panic!("Expected migration event"),
         }
@@ -1929,7 +1928,7 @@ mod tests {
         match &events[1] {
             OutputEvent::MigrationOp(event) => {
                 assert!(event.errors.len() == origins.len());
-                assert!(event.errors.iter().all(|i| origins.contains(&i)));
+                assert!(event.errors.iter().all(|i| origins.contains(i)));
             }
             _ => panic!("Expected migration event"),
         }
@@ -2002,7 +2001,7 @@ mod tests {
         match &events[1] {
             OutputEvent::MigrationOp(event) => {
                 assert!(event.errors.len() == origins.len());
-                assert!(event.errors.iter().all(|i| origins.contains(&i)));
+                assert!(event.errors.iter().all(|i| origins.contains(i)));
             }
             _ => panic!("Expected migration event"),
         }

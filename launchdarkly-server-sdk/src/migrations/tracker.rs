@@ -5,8 +5,12 @@ use std::{
 };
 
 use launchdarkly_server_sdk_evaluation::{Context, Detail, Flag};
+use rand::thread_rng;
 
-use crate::events::event::{BaseEvent, EventFactory, MigrationOpEvent};
+use crate::{
+    events::event::{BaseEvent, EventFactory, MigrationOpEvent},
+    sampler::{Sampler, ThreadRngSampler},
+};
 
 use super::{Operation, Origin, Stage};
 
@@ -22,11 +26,10 @@ pub struct MigrationOpTracker {
     default_stage: Stage,
 
     mutex: Mutex<()>,
-
     operation: Option<Operation>,
     invoked: HashSet<Origin>,
     consistent: Option<bool>,
-    consistent_ratio: Option<u64>,
+    consistent_ratio: Option<u32>,
     errors: HashSet<Origin>,
     latencies: HashMap<Origin, Duration>,
 }
@@ -89,9 +92,12 @@ impl MigrationOpTracker {
     /// A callable is provided in case sampling rules do not require consistency checking to run.
     /// In this case, we can avoid the overhead of a function by not using the callable.
     pub fn consistent(&mut self, is_consistent: impl Fn() -> bool) {
-        // TODO: We need to add sampling here at some point.
         match self.mutex.lock() {
-            Ok(_guard) => self.consistent = Some(is_consistent()),
+            Ok(_guard) => {
+                if ThreadRngSampler::new(thread_rng()).sample(self.consistent_ratio.unwrap_or(1)) {
+                    self.consistent = Some(is_consistent());
+                }
+            }
             Err(e) => {
                 error!("failed to acquire lock for consistency tracking: {}", e);
             }
@@ -158,6 +164,7 @@ impl MigrationOpTracker {
             consistency_check: self.consistent,
             errors: self.errors.clone(),
             latency: self.latencies.clone(),
+            sampling_ratio: self.flag.as_ref().and_then(|f| f.sampling_ratio),
         })
     }
 
@@ -193,16 +200,18 @@ impl MigrationOpTracker {
 #[cfg(test)]
 mod tests {
 
-    use launchdarkly_server_sdk_evaluation::{ContextBuilder, Detail, Reason};
+    use launchdarkly_server_sdk_evaluation::{
+        ContextBuilder, Detail, Flag, MigrationFlagParameters, Reason,
+    };
     use test_case::test_case;
 
     use super::{MigrationOpTracker, Operation, Origin, Stage};
     use crate::test_common::basic_flag;
 
-    fn minimal_tracker() -> MigrationOpTracker {
+    fn minimal_tracker(flag: Flag) -> MigrationOpTracker {
         let mut tracker = MigrationOpTracker::new(
-            "flag-key".into(),
-            Some(basic_flag("flag-key")),
+            flag.key.clone(),
+            Some(flag),
             ContextBuilder::new("user")
                 .build()
                 .expect("failed to build context"),
@@ -224,7 +233,7 @@ mod tests {
 
     #[test]
     fn build_minimal_tracker() {
-        let tracker = minimal_tracker();
+        let tracker = minimal_tracker(basic_flag("flag-key"));
         let result = tracker.build();
 
         assert!(result.is_ok());
@@ -232,7 +241,7 @@ mod tests {
 
     #[test]
     fn build_without_flag() {
-        let mut tracker = minimal_tracker();
+        let mut tracker = minimal_tracker(basic_flag("flag-key"));
         tracker.flag = None;
         let result = tracker.build();
 
@@ -295,18 +304,36 @@ mod tests {
     #[test_case(false)]
     #[test_case(true)]
     fn tracks_consistency(expectation: bool) {
-        let mut tracker = minimal_tracker();
+        let mut tracker = minimal_tracker(basic_flag("flag-key"));
         tracker.operation(Operation::Read);
         tracker.consistent(|| expectation);
 
         let event = tracker.build().expect("failed to build event");
         assert_eq!(event.consistency_check, Some(expectation));
+        assert_eq!(event.consistency_check_ratio, None);
+    }
+
+    #[test_case(false)]
+    #[test_case(true)]
+    fn consistency_can_be_disabled_through_sampling_ratio(expectation: bool) {
+        let mut flag = basic_flag("flag-key");
+        flag.migration_settings = Some(MigrationFlagParameters {
+            check_ratio: Some(0),
+        });
+
+        let mut tracker = minimal_tracker(flag);
+        tracker.operation(Operation::Read);
+        tracker.consistent(|| expectation);
+
+        let event = tracker.build().expect("failed to build event");
+        assert_eq!(event.consistency_check, None);
+        assert_eq!(event.consistency_check_ratio, Some(0));
     }
 
     #[test_case(Origin::Old)]
     #[test_case(Origin::New)]
     fn track_errors_individually(origin: Origin) {
-        let mut tracker = minimal_tracker();
+        let mut tracker = minimal_tracker(basic_flag("flag-key"));
         tracker.error(origin);
 
         let event = tracker.build().expect("failed to build event");
@@ -316,7 +343,7 @@ mod tests {
 
     #[test]
     fn tracks_both_errors() {
-        let mut tracker = minimal_tracker();
+        let mut tracker = minimal_tracker(basic_flag("flag-key"));
         tracker.error(Origin::Old);
         tracker.error(Origin::New);
 
@@ -329,7 +356,7 @@ mod tests {
     #[test_case(Origin::Old)]
     #[test_case(Origin::New)]
     fn track_latencies_individually(origin: Origin) {
-        let mut tracker = minimal_tracker();
+        let mut tracker = minimal_tracker(basic_flag("flag-key"));
         tracker.latency(origin, std::time::Duration::from_millis(100));
 
         let event = tracker.build().expect("failed to build event");
@@ -342,7 +369,7 @@ mod tests {
 
     #[test]
     fn track_both_latencies() {
-        let mut tracker = minimal_tracker();
+        let mut tracker = minimal_tracker(basic_flag("flag-key"));
         tracker.latency(Origin::Old, std::time::Duration::from_millis(100));
         tracker.latency(Origin::New, std::time::Duration::from_millis(200));
 

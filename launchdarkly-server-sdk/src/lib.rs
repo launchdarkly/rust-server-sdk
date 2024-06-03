@@ -62,6 +62,7 @@ mod feature_requester;
 mod feature_requester_builders;
 mod migrations;
 mod reqwest;
+mod sampler;
 mod service_endpoints;
 mod stores;
 mod test_common;
