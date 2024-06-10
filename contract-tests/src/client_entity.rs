@@ -1,4 +1,8 @@
-use launchdarkly_server_sdk::{Context, ContextBuilder, MultiContextBuilder, Reference};
+use futures::future::FutureExt;
+use launchdarkly_server_sdk::{
+    Context, ContextBuilder, ExecutionOrder, MigratorBuilder, MultiContextBuilder, Reference,
+};
+use std::sync::Arc;
 use std::time::Duration;
 
 const DEFAULT_POLLING_BASE_URL: &str = "https://sdk.launchdarkly.com";
@@ -12,7 +16,8 @@ use launchdarkly_server_sdk::{
 };
 
 use crate::command_params::{
-    ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse, SecureModeHashResponse,
+    ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse,
+    MigrationOperationResponse, MigrationVariationResponse, SecureModeHashResponse,
 };
 use crate::HttpsConnector;
 use crate::{
@@ -24,7 +29,7 @@ use crate::{
 };
 
 pub struct ClientEntity {
-    client: Client,
+    client: Arc<Client>,
 }
 
 impl ClientEntity {
@@ -130,10 +135,15 @@ impl ClientEntity {
         client.start_with_default_executor();
         client.wait_for_initialization(Duration::from_secs(5)).await;
 
-        Ok(Self { client })
+        Ok(Self {
+            client: Arc::new(client),
+        })
     }
 
-    pub fn do_command(&self, command: CommandParams) -> Result<Option<CommandResponse>, String> {
+    pub async fn do_command(
+        &self,
+        command: CommandParams,
+    ) -> Result<Option<CommandResponse>, String> {
         match command.command.as_str() {
             "evaluate" => Ok(Some(CommandResponse::EvaluateFlag(
                 self.evaluate(command.evaluate.ok_or("Evaluate params should be set")?),
@@ -209,6 +219,138 @@ impl ClientEntity {
                         result: self.client.secure_mode_hash(&params.context),
                     },
                 )))
+            }
+            "migrationVariation" => {
+                let params = command
+                    .migration_variation
+                    .ok_or("migrationVariation params should be set")?;
+
+                let (stage, _) = self.client.migration_variation(
+                    &params.context,
+                    &params.key,
+                    params.default_stage,
+                );
+
+                Ok(Some(CommandResponse::MigrationVariation(
+                    MigrationVariationResponse { result: stage },
+                )))
+            }
+            "migrationOperation" => {
+                let params = command
+                    .migration_operation
+                    .ok_or("migrationOperation params should be set")?;
+
+                let mut builder = MigratorBuilder::new(self.client.clone());
+
+                let execution_order = match params.read_execution_order.as_str() {
+                    "serial" => ExecutionOrder::Serial,
+                    "random" => ExecutionOrder::Random,
+                    _ => ExecutionOrder::Parallel,
+                };
+                let old_endpoint = params.old_endpoint.clone();
+
+                let new_endpoint = params.new_endpoint.clone();
+
+                builder = builder
+                    .read_execution_order(execution_order)
+                    .track_errors(params.track_errors)
+                    .track_latency(params.track_latency)
+                    .read(
+                        |payload: &Option<String>| {
+                            let old_endpoint = old_endpoint.clone();
+                            async move {
+                                let result = send_payload(&old_endpoint, payload.clone()).await;
+                                match result {
+                                    Ok(r) => Ok(Some(r)),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            .boxed()
+                        },
+                        |payload| {
+                            let new_endpoint = new_endpoint.clone();
+                            async move {
+                                let result = send_payload(&new_endpoint, payload.clone()).await;
+                                match result {
+                                    Ok(r) => Ok(Some(r)),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            .boxed()
+                        },
+                        if params.track_consistency {
+                            Some(|lhs, rhs| lhs == rhs)
+                        } else {
+                            None
+                        },
+                    )
+                    .write(
+                        |payload| {
+                            let old_endpoint = old_endpoint.clone();
+                            async move {
+                                let result = send_payload(&old_endpoint, payload.clone()).await;
+                                match result {
+                                    Ok(r) => Ok(Some(r)),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            .boxed()
+                        },
+                        |payload| {
+                            let new_endpoint = new_endpoint.clone();
+                            async move {
+                                let result = send_payload(&new_endpoint, payload.clone()).await;
+                                match result {
+                                    Ok(r) => Ok(Some(r)),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            .boxed()
+                        },
+                    );
+
+                let migrator = builder.build().expect("builder failed");
+                match params.operation {
+                    launchdarkly_server_sdk::Operation::Read => {
+                        let result = migrator
+                            .read(
+                                params.key,
+                                params.context,
+                                params.default_stage,
+                                params.payload,
+                            )
+                            .await;
+
+                        let payload = match result.result {
+                            Ok(payload) => payload.unwrap_or_else(|| "success".into()),
+                            Err(e) => e.to_string(),
+                        };
+
+                        Ok(Some(CommandResponse::MigrationOperation(
+                            MigrationOperationResponse { result: payload },
+                        )))
+                    }
+                    launchdarkly_server_sdk::Operation::Write => {
+                        let result = migrator
+                            .write(
+                                params.key,
+                                params.context,
+                                params.default_stage,
+                                params.payload,
+                            )
+                            .await;
+
+                        let payload = match result.authoritative.result {
+                            Ok(payload) => payload.unwrap_or_else(|| "success".into()),
+                            Err(e) => e.to_string(),
+                        };
+
+                        Ok(Some(CommandResponse::MigrationOperation(
+                            MigrationOperationResponse { result: payload },
+                        )))
+                    }
+                    _ => todo!(),
+                }
             }
             command => Err(format!("Invalid command requested: {}", command)),
         }
@@ -427,5 +569,27 @@ impl ClientEntity {
 impl Drop for ClientEntity {
     fn drop(&mut self) {
         self.client.close();
+    }
+}
+
+async fn send_payload(endpoint: &str, payload: Option<String>) -> Result<String, String>
+where
+{
+    let client = reqwest::Client::new();
+    let response = client
+        .post(endpoint)
+        .body(payload.unwrap_or_default())
+        .send()
+        .await
+        .expect("sending request to SDK test harness");
+
+    if response.status().is_success() {
+        let body = response.text().await.expect("read harness response body");
+        Ok(body.to_string())
+    } else {
+        Err(format!(
+            "requested failed with status code {}",
+            response.status()
+        ))
     }
 }

@@ -17,6 +17,8 @@ futures = "0.3.12"
 hyper = { version = "0.14.19", features = ["client"] }
 hyper-rustls = { version = "0.24.1" , optional = true, features = ["http2"]}
 hyper-tls = { version = "0.5.0", optional = true }
+reqwest = { version = "0.12.4", features = ["default", "blocking", "json"] }
+async-mutex = "1.4.0"
 
 [features]
 default = ["rustls"]
