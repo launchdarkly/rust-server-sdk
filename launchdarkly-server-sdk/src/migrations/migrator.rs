@@ -1,6 +1,3 @@
-// TODO: Remove this when subsequent PRs have added the required implementations.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -9,8 +6,11 @@ use futures::future::join_all;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use launchdarkly_server_sdk_evaluation::Context;
+use rand::thread_rng;
 use serde::Serialize;
 
+use crate::sampler::Sampler;
+use crate::sampler::ThreadRngSampler;
 use crate::{Client, ExecutionOrder, MigrationOpTracker, Operation, Origin, Stage};
 
 #[derive(Serialize)]
@@ -54,27 +54,6 @@ where
     compare: Option<MigrationComparisonFn<T>>,
 }
 
-/// Migrator represents the interface through which migration support is executed.
-// pub trait Migrator {
-//     /// read uses the provided flag key and context to execute a migration-backed read operation.
-//     fn read(
-//         &self,
-//         key: String,
-//         context: Context,
-//         default_stage: Stage,
-//         payload: serde_json::Value,
-//     ) -> impl Future<Output = MigrationOriginResult>;
-//
-//     /// write uses the provided flag key and context to execute a migration-backed write operation.
-//     fn write(
-//         &self,
-//         key: String,
-//         context: Context,
-//         default_stage: Stage,
-//         payload: serde_json::Value,
-//     ) -> impl Future<Output = MigrationWriteResult>;
-// }
-
 /// The migration builder is used to configure and construct an instance of a [Migrator]. This
 /// migrator can be used to perform LaunchDarkly assisted technology migrations through the use of
 /// migration-based feature flags.
@@ -107,7 +86,7 @@ where
     pub fn new(client: Arc<Client>) -> Self {
         MigratorBuilder {
             client,
-            read_execution_order: ExecutionOrder::Parallel,
+            read_execution_order: ExecutionOrder::Concurrent,
             measure_latency: true,
             measure_errors: true,
             read_config: None,
@@ -115,7 +94,7 @@ where
         }
     }
 
-    /// The read execution order influences the parallelism and execution order for read operations
+    /// The read execution order influences the concurrency and execution order for read operations
     /// involving multiple origins.
     pub fn read_execution_order(mut self, order: ExecutionOrder) -> Self {
         self.read_execution_order = order;
@@ -150,7 +129,7 @@ where
     }
 
     /// Write can be used to configure the migration-write behavior of the resulting
-    /// [Migrations::Migrator] instance.
+    /// [crate::Migrator] instance.
     ///
     /// Users are required to provide two different write methods -- one to write to the old
     /// migration origin, and one to write to the new origin. Not every stage requires
@@ -165,9 +144,7 @@ where
         self
     }
 
-    // TODO: Do we make this a real error type?
-
-    /// Build constructs a [Migrations::Migrator] instance to support migration-based reads and
+    /// Build constructs a [crate::Migrator] instance to support migration-based reads and
     /// writes. A string describing any failure conditions will be returned if the build fails.
     pub fn build(self) -> Result<Migrator<T, FRO, FRN, FWO, FWN>, String> {
         let read_config = self.read_config.ok_or("read configuration not provided")?;
@@ -186,6 +163,9 @@ where
     }
 }
 
+/// The migrator is the primary interface for executing migration operations. It is configured
+/// through the [MigratorBuilder] and can be used to perform LaunchDarkly assisted technology
+/// migrations through the use of migration-based feature flags.
 pub struct Migrator<T, FRO, FRN, FWO, FWN>
 where
     T: Send + Sync,
@@ -200,6 +180,7 @@ where
     measure_errors: bool,
     read_config: MigrationConfig<T, FRO, FRN>,
     write_config: MigrationConfig<T, FWO, FWN>,
+    sampler: Box<dyn Sampler>,
 }
 
 impl<T, FRO, FRN, FWO, FWN> Migrator<T, FRO, FRN, FWO, FWN>
@@ -225,11 +206,13 @@ where
             measure_errors,
             read_config,
             write_config,
+            sampler: Box::new(ThreadRngSampler::new(thread_rng())),
         }
     }
 
+    /// Uses the provided flag key and context to execute a migration-backed read operation.
     pub async fn read(
-        &self,
+        &mut self,
         key: String,
         context: Context,
         default_stage: Stage,
@@ -269,6 +252,7 @@ where
                     self.read_config.compare,
                     self.read_execution_order,
                     tracker.clone(),
+                    self.sampler.as_mut(),
                 )
                 .await
             }
@@ -279,6 +263,7 @@ where
                     self.read_config.compare,
                     self.read_execution_order,
                     tracker.clone(),
+                    self.sampler.as_mut(),
                 )
                 .await
             }
@@ -291,6 +276,7 @@ where
         result
     }
 
+    /// Uses the provided flag key and context to execute a migration-backed write operation.
     pub async fn write(
         &self,
         key: String,
@@ -349,6 +335,7 @@ async fn read_both<T, FA, FB>(
     compare: Option<MigrationComparisonFn<T>>,
     execution_order: ExecutionOrder,
     tracker: Arc<Mutex<MigrationOpTracker>>,
+    sampler: &mut dyn Sampler,
 ) -> MigrationOriginResult<T>
 where
     T: Send + Sync,
@@ -359,7 +346,7 @@ where
     let nonauthoritative_result: MigrationOriginResult<T>;
 
     match execution_order {
-        ExecutionOrder::Parallel => {
+        ExecutionOrder::Concurrent => {
             let auth_handle = authoritative.run().boxed();
             let nonauth_handle = nonauthoritative.run().boxed();
             let handles = vec![auth_handle, nonauth_handle];
@@ -378,12 +365,11 @@ where
                 result: Err("Failed to execute authoritative read".into()),
             });
         }
-        // TODO: Add a sampler.sample(2) style call
-        ExecutionOrder::Random => {
+        ExecutionOrder::Random if sampler.sample(2) => {
             nonauthoritative_result = nonauthoritative.run().await;
             authoritative_result = authoritative.run().await;
         }
-        ExecutionOrder::Serial => {
+        _ => {
             authoritative_result = authoritative.run().await;
             nonauthoritative_result = nonauthoritative.run().await;
         }
@@ -530,7 +516,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
@@ -664,7 +650,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
@@ -721,7 +707,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_handles_parallel_execution() {
+    async fn read_handles_concurrent_execution() {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -730,14 +716,14 @@ mod tests {
         let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
                 |_| async move { Ok(()) }.boxed(),
                 |_| async move { Ok(()) }.boxed(),
             )
-            .read_execution_order(ExecutionOrder::Parallel)
+            .read_execution_order(ExecutionOrder::Concurrent)
             .read(
                 |_| {
                     async move {
@@ -774,12 +760,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_handles_nonparallel_execution() {
-        read_handles_nonparallel_execution_driver(ExecutionOrder::Serial).await;
-        read_handles_nonparallel_execution_driver(ExecutionOrder::Random).await;
+    async fn read_handles_nonconcurrent_execution() {
+        read_handles_nonconcurrent_execution_driver(ExecutionOrder::Serial).await;
+        read_handles_nonconcurrent_execution_driver(ExecutionOrder::Random).await;
     }
 
-    async fn read_handles_nonparallel_execution_driver(execution_order: ExecutionOrder) {
+    async fn read_handles_nonconcurrent_execution_driver(execution_order: ExecutionOrder) {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -788,7 +774,7 @@ mod tests {
         let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
@@ -999,7 +985,7 @@ mod tests {
 
     #[test_case(ExecutionOrder::Serial)]
     #[test_case(ExecutionOrder::Random)]
-    #[test_case(ExecutionOrder::Parallel)]
+    #[test_case(ExecutionOrder::Concurrent)]
     fn can_modify_execution_order(execution_order: ExecutionOrder) {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)

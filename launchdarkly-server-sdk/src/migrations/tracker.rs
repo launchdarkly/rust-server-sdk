@@ -14,8 +14,8 @@ use crate::{
 
 use super::{Operation, Origin, Stage};
 
-/// An MigrationOpTracker is responsible for managing the collection of measurements that which a user might wish to record
-/// throughout a migration-assisted operation.
+/// A MigrationOpTracker is responsible for managing the collection of measurements that a user
+/// might wish to record throughout a migration-assisted operation.
 ///
 /// Example measurements include latency, errors, and consistency.
 pub struct MigrationOpTracker {
