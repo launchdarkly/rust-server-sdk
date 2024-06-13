@@ -42,7 +42,7 @@ pub use feature_requester_builders::{
 };
 pub use launchdarkly_server_sdk_evaluation::{Flag, Segment, Versioned};
 pub use migrations::{
-    ExecutionOrder, MigrationOpTracker, MigratorBuilder, Operation, Origin, Stage,
+    ExecutionOrder, MigrationOpTracker, Migrator, MigratorBuilder, Operation, Origin, Stage,
 };
 pub use service_endpoints::ServiceEndpointsBuilder;
 pub use stores::persistent_store::{PersistentDataStore, PersistentStoreError};

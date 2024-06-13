@@ -1,6 +1,6 @@
 use futures::future::FutureExt;
 use launchdarkly_server_sdk::{
-    Context, ContextBuilder, ExecutionOrder, MigratorBuilder, MultiContextBuilder, Reference,
+    Context, ContextBuilder, MigratorBuilder, MultiContextBuilder, Reference,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -242,22 +242,13 @@ impl ClientEntity {
 
                 let mut builder = MigratorBuilder::new(self.client.clone());
 
-                let execution_order = match params.read_execution_order.as_str() {
-                    "serial" => ExecutionOrder::Serial,
-                    "random" => ExecutionOrder::Random,
-                    _ => ExecutionOrder::Parallel,
-                };
-                let old_endpoint = params.old_endpoint.clone();
-
-                let new_endpoint = params.new_endpoint.clone();
-
                 builder = builder
-                    .read_execution_order(execution_order)
+                    .read_execution_order(params.read_execution_order)
                     .track_errors(params.track_errors)
                     .track_latency(params.track_latency)
                     .read(
                         |payload: &Option<String>| {
-                            let old_endpoint = old_endpoint.clone();
+                            let old_endpoint = params.old_endpoint.clone();
                             async move {
                                 let result = send_payload(&old_endpoint, payload.clone()).await;
                                 match result {
@@ -268,7 +259,7 @@ impl ClientEntity {
                             .boxed()
                         },
                         |payload| {
-                            let new_endpoint = new_endpoint.clone();
+                            let new_endpoint = params.new_endpoint.clone();
                             async move {
                                 let result = send_payload(&new_endpoint, payload.clone()).await;
                                 match result {
@@ -286,7 +277,7 @@ impl ClientEntity {
                     )
                     .write(
                         |payload| {
-                            let old_endpoint = old_endpoint.clone();
+                            let old_endpoint = params.old_endpoint.clone();
                             async move {
                                 let result = send_payload(&old_endpoint, payload.clone()).await;
                                 match result {
@@ -297,7 +288,7 @@ impl ClientEntity {
                             .boxed()
                         },
                         |payload| {
-                            let new_endpoint = new_endpoint.clone();
+                            let new_endpoint = params.new_endpoint.clone();
                             async move {
                                 let result = send_payload(&new_endpoint, payload.clone()).await;
                                 match result {
@@ -309,7 +300,7 @@ impl ClientEntity {
                         },
                     );
 
-                let migrator = builder.build().expect("builder failed");
+                let mut migrator = builder.build().expect("builder failed");
                 match params.operation {
                     launchdarkly_server_sdk::Operation::Read => {
                         let result = migrator
@@ -349,7 +340,10 @@ impl ClientEntity {
                             MigrationOperationResponse { result: payload },
                         )))
                     }
-                    _ => todo!(),
+                    _ => Err(format!(
+                        "Invalid operation requested: {:?}",
+                        params.operation
+                    )),
                 }
             }
             command => Err(format!("Invalid command requested: {}", command)),

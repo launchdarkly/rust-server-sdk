@@ -1741,7 +1741,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .read(
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
@@ -1855,7 +1855,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| {
@@ -1957,7 +1957,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| async move { Err("fail".into()) }.boxed(),
@@ -2202,7 +2202,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| {
