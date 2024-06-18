@@ -2,7 +2,7 @@ use core::fmt;
 use std::fmt::{Display, Formatter};
 
 use launchdarkly_server_sdk_evaluation::FlagValue;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[non_exhaustive]
 #[derive(Debug, Copy, Clone, Serialize, Eq, Hash, PartialEq)]
@@ -16,7 +16,7 @@ pub enum Origin {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Copy, Clone, Serialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 /// Operation represents a type of migration operation; namely, read or write.
 pub enum Operation {
@@ -27,7 +27,7 @@ pub enum Operation {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 /// Stage denotes one of six possible stages a technology migration could be a
 /// part of, progressing through the following order.

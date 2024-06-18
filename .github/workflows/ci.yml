@@ -57,4 +57,4 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
-        run: TARGET_CC=musl-gcc RUSTFLAGS="-C linker=musl-gcc" cargo build --release --target=x86_64-unknown-linux-musl
+        run: TARGET_CC=musl-gcc RUSTFLAGS="-C linker=musl-gcc" cargo build --release --target=x86_64-unknown-linux-musl -p launchdarkly-server-sdk

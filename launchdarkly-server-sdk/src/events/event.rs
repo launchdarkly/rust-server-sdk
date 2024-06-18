@@ -130,18 +130,18 @@ impl Serialize for MigrationOpEvent {
         let evaluation = MigrationOpEvaluation {
             key: self.key.clone(),
             value: self.evaluation.value,
+            default: self.default_stage,
             // QUESTION: In the ruby implementation, this can be nil. Why not here?
             reason: self.evaluation.reason.clone(),
             variation_index: self.evaluation.variation_index,
             version: self.version,
         };
         state.serialize_field("evaluation", &evaluation)?;
-        state.serialize_field("default", &self.default_stage)?;
 
         // TODO: Add sampling here if it is set and not 1
 
         let mut measurements = vec![];
-        if self.invoked.is_empty() {
+        if !self.invoked.is_empty() {
             measurements.push(MigrationOpMeasurement::Invoked(&self.invoked));
         }
 
@@ -161,6 +161,10 @@ impl Serialize for MigrationOpEvent {
             measurements.push(MigrationOpMeasurement::Latency(&self.latency));
         }
 
+        if !measurements.is_empty() {
+            state.serialize_field("measurements", &measurements)?;
+        }
+
         state.end()
     }
 }
@@ -172,6 +176,8 @@ struct MigrationOpEvaluation {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Stage>,
+
+    pub(crate) default: Stage,
 
     pub reason: Reason,
 
@@ -198,6 +204,11 @@ impl Serialize for MigrationOpMeasurement<'_> {
             MigrationOpMeasurement::Invoked(invoked) => {
                 let mut state = serializer.serialize_struct("invoked", 2)?;
                 state.serialize_field("key", "invoked")?;
+
+                let invoked = invoked
+                    .iter()
+                    .map(|origin| (origin, true))
+                    .collect::<HashMap<_, _>>();
                 state.serialize_field("values", &invoked)?;
                 state.end()
             }
@@ -215,14 +226,23 @@ impl Serialize for MigrationOpMeasurement<'_> {
             }
             MigrationOpMeasurement::Errors(errors) => {
                 let mut state = serializer.serialize_struct("errors", 2)?;
-                state.serialize_field("key", "errors")?;
+                state.serialize_field("key", "error")?;
+
+                let errors = errors
+                    .iter()
+                    .map(|origin| (origin, true))
+                    .collect::<HashMap<_, _>>();
                 state.serialize_field("values", &errors)?;
                 state.end()
             }
             MigrationOpMeasurement::Latency(latency) => {
                 let mut state = serializer.serialize_struct("latencies", 2)?;
                 state.serialize_field("key", "latency_ms")?;
-                state.serialize_field("values", &latency)?;
+                let latencies = latency
+                    .iter()
+                    .map(|(origin, duration)| (origin, duration.as_millis() as u64))
+                    .collect::<HashMap<_, _>>();
+                state.serialize_field("values", &latencies)?;
                 state.end()
             }
         }
