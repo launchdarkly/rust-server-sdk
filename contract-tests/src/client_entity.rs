@@ -305,8 +305,8 @@ impl ClientEntity {
                     launchdarkly_server_sdk::Operation::Read => {
                         let result = migrator
                             .read(
+                                &params.context,
                                 params.key,
-                                params.context,
                                 params.default_stage,
                                 params.payload,
                             )
@@ -324,8 +324,8 @@ impl ClientEntity {
                     launchdarkly_server_sdk::Operation::Write => {
                         let result = migrator
                             .write(
+                                &params.context,
                                 params.key,
-                                params.context,
                                 params.default_stage,
                                 params.payload,
                             )
