@@ -213,14 +213,14 @@ where
     /// Uses the provided flag key and context to execute a migration-backed read operation.
     pub async fn read(
         &mut self,
-        key: String,
-        context: Context,
+        context: &Context,
+        flag_key: String,
         default_stage: Stage,
         payload: T,
     ) -> MigrationOriginResult<T> {
-        let (stage, mut tracker) = self
-            .client
-            .migration_variation(&context, &key, default_stage);
+        let (stage, mut tracker) =
+            self.client
+                .migration_variation(context, &flag_key, default_stage);
         tracker.operation(Operation::Read);
 
         let tracker = Arc::new(Mutex::new(tracker));
@@ -279,14 +279,14 @@ where
     /// Uses the provided flag key and context to execute a migration-backed write operation.
     pub async fn write(
         &self,
-        key: String,
-        context: Context,
+        context: &Context,
+        flag_key: String,
         default_stage: Stage,
         payload: T,
     ) -> MigrationWriteResult<T> {
-        let (stage, mut tracker) = self
-            .client
-            .migration_variation(&context, &key, default_stage);
+        let (stage, mut tracker) =
+            self.client
+                .migration_variation(context, &flag_key, default_stage);
         tracker.operation(Operation::Write);
 
         let tracker = Arc::new(Mutex::new(tracker));
@@ -548,10 +548,10 @@ mod tests {
 
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 1,
             )
@@ -608,10 +608,10 @@ mod tests {
 
         let _result = migrator
             .write(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 1,
             )
@@ -682,10 +682,10 @@ mod tests {
 
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 stage,
                 "payload",
             )
@@ -747,10 +747,10 @@ mod tests {
         let start = Instant::now();
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 (),
             )
@@ -805,10 +805,10 @@ mod tests {
         let start = Instant::now();
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 (),
             )
@@ -874,10 +874,10 @@ mod tests {
 
         let _result = migrator
             .write(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 stage,
                 (),
             )
@@ -959,10 +959,10 @@ mod tests {
 
         let _result = migrator
             .write(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 stage,
                 (),
             )

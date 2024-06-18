@@ -1761,8 +1761,8 @@ mod tests {
         if let Operation::Read = operation {
             migrator
                 .read(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1770,8 +1770,8 @@ mod tests {
         } else {
             migrator
                 .write(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1900,8 +1900,8 @@ mod tests {
         if let Operation::Read = operation {
             migrator
                 .read(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1909,8 +1909,8 @@ mod tests {
         } else {
             migrator
                 .write(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1977,8 +1977,8 @@ mod tests {
 
         migrator
             .read(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
@@ -2046,8 +2046,8 @@ mod tests {
 
         migrator
             .write(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
@@ -2155,8 +2155,8 @@ mod tests {
 
         migrator
             .write(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
@@ -2246,8 +2246,8 @@ mod tests {
 
         migrator
             .read(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
