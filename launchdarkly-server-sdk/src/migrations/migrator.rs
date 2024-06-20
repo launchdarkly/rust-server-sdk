@@ -231,12 +231,15 @@ where
         default_stage: Stage,
         payload: P,
     ) -> MigrationOriginResult<T> {
-        let (stage, mut tracker) =
-            self.client
-                .migration_variation(context, &flag_key, default_stage);
-        tracker.operation(Operation::Read);
+        let (stage, tracker) = self
+            .client
+            .migration_variation(context, &flag_key, default_stage);
 
-        let tracker = Arc::new(Mutex::new(tracker));
+        if let Ok(mut tracker) = tracker.lock() {
+            tracker.operation(Operation::Read);
+        } else {
+            error!("Failed to acquire tracker lock. Cannot track migration write.");
+        }
 
         let mut old = Executor {
             origin: Origin::Old,
@@ -297,12 +300,15 @@ where
         default_stage: Stage,
         payload: P,
     ) -> MigrationWriteResult<T> {
-        let (stage, mut tracker) =
-            self.client
-                .migration_variation(context, &flag_key, default_stage);
-        tracker.operation(Operation::Write);
+        let (stage, tracker) = self
+            .client
+            .migration_variation(context, &flag_key, default_stage);
 
-        let tracker = Arc::new(Mutex::new(tracker));
+        if let Ok(mut tracker) = tracker.lock() {
+            tracker.operation(Operation::Write);
+        } else {
+            error!("Failed to acquire tracker lock. Cannot track migration write.");
+        }
 
         let mut old = Executor {
             origin: Origin::Old,
