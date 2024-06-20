@@ -88,7 +88,7 @@ impl TryFrom<FlagValue> for Stage {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Copy, Clone, Serialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 /// ExecutionOrder represents the various execution modes this SDK can operate under while
 /// performing migration-assisted reads.
@@ -98,11 +98,12 @@ pub enum ExecutionOrder {
     Serial,
     /// Random execution randomly decides if the authoritative read should execute first or second.
     Random,
-    /// Parallel executes both reads in separate threads, and waits until both calls have
-    /// finished before proceeding.
-    Parallel,
+    /// Concurrent executes both concurrently, waiting until both calls have finished before
+    /// proceeding.
+    Concurrent,
 }
 
+pub use migrator::Migrator;
 pub use migrator::MigratorBuilder;
 pub use tracker::MigrationOpTracker;
 

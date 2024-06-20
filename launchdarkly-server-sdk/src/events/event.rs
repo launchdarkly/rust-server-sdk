@@ -95,7 +95,7 @@ impl BaseEvent {
     }
 }
 
-/// MigrationOpEventData is generated through the migration op tracker provided through the SDK.
+/// A MigrationOpEvent is generated through the migration op tracker provided through the SDK.
 #[derive(Clone, Debug)]
 pub struct MigrationOpEvent {
     pub(crate) base: BaseEvent,
@@ -131,21 +131,17 @@ impl Serialize for MigrationOpEvent {
             key: self.key.clone(),
             value: self.evaluation.value,
             default: self.default_stage,
-            // QUESTION: In the ruby implementation, this can be nil. Why not here?
             reason: self.evaluation.reason.clone(),
             variation_index: self.evaluation.variation_index,
             version: self.version,
         };
         state.serialize_field("evaluation", &evaluation)?;
 
-        // TODO: Add sampling here if it is set and not 1
-
         let mut measurements = vec![];
         if !self.invoked.is_empty() {
             measurements.push(MigrationOpMeasurement::Invoked(&self.invoked));
         }
 
-        // TODO: There is something here to do with consistency check ratio
         if let Some(consistency_check) = self.consistency_check {
             measurements.push(MigrationOpMeasurement::ConsistencyCheck(
                 consistency_check,

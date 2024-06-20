@@ -1,6 +1,3 @@
-// TODO: Remove this when subsequent PRs have added the required implementations.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -9,8 +6,11 @@ use futures::future::join_all;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use launchdarkly_server_sdk_evaluation::Context;
+use rand::thread_rng;
 use serde::Serialize;
 
+use crate::sampler::Sampler;
+use crate::sampler::ThreadRngSampler;
 use crate::{Client, ExecutionOrder, MigrationOpTracker, Operation, Origin, Stage};
 
 #[derive(Serialize)]
@@ -43,71 +43,55 @@ pub struct MigrationWriteResult<T> {
 // provided results are equal, this method will return true and false otherwise.
 type MigrationComparisonFn<T> = fn(&T, &T) -> bool;
 
-struct MigrationConfig<T, FO, FN>
+struct MigrationConfig<P, T, FO, FN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     old: FO,
     new: FN,
     compare: Option<MigrationComparisonFn<T>>,
-}
 
-/// Migrator represents the interface through which migration support is executed.
-// pub trait Migrator {
-//     /// read uses the provided flag key and context to execute a migration-backed read operation.
-//     fn read(
-//         &self,
-//         key: String,
-//         context: Context,
-//         default_stage: Stage,
-//         payload: serde_json::Value,
-//     ) -> impl Future<Output = MigrationOriginResult>;
-//
-//     /// write uses the provided flag key and context to execute a migration-backed write operation.
-//     fn write(
-//         &self,
-//         key: String,
-//         context: Context,
-//         default_stage: Stage,
-//         payload: serde_json::Value,
-//     ) -> impl Future<Output = MigrationWriteResult>;
-// }
+    _p: std::marker::PhantomData<P>,
+}
 
 /// The migration builder is used to configure and construct an instance of a [Migrator]. This
 /// migrator can be used to perform LaunchDarkly assisted technology migrations through the use of
 /// migration-based feature flags.
-pub struct MigratorBuilder<T, FRO, FRN, FWO, FWN>
+pub struct MigratorBuilder<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
 
-    read_config: Option<MigrationConfig<T, FRO, FRN>>,
-    write_config: Option<MigrationConfig<T, FWO, FWN>>,
+    read_config: Option<MigrationConfig<P, T, FRO, FRN>>,
+    write_config: Option<MigrationConfig<P, T, FWO, FWN>>,
 }
 
-impl<T, FRO, FRN, FWO, FWN> MigratorBuilder<T, FRO, FRN, FWO, FWN>
+impl<P, T, FRO, FRN, FWO, FWN> MigratorBuilder<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     /// Create a new migrator builder instance with the provided client.
     pub fn new(client: Arc<Client>) -> Self {
         MigratorBuilder {
             client,
-            read_execution_order: ExecutionOrder::Parallel,
+            read_execution_order: ExecutionOrder::Concurrent,
             measure_latency: true,
             measure_errors: true,
             read_config: None,
@@ -115,7 +99,7 @@ where
         }
     }
 
-    /// The read execution order influences the parallelism and execution order for read operations
+    /// The read execution order influences the concurrency and execution order for read operations
     /// involving multiple origins.
     pub fn read_execution_order(mut self, order: ExecutionOrder) -> Self {
         self.read_execution_order = order;
@@ -145,12 +129,17 @@ where
     ///
     /// Depending on the migration stage, one or both of these read methods may be called.
     pub fn read(mut self, old: FRO, new: FRN, compare: Option<MigrationComparisonFn<T>>) -> Self {
-        self.read_config = Some(MigrationConfig { old, new, compare });
+        self.read_config = Some(MigrationConfig {
+            old,
+            new,
+            compare,
+            _p: std::marker::PhantomData,
+        });
         self
     }
 
     /// Write can be used to configure the migration-write behavior of the resulting
-    /// [Migrations::Migrator] instance.
+    /// [crate::Migrator] instance.
     ///
     /// Users are required to provide two different write methods -- one to write to the old
     /// migration origin, and one to write to the new origin. Not every stage requires
@@ -161,15 +150,14 @@ where
             old,
             new,
             compare: None,
+            _p: std::marker::PhantomData,
         });
         self
     }
 
-    // TODO: Do we make this a real error type?
-
-    /// Build constructs a [Migrations::Migrator] instance to support migration-based reads and
+    /// Build constructs a [crate::Migrator] instance to support migration-based reads and
     /// writes. A string describing any failure conditions will be returned if the build fails.
-    pub fn build(self) -> Result<Migrator<T, FRO, FRN, FWO, FWN>, String> {
+    pub fn build(self) -> Result<Migrator<P, T, FRO, FRN, FWO, FWN>, String> {
         let read_config = self.read_config.ok_or("read configuration not provided")?;
         let write_config = self
             .write_config
@@ -186,37 +174,43 @@ where
     }
 }
 
-pub struct Migrator<T, FRO, FRN, FWO, FWN>
+/// The migrator is the primary interface for executing migration operations. It is configured
+/// through the [MigratorBuilder] and can be used to perform LaunchDarkly assisted technology
+/// migrations through the use of migration-based feature flags.
+pub struct Migrator<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
-    read_config: MigrationConfig<T, FRO, FRN>,
-    write_config: MigrationConfig<T, FWO, FWN>,
+    read_config: MigrationConfig<P, T, FRO, FRN>,
+    write_config: MigrationConfig<P, T, FWO, FWN>,
+    sampler: Box<dyn Sampler>,
 }
 
-impl<T, FRO, FRN, FWO, FWN> Migrator<T, FRO, FRN, FWO, FWN>
+impl<P, T, FRO, FRN, FWO, FWN> Migrator<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     fn new(
         client: Arc<Client>,
         read_execution_order: ExecutionOrder,
         measure_latency: bool,
         measure_errors: bool,
-        read_config: MigrationConfig<T, FRO, FRN>,
-        write_config: MigrationConfig<T, FWO, FWN>,
+        read_config: MigrationConfig<P, T, FRO, FRN>,
+        write_config: MigrationConfig<P, T, FWO, FWN>,
     ) -> Self {
         Migrator {
             client,
@@ -225,22 +219,27 @@ where
             measure_errors,
             read_config,
             write_config,
+            sampler: Box::new(ThreadRngSampler::new(thread_rng())),
         }
     }
 
+    /// Uses the provided flag key and context to execute a migration-backed read operation.
     pub async fn read(
-        &self,
-        key: String,
-        context: Context,
+        &mut self,
+        context: &Context,
+        flag_key: String,
         default_stage: Stage,
-        payload: T,
+        payload: P,
     ) -> MigrationOriginResult<T> {
-        let (stage, mut tracker) = self
+        let (stage, tracker) = self
             .client
-            .migration_variation(&context, &key, default_stage);
-        tracker.operation(Operation::Read);
+            .migration_variation(context, &flag_key, default_stage);
 
-        let tracker = Arc::new(Mutex::new(tracker));
+        if let Ok(mut tracker) = tracker.lock() {
+            tracker.operation(Operation::Read);
+        } else {
+            error!("Failed to acquire tracker lock. Cannot track migration write.");
+        }
 
         let mut old = Executor {
             origin: Origin::Old,
@@ -269,6 +268,7 @@ where
                     self.read_config.compare,
                     self.read_execution_order,
                     tracker.clone(),
+                    self.sampler.as_mut(),
                 )
                 .await
             }
@@ -279,6 +279,7 @@ where
                     self.read_config.compare,
                     self.read_execution_order,
                     tracker.clone(),
+                    self.sampler.as_mut(),
                 )
                 .await
             }
@@ -291,19 +292,23 @@ where
         result
     }
 
+    /// Uses the provided flag key and context to execute a migration-backed write operation.
     pub async fn write(
-        &self,
-        key: String,
-        context: Context,
+        &mut self,
+        context: &Context,
+        flag_key: String,
         default_stage: Stage,
-        payload: T,
+        payload: P,
     ) -> MigrationWriteResult<T> {
-        let (stage, mut tracker) = self
+        let (stage, tracker) = self
             .client
-            .migration_variation(&context, &key, default_stage);
-        tracker.operation(Operation::Write);
+            .migration_variation(context, &flag_key, default_stage);
 
-        let tracker = Arc::new(Mutex::new(tracker));
+        if let Ok(mut tracker) = tracker.lock() {
+            tracker.operation(Operation::Write);
+        } else {
+            error!("Failed to acquire tracker lock. Cannot track migration write.");
+        }
 
         let mut old = Executor {
             origin: Origin::Old,
@@ -343,23 +348,25 @@ where
     }
 }
 
-async fn read_both<T, FA, FB>(
-    mut authoritative: Executor<'_, T, FA>,
-    mut nonauthoritative: Executor<'_, T, FB>,
+async fn read_both<P, T, FA, FB>(
+    mut authoritative: Executor<'_, P, T, FA>,
+    mut nonauthoritative: Executor<'_, P, T, FB>,
     compare: Option<MigrationComparisonFn<T>>,
     execution_order: ExecutionOrder,
     tracker: Arc<Mutex<MigrationOpTracker>>,
+    sampler: &mut dyn Sampler,
 ) -> MigrationOriginResult<T>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FA: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FB: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FA: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FB: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     let authoritative_result: MigrationOriginResult<T>;
     let nonauthoritative_result: MigrationOriginResult<T>;
 
     match execution_order {
-        ExecutionOrder::Parallel => {
+        ExecutionOrder::Concurrent => {
             let auth_handle = authoritative.run().boxed();
             let nonauth_handle = nonauthoritative.run().boxed();
             let handles = vec![auth_handle, nonauth_handle];
@@ -378,12 +385,11 @@ where
                 result: Err("Failed to execute authoritative read".into()),
             });
         }
-        // TODO: Add a sampler.sample(2) style call
-        ExecutionOrder::Random => {
+        ExecutionOrder::Random if sampler.sample(2) => {
             nonauthoritative_result = nonauthoritative.run().await;
             authoritative_result = authoritative.run().await;
         }
-        ExecutionOrder::Serial => {
+        _ => {
             authoritative_result = authoritative.run().await;
             nonauthoritative_result = nonauthoritative.run().await;
         }
@@ -405,14 +411,15 @@ where
     authoritative_result
 }
 
-async fn write_both<T, FA, FB>(
-    mut authoritative: Executor<'_, T, FA>,
-    mut nonauthoritative: Executor<'_, T, FB>,
+async fn write_both<P, T, FA, FB>(
+    mut authoritative: Executor<'_, P, T, FA>,
+    mut nonauthoritative: Executor<'_, P, T, FB>,
 ) -> MigrationWriteResult<T>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FA: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FB: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FA: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FB: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     let authoritative_result = authoritative.run().await;
 
@@ -431,23 +438,25 @@ where
     }
 }
 
-struct Executor<'a, T, F>
+struct Executor<'a, P, T, F>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    F: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    F: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     origin: Origin,
     function: &'a F,
     tracker: Arc<Mutex<MigrationOpTracker>>,
     measure_latency: bool,
     measure_errors: bool,
-    payload: &'a T,
+    payload: &'a P,
 }
 
-impl<'a, T, F> Executor<'a, T, F>
+impl<'a, P, T, F> Executor<'a, P, T, F>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    F: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    F: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     async fn run(&mut self) -> MigrationOriginResult<T> {
         let start = Instant::now();
@@ -504,13 +513,13 @@ mod tests {
             .track_latency(false)
             .track_errors(false)
             .read(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
                 Some(|_, _| true),
             )
             .write(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
             )
             .build();
 
@@ -530,7 +539,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
@@ -562,10 +571,10 @@ mod tests {
 
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 1,
             )
@@ -591,7 +600,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .read(
@@ -622,10 +631,10 @@ mod tests {
 
         let _result = migrator
             .write(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 1,
             )
@@ -664,7 +673,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
@@ -696,10 +705,10 @@ mod tests {
 
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 stage,
                 "payload",
             )
@@ -721,7 +730,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_handles_parallel_execution() {
+    async fn read_handles_concurrent_execution() {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -730,14 +739,14 @@ mod tests {
         let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
                 |_| async move { Ok(()) }.boxed(),
                 |_| async move { Ok(()) }.boxed(),
             )
-            .read_execution_order(ExecutionOrder::Parallel)
+            .read_execution_order(ExecutionOrder::Concurrent)
             .read(
                 |_| {
                     async move {
@@ -761,10 +770,10 @@ mod tests {
         let start = Instant::now();
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 (),
             )
@@ -774,12 +783,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_handles_nonparallel_execution() {
-        read_handles_nonparallel_execution_driver(ExecutionOrder::Serial).await;
-        read_handles_nonparallel_execution_driver(ExecutionOrder::Random).await;
+    async fn read_handles_nonconcurrent_execution() {
+        read_handles_nonconcurrent_execution_driver(ExecutionOrder::Serial).await;
+        read_handles_nonconcurrent_execution_driver(ExecutionOrder::Random).await;
     }
 
-    async fn read_handles_nonparallel_execution_driver(execution_order: ExecutionOrder) {
+    async fn read_handles_nonconcurrent_execution_driver(execution_order: ExecutionOrder) {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -788,7 +797,7 @@ mod tests {
         let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .write(
@@ -819,10 +828,10 @@ mod tests {
         let start = Instant::now();
         let _result = migrator
             .read(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 crate::Stage::Shadow,
                 (),
             )
@@ -857,7 +866,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .read(
@@ -888,10 +897,10 @@ mod tests {
 
         let _result = migrator
             .write(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 stage,
                 (),
             )
@@ -942,7 +951,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .read(
@@ -973,10 +982,10 @@ mod tests {
 
         let _result = migrator
             .write(
-                "migration-key".into(),
-                ContextBuilder::new("user-key")
+                &ContextBuilder::new("user-key")
                     .build()
                     .expect("context failed to build"),
+                "migration-key".into(),
                 stage,
                 (),
             )
@@ -999,7 +1008,7 @@ mod tests {
 
     #[test_case(ExecutionOrder::Serial)]
     #[test_case(ExecutionOrder::Random)]
-    #[test_case(ExecutionOrder::Parallel)]
+    #[test_case(ExecutionOrder::Concurrent)]
     fn can_modify_execution_order(execution_order: ExecutionOrder) {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
@@ -1011,13 +1020,13 @@ mod tests {
             .track_latency(false)
             .track_errors(false)
             .read(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
                 Some(|_, _| true),
             )
             .write(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
             )
             .read_execution_order(execution_order)
             .build();

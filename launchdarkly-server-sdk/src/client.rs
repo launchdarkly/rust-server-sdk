@@ -641,7 +641,7 @@ impl Client {
         context: &Context,
         flag_key: &str,
         default_stage: Stage,
-    ) -> (Stage, MigrationOpTracker) {
+    ) -> (Stage, Arc<Mutex<MigrationOpTracker>>) {
         let (detail, flag) =
             self.variation_internal(context, flag_key, default_stage, &self.events_default);
 
@@ -655,7 +655,10 @@ impl Client {
             default_stage,
         );
 
-        (migration_detail.value.unwrap_or(default_stage), tracker)
+        (
+            migration_detail.value.unwrap_or(default_stage),
+            Arc::new(Mutex::new(tracker)),
+        )
     }
 
     /// Reports that a context has performed an event.
@@ -1741,7 +1744,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .read(
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
@@ -1761,8 +1764,8 @@ mod tests {
         if let Operation::Read = operation {
             migrator
                 .read(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1770,8 +1773,8 @@ mod tests {
         } else {
             migrator
                 .write(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1855,7 +1858,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| {
@@ -1900,8 +1903,8 @@ mod tests {
         if let Operation::Read = operation {
             migrator
                 .read(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1909,8 +1912,8 @@ mod tests {
         } else {
             migrator
                 .write(
+                    &context,
                     "stage-flag".into(),
-                    context,
                     Stage::Off,
                     serde_json::Value::Null,
                 )
@@ -1957,12 +1960,12 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| async move { Err("fail".into()) }.boxed(),
                 |_| async move { Err("fail".into()) }.boxed(),
-                Some(|_, _| true),
+                Some(|_: &String, _: &String| true),
             )
             .write(
                 |_| async move { Err("fail".into()) }.boxed(),
@@ -1977,8 +1980,8 @@ mod tests {
 
         migrator
             .read(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
@@ -2026,7 +2029,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
@@ -2046,8 +2049,8 @@ mod tests {
 
         migrator
             .write(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
@@ -2117,7 +2120,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
@@ -2155,8 +2158,8 @@ mod tests {
 
         migrator
             .write(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
@@ -2202,7 +2205,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| {
@@ -2246,8 +2249,8 @@ mod tests {
 
         migrator
             .read(
+                &context,
                 "stage-flag".into(),
-                context,
                 Stage::Off,
                 serde_json::Value::Null,
             )
