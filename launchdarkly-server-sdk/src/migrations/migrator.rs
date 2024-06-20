@@ -43,44 +43,49 @@ pub struct MigrationWriteResult<T> {
 // provided results are equal, this method will return true and false otherwise.
 type MigrationComparisonFn<T> = fn(&T, &T) -> bool;
 
-struct MigrationConfig<T, FO, FN>
+struct MigrationConfig<P, T, FO, FN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     old: FO,
     new: FN,
     compare: Option<MigrationComparisonFn<T>>,
+
+    _p: std::marker::PhantomData<P>,
 }
 
 /// The migration builder is used to configure and construct an instance of a [Migrator]. This
 /// migrator can be used to perform LaunchDarkly assisted technology migrations through the use of
 /// migration-based feature flags.
-pub struct MigratorBuilder<T, FRO, FRN, FWO, FWN>
+pub struct MigratorBuilder<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
 
-    read_config: Option<MigrationConfig<T, FRO, FRN>>,
-    write_config: Option<MigrationConfig<T, FWO, FWN>>,
+    read_config: Option<MigrationConfig<P, T, FRO, FRN>>,
+    write_config: Option<MigrationConfig<P, T, FWO, FWN>>,
 }
 
-impl<T, FRO, FRN, FWO, FWN> MigratorBuilder<T, FRO, FRN, FWO, FWN>
+impl<P, T, FRO, FRN, FWO, FWN> MigratorBuilder<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     /// Create a new migrator builder instance with the provided client.
     pub fn new(client: Arc<Client>) -> Self {
@@ -124,7 +129,12 @@ where
     ///
     /// Depending on the migration stage, one or both of these read methods may be called.
     pub fn read(mut self, old: FRO, new: FRN, compare: Option<MigrationComparisonFn<T>>) -> Self {
-        self.read_config = Some(MigrationConfig { old, new, compare });
+        self.read_config = Some(MigrationConfig {
+            old,
+            new,
+            compare,
+            _p: std::marker::PhantomData,
+        });
         self
     }
 
@@ -140,13 +150,14 @@ where
             old,
             new,
             compare: None,
+            _p: std::marker::PhantomData,
         });
         self
     }
 
     /// Build constructs a [crate::Migrator] instance to support migration-based reads and
     /// writes. A string describing any failure conditions will be returned if the build fails.
-    pub fn build(self) -> Result<Migrator<T, FRO, FRN, FWO, FWN>, String> {
+    pub fn build(self) -> Result<Migrator<P, T, FRO, FRN, FWO, FWN>, String> {
         let read_config = self.read_config.ok_or("read configuration not provided")?;
         let write_config = self
             .write_config
@@ -166,38 +177,40 @@ where
 /// The migrator is the primary interface for executing migration operations. It is configured
 /// through the [MigratorBuilder] and can be used to perform LaunchDarkly assisted technology
 /// migrations through the use of migration-based feature flags.
-pub struct Migrator<T, FRO, FRN, FWO, FWN>
+pub struct Migrator<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
-    read_config: MigrationConfig<T, FRO, FRN>,
-    write_config: MigrationConfig<T, FWO, FWN>,
+    read_config: MigrationConfig<P, T, FRO, FRN>,
+    write_config: MigrationConfig<P, T, FWO, FWN>,
     sampler: Box<dyn Sampler>,
 }
 
-impl<T, FRO, FRN, FWO, FWN> Migrator<T, FRO, FRN, FWO, FWN>
+impl<P, T, FRO, FRN, FWO, FWN> Migrator<P, T, FRO, FRN, FWO, FWN>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     fn new(
         client: Arc<Client>,
         read_execution_order: ExecutionOrder,
         measure_latency: bool,
         measure_errors: bool,
-        read_config: MigrationConfig<T, FRO, FRN>,
-        write_config: MigrationConfig<T, FWO, FWN>,
+        read_config: MigrationConfig<P, T, FRO, FRN>,
+        write_config: MigrationConfig<P, T, FWO, FWN>,
     ) -> Self {
         Migrator {
             client,
@@ -216,7 +229,7 @@ where
         context: &Context,
         flag_key: String,
         default_stage: Stage,
-        payload: T,
+        payload: P,
     ) -> MigrationOriginResult<T> {
         let (stage, mut tracker) =
             self.client
@@ -282,7 +295,7 @@ where
         context: &Context,
         flag_key: String,
         default_stage: Stage,
-        payload: T,
+        payload: P,
     ) -> MigrationWriteResult<T> {
         let (stage, mut tracker) =
             self.client
@@ -329,18 +342,19 @@ where
     }
 }
 
-async fn read_both<T, FA, FB>(
-    mut authoritative: Executor<'_, T, FA>,
-    mut nonauthoritative: Executor<'_, T, FB>,
+async fn read_both<P, T, FA, FB>(
+    mut authoritative: Executor<'_, P, T, FA>,
+    mut nonauthoritative: Executor<'_, P, T, FB>,
     compare: Option<MigrationComparisonFn<T>>,
     execution_order: ExecutionOrder,
     tracker: Arc<Mutex<MigrationOpTracker>>,
     sampler: &mut dyn Sampler,
 ) -> MigrationOriginResult<T>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FA: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FB: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FA: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FB: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     let authoritative_result: MigrationOriginResult<T>;
     let nonauthoritative_result: MigrationOriginResult<T>;
@@ -391,14 +405,15 @@ where
     authoritative_result
 }
 
-async fn write_both<T, FA, FB>(
-    mut authoritative: Executor<'_, T, FA>,
-    mut nonauthoritative: Executor<'_, T, FB>,
+async fn write_both<P, T, FA, FB>(
+    mut authoritative: Executor<'_, P, T, FA>,
+    mut nonauthoritative: Executor<'_, P, T, FB>,
 ) -> MigrationWriteResult<T>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    FA: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
-    FB: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FA: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FB: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     let authoritative_result = authoritative.run().await;
 
@@ -417,23 +432,25 @@ where
     }
 }
 
-struct Executor<'a, T, F>
+struct Executor<'a, P, T, F>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    F: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    F: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     origin: Origin,
     function: &'a F,
     tracker: Arc<Mutex<MigrationOpTracker>>,
     measure_latency: bool,
     measure_errors: bool,
-    payload: &'a T,
+    payload: &'a P,
 }
 
-impl<'a, T, F> Executor<'a, T, F>
+impl<'a, P, T, F> Executor<'a, P, T, F>
 where
+    P: Send + Sync,
     T: Send + Sync,
-    F: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    F: Fn(&P) -> BoxFuture<MigrationResult<T>> + Sync + Send,
 {
     async fn run(&mut self) -> MigrationOriginResult<T> {
         let start = Instant::now();
@@ -490,13 +507,13 @@ mod tests {
             .track_latency(false)
             .track_errors(false)
             .read(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
                 Some(|_, _| true),
             )
             .write(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
             )
             .build();
 
@@ -997,13 +1014,13 @@ mod tests {
             .track_latency(false)
             .track_errors(false)
             .read(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
                 Some(|_, _| true),
             )
             .write(
-                |_| async move { Ok(()) }.boxed(),
-                |_| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
+                |_: &u32| async move { Ok(()) }.boxed(),
             )
             .read_execution_order(execution_order)
             .build();

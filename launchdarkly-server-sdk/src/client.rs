@@ -1962,7 +1962,7 @@ mod tests {
             .read(
                 |_| async move { Err("fail".into()) }.boxed(),
                 |_| async move { Err("fail".into()) }.boxed(),
-                Some(|_, _| true),
+                Some(|_: &String, _: &String| true),
             )
             .write(
                 |_| async move { Err("fail".into()) }.boxed(),
