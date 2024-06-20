@@ -294,7 +294,7 @@ where
 
     /// Uses the provided flag key and context to execute a migration-backed write operation.
     pub async fn write(
-        &self,
+        &mut self,
         context: &Context,
         flag_key: String,
         default_stage: Stage,
@@ -600,7 +600,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .read(
@@ -866,7 +866,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .read(
@@ -951,7 +951,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = MigratorBuilder::new(client)
+        let mut migrator = MigratorBuilder::new(client)
             .track_latency(false)
             .track_errors(false)
             .read(

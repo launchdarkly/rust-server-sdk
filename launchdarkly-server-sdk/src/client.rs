@@ -2029,7 +2029,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
@@ -2120,7 +2120,7 @@ mod tests {
             )
             .expect("patch should apply");
 
-        let migrator = MigratorBuilder::new(client.clone())
+        let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
                 |_| async move { Ok(serde_json::Value::Null) }.boxed(),
