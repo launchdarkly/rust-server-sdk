@@ -641,7 +641,7 @@ impl Client {
         context: &Context,
         flag_key: &str,
         default_stage: Stage,
-    ) -> (Stage, MigrationOpTracker) {
+    ) -> (Stage, Arc<Mutex<MigrationOpTracker>>) {
         let (detail, flag) =
             self.variation_internal(context, flag_key, default_stage, &self.events_default);
 
@@ -655,7 +655,10 @@ impl Client {
             default_stage,
         );
 
-        (migration_detail.value.unwrap_or(default_stage), tracker)
+        (
+            migration_detail.value.unwrap_or(default_stage),
+            Arc::new(Mutex::new(tracker)),
+        )
     }
 
     /// Reports that a context has performed an event.
