@@ -838,6 +838,7 @@ impl Client {
 mod tests {
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
+    use futures::FutureExt;
     use hyper::client::HttpConnector;
     use launchdarkly_server_sdk_evaluation::Reason;
     use std::collections::HashMap;
@@ -1655,19 +1656,75 @@ mod tests {
         assert_eq!(evaluated_stage, stage);
     }
 
-    #[test_case(Stage::Off, Operation::Read, vec![Origin::Old])]
-    #[test_case(Stage::DualWrite, Operation::Read, vec![Origin::Old])]
-    #[test_case(Stage::Shadow, Operation::Read, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Live, Operation::Read, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Rampdown, Operation::Read, vec![Origin::New])]
-    #[test_case(Stage::Complete, Operation::Read, vec![Origin::New])]
-    #[test_case(Stage::Off, Operation::Write, vec![Origin::Old])]
-    #[test_case(Stage::DualWrite, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Shadow, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Live, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Rampdown, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Complete, Operation::Write, vec![Origin::New])]
-    fn migration_tracks_invoked_correctly(
+    #[tokio::test]
+    async fn migration_tracks_invoked_correctly() {
+        migration_tracks_invoked_correctly_driver(Stage::Off, Operation::Read, vec![Origin::Old])
+            .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::DualWrite,
+            Operation::Read,
+            vec![Origin::Old],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Shadow,
+            Operation::Read,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Live,
+            Operation::Read,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Rampdown,
+            Operation::Read,
+            vec![Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Complete,
+            Operation::Read,
+            vec![Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(Stage::Off, Operation::Write, vec![Origin::Old])
+            .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::DualWrite,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Shadow,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Live,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Rampdown,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_invoked_correctly_driver(
+            Stage::Complete,
+            Operation::Write,
+            vec![Origin::New],
+        )
+        .await;
+    }
+
+    async fn migration_tracks_invoked_correctly_driver(
         stage: Stage,
         operation: Operation,
         origins: Vec<Origin>,
@@ -1686,13 +1743,13 @@ mod tests {
 
         let migrator = MigratorBuilder::new(client.clone())
             .read(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
                 Some(|_, _| true),
             )
             .write(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
             )
             .build()
             .expect("migrator should build");
@@ -1702,19 +1759,23 @@ mod tests {
             .expect("Failed to create context");
 
         if let Operation::Read = operation {
-            migrator.read(
-                "stage-flag".into(),
-                context,
-                Stage::Off,
-                serde_json::Value::Null,
-            );
+            migrator
+                .read(
+                    "stage-flag".into(),
+                    context,
+                    Stage::Off,
+                    serde_json::Value::Null,
+                )
+                .await;
         } else {
-            migrator.write(
-                "stage-flag".into(),
-                context,
-                Stage::Off,
-                serde_json::Value::Null,
-            );
+            migrator
+                .write(
+                    "stage-flag".into(),
+                    context,
+                    Stage::Off,
+                    serde_json::Value::Null,
+                )
+                .await;
         }
 
         client.flush();
@@ -1731,19 +1792,57 @@ mod tests {
         }
     }
 
-    #[test_case(Stage::Off, Operation::Read, vec![Origin::Old])]
-    #[test_case(Stage::DualWrite, Operation::Read, vec![Origin::Old])]
-    #[test_case(Stage::Shadow, Operation::Read, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Live, Operation::Read, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Rampdown, Operation::Read, vec![Origin::New])]
-    #[test_case(Stage::Complete, Operation::Read, vec![Origin::New])]
-    #[test_case(Stage::Off, Operation::Write, vec![Origin::Old])]
-    #[test_case(Stage::DualWrite, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Shadow, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Live, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Rampdown, Operation::Write, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Complete, Operation::Write, vec![Origin::New])]
-    fn migration_tracks_latency(stage: Stage, operation: Operation, origins: Vec<Origin>) {
+    #[tokio::test]
+    async fn migration_tracks_latency() {
+        migration_tracks_latency_driver(Stage::Off, Operation::Read, vec![Origin::Old]).await;
+        migration_tracks_latency_driver(Stage::DualWrite, Operation::Read, vec![Origin::Old]).await;
+        migration_tracks_latency_driver(
+            Stage::Shadow,
+            Operation::Read,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_latency_driver(
+            Stage::Live,
+            Operation::Read,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_latency_driver(Stage::Rampdown, Operation::Read, vec![Origin::New]).await;
+        migration_tracks_latency_driver(Stage::Complete, Operation::Read, vec![Origin::New]).await;
+        migration_tracks_latency_driver(Stage::Off, Operation::Write, vec![Origin::Old]).await;
+        migration_tracks_latency_driver(
+            Stage::DualWrite,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_latency_driver(
+            Stage::Shadow,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_latency_driver(
+            Stage::Live,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_latency_driver(
+            Stage::Rampdown,
+            Operation::Write,
+            vec![Origin::Old, Origin::New],
+        )
+        .await;
+        migration_tracks_latency_driver(Stage::Complete, Operation::Write, vec![Origin::New]).await;
+    }
+
+    async fn migration_tracks_latency_driver(
+        stage: Stage,
+        operation: Operation,
+        origins: Vec<Origin>,
+    ) {
         let (client, event_rx) = make_mocked_client();
         let client = Arc::new(client);
         client.start_with_default_executor();
@@ -1759,25 +1858,37 @@ mod tests {
         let migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::Null)
-                }),
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::Null)
+                    }
+                    .boxed()
+                },
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::Null)
+                    }
+                    .boxed()
+                },
                 Some(|_, _| true),
             )
             .write(
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::Null)
-                }),
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::Null)
+                    }
+                    .boxed()
+                },
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::Null)
+                    }
+                    .boxed()
+                },
             )
             .build()
             .expect("migrator should build");
@@ -1787,19 +1898,23 @@ mod tests {
             .expect("Failed to create context");
 
         if let Operation::Read = operation {
-            migrator.read(
-                "stage-flag".into(),
-                context,
-                Stage::Off,
-                serde_json::Value::Null,
-            );
+            migrator
+                .read(
+                    "stage-flag".into(),
+                    context,
+                    Stage::Off,
+                    serde_json::Value::Null,
+                )
+                .await;
         } else {
-            migrator.write(
-                "stage-flag".into(),
-                context,
-                Stage::Off,
-                serde_json::Value::Null,
-            );
+            migrator
+                .write(
+                    "stage-flag".into(),
+                    context,
+                    Stage::Off,
+                    serde_json::Value::Null,
+                )
+                .await;
         }
 
         client.flush();
@@ -1819,13 +1934,17 @@ mod tests {
         }
     }
 
-    #[test_case(Stage::Off, vec![Origin::Old])]
-    #[test_case(Stage::DualWrite, vec![Origin::Old])]
-    #[test_case(Stage::Shadow, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Live, vec![Origin::Old, Origin::New])]
-    #[test_case(Stage::Rampdown, vec![Origin::New])]
-    #[test_case(Stage::Complete, vec![Origin::New])]
-    fn migration_tracks_read_errors(stage: Stage, origins: Vec<Origin>) {
+    #[tokio::test]
+    async fn migration_tracks_read_errors() {
+        migration_tracks_read_errors_driver(Stage::Off, vec![Origin::Old]).await;
+        migration_tracks_read_errors_driver(Stage::DualWrite, vec![Origin::Old]).await;
+        migration_tracks_read_errors_driver(Stage::Shadow, vec![Origin::Old, Origin::New]).await;
+        migration_tracks_read_errors_driver(Stage::Live, vec![Origin::Old, Origin::New]).await;
+        migration_tracks_read_errors_driver(Stage::Rampdown, vec![Origin::New]).await;
+        migration_tracks_read_errors_driver(Stage::Complete, vec![Origin::New]).await;
+    }
+
+    async fn migration_tracks_read_errors_driver(stage: Stage, origins: Vec<Origin>) {
         let (client, event_rx) = make_mocked_client();
         let client = Arc::new(client);
         client.start_with_default_executor();
@@ -1841,13 +1960,13 @@ mod tests {
         let migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
-                Arc::new(|_| Err("fail".into())),
-                Arc::new(|_| Err("fail".into())),
+                |_| async move { Err("fail".into()) }.boxed(),
+                |_| async move { Err("fail".into()) }.boxed(),
                 Some(|_, _| true),
             )
             .write(
-                Arc::new(|_| Err("fail".into())),
-                Arc::new(|_| Err("fail".into())),
+                |_| async move { Err("fail".into()) }.boxed(),
+                |_| async move { Err("fail".into()) }.boxed(),
             )
             .build()
             .expect("migrator should build");
@@ -1856,12 +1975,14 @@ mod tests {
             .build()
             .expect("Failed to create context");
 
-        migrator.read(
-            "stage-flag".into(),
-            context,
-            Stage::Off,
-            serde_json::Value::Null,
-        );
+        migrator
+            .read(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            )
+            .await;
         client.flush();
         client.close();
 
@@ -1876,13 +1997,23 @@ mod tests {
         }
     }
 
-    #[test_case(Stage::Off, vec![Origin::Old])]
-    #[test_case(Stage::DualWrite, vec![Origin::Old])]
-    #[test_case(Stage::Shadow, vec![Origin::Old])]
-    #[test_case(Stage::Live, vec![Origin::New])]
-    #[test_case(Stage::Rampdown, vec![Origin::New])]
-    #[test_case(Stage::Complete, vec![Origin::New])]
-    fn migration_tracks_authoritative_write_errors(stage: Stage, origins: Vec<Origin>) {
+    #[tokio::test]
+    async fn migration_tracks_authoritative_write_errors() {
+        migration_tracks_authoritative_write_errors_driver(Stage::Off, vec![Origin::Old]).await;
+        migration_tracks_authoritative_write_errors_driver(Stage::DualWrite, vec![Origin::Old])
+            .await;
+        migration_tracks_authoritative_write_errors_driver(Stage::Shadow, vec![Origin::Old]).await;
+        migration_tracks_authoritative_write_errors_driver(Stage::Live, vec![Origin::New]).await;
+        migration_tracks_authoritative_write_errors_driver(Stage::Rampdown, vec![Origin::New])
+            .await;
+        migration_tracks_authoritative_write_errors_driver(Stage::Complete, vec![Origin::New])
+            .await;
+    }
+
+    async fn migration_tracks_authoritative_write_errors_driver(
+        stage: Stage,
+        origins: Vec<Origin>,
+    ) {
         let (client, event_rx) = make_mocked_client();
         let client = Arc::new(client);
         client.start_with_default_executor();
@@ -1898,13 +2029,13 @@ mod tests {
         let migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
                 None,
             )
             .write(
-                Arc::new(|_| Err("fail".into())),
-                Arc::new(|_| Err("fail".into())),
+                |_| async move { Err("fail".into()) }.boxed(),
+                |_| async move { Err("fail".into()) }.boxed(),
             )
             .build()
             .expect("migrator should build");
@@ -1913,12 +2044,14 @@ mod tests {
             .build()
             .expect("Failed to create context");
 
-        migrator.write(
-            "stage-flag".into(),
-            context,
-            Stage::Off,
-            serde_json::Value::Null,
-        );
+        migrator
+            .write(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            )
+            .await;
 
         client.flush();
         client.close();
@@ -1934,11 +2067,39 @@ mod tests {
         }
     }
 
-    #[test_case(Stage::DualWrite, false, true, vec![Origin::New])]
-    #[test_case(Stage::Shadow, false, true, vec![Origin::New])]
-    #[test_case(Stage::Live, true, false, vec![Origin::Old])]
-    #[test_case(Stage::Rampdown, true, false, vec![Origin::Old])]
-    fn migration_tracks_nonauthoritative_write_errors(
+    #[tokio::test]
+    async fn migration_tracks_nonauthoritative_write_errors() {
+        migration_tracks_nonauthoritative_write_errors_driver(
+            Stage::DualWrite,
+            false,
+            true,
+            vec![Origin::New],
+        )
+        .await;
+        migration_tracks_nonauthoritative_write_errors_driver(
+            Stage::Shadow,
+            false,
+            true,
+            vec![Origin::New],
+        )
+        .await;
+        migration_tracks_nonauthoritative_write_errors_driver(
+            Stage::Live,
+            true,
+            false,
+            vec![Origin::Old],
+        )
+        .await;
+        migration_tracks_nonauthoritative_write_errors_driver(
+            Stage::Rampdown,
+            true,
+            false,
+            vec![Origin::Old],
+        )
+        .await;
+    }
+
+    async fn migration_tracks_nonauthoritative_write_errors_driver(
         stage: Stage,
         fail_old: bool,
         fail_new: bool,
@@ -1959,25 +2120,31 @@ mod tests {
         let migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
+                |_| async move { Ok(serde_json::Value::Null) }.boxed(),
                 None,
             )
             .write(
-                Arc::new(move |_| {
-                    if fail_old {
-                        Err("fail".into())
-                    } else {
-                        Ok(serde_json::Value::Null)
+                move |_| {
+                    async move {
+                        if fail_old {
+                            Err("fail".into())
+                        } else {
+                            Ok(serde_json::Value::Null)
+                        }
                     }
-                }),
-                Arc::new(move |_| {
-                    if fail_new {
-                        Err("fail".into())
-                    } else {
-                        Ok(serde_json::Value::Null)
+                    .boxed()
+                },
+                move |_| {
+                    async move {
+                        if fail_new {
+                            Err("fail".into())
+                        } else {
+                            Ok(serde_json::Value::Null)
+                        }
                     }
-                }),
+                    .boxed()
+                },
             )
             .build()
             .expect("migrator should build");
@@ -1986,12 +2153,14 @@ mod tests {
             .build()
             .expect("Failed to create context");
 
-        migrator.write(
-            "stage-flag".into(),
-            context,
-            Stage::Off,
-            serde_json::Value::Null,
-        );
+        migrator
+            .write(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            )
+            .await;
 
         client.flush();
         client.close();
@@ -2007,11 +2176,15 @@ mod tests {
         }
     }
 
-    #[test_case(Stage::Shadow, "same", "same", true)]
-    #[test_case(Stage::Shadow, "same", "different", false)]
-    #[test_case(Stage::Live, "same", "same", true)]
-    #[test_case(Stage::Live, "same", "different", false)]
-    fn migration_tracks_consistency(
+    #[tokio::test]
+    async fn migration_tracks_consistency() {
+        migration_tracks_consistency_driver(Stage::Shadow, "same", "same", true).await;
+        migration_tracks_consistency_driver(Stage::Shadow, "same", "different", false).await;
+        migration_tracks_consistency_driver(Stage::Live, "same", "same", true).await;
+        migration_tracks_consistency_driver(Stage::Live, "same", "different", false).await;
+    }
+
+    async fn migration_tracks_consistency_driver(
         stage: Stage,
         old_return: &'static str,
         new_return: &'static str,
@@ -2032,25 +2205,37 @@ mod tests {
         let migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
             .read(
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::String(old_return.to_string()))
-                }),
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::String(new_return.to_string()))
-                }),
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::String(old_return.to_string()))
+                    }
+                    .boxed()
+                },
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::String(new_return.to_string()))
+                    }
+                    .boxed()
+                },
                 Some(|lhs, rhs| lhs == rhs),
             )
             .write(
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(|_| {
-                    std::thread::sleep(Duration::from_millis(100));
-                    Ok(serde_json::Value::Null)
-                }),
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::Null)
+                    }
+                    .boxed()
+                },
+                |_| {
+                    async move {
+                        async_std::task::sleep(Duration::from_millis(100)).await;
+                        Ok(serde_json::Value::Null)
+                    }
+                    .boxed()
+                },
             )
             .build()
             .expect("migrator should build");
@@ -2059,12 +2244,14 @@ mod tests {
             .build()
             .expect("Failed to create context");
 
-        migrator.read(
-            "stage-flag".into(),
-            context,
-            Stage::Off,
-            serde_json::Value::Null,
-        );
+        migrator
+            .read(
+                "stage-flag".into(),
+                context,
+                Stage::Off,
+                serde_json::Value::Null,
+            )
+            .await;
 
         client.flush();
         client.close();
