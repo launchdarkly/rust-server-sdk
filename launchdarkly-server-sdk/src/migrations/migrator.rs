@@ -1,26 +1,32 @@
 // TODO: Remove this when subsequent PRs have added the required implementations.
 #![allow(dead_code)]
 
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
-use std::{sync::Arc, thread};
 
+use futures::future::join_all;
+use futures::future::BoxFuture;
+use futures::future::FutureExt;
 use launchdarkly_server_sdk_evaluation::Context;
+use serde::Serialize;
 
 use crate::{Client, ExecutionOrder, MigrationOpTracker, Operation, Origin, Stage};
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 /// An internally used struct to represent the result of a migration operation along with the
 /// origin it was executed against.
-pub struct MigrationOriginResult {
-    origin: Origin,
-    result: MigrationResult,
+pub struct MigrationOriginResult<T> {
+    pub origin: Origin,
+    pub result: MigrationResult<T>,
 }
 
 /// MigrationResult represents the result of a migration operation. If the operation was
 /// successful, the result will contain a pair of values representing the result of the operation
 /// and the origin it was executed against. If the operation failed, the result will contain an
 /// error.
-type MigrationResult = Result<serde_json::Value, String>;
+type MigrationResult<T> = Result<T, String>;
 
 /// A write result contains the operation results against both the authoritative and
 /// non-authoritative origins.
@@ -28,60 +34,75 @@ type MigrationResult = Result<serde_json::Value, String>;
 /// Authoritative writes are always executed first. In the event of a failure, the
 /// non-authoritative write will not be executed, resulting in a `None` value in the final
 /// MigrationWriteResult.
-pub struct MigrationWriteResult {
-    authoritative: MigrationOriginResult,
-    nonauthoritative: Option<MigrationOriginResult>,
+pub struct MigrationWriteResult<T> {
+    pub authoritative: MigrationOriginResult<T>,
+    pub nonauthoritative: Option<MigrationOriginResult<T>>,
 }
 
 // MigrationComparisonFn is used to compare the results of two migration operations. If the
 // provided results are equal, this method will return true and false otherwise.
-type MigrationComparisonFn = fn(&serde_json::Value, &serde_json::Value) -> bool;
+type MigrationComparisonFn<T> = fn(&T, &T) -> bool;
 
-// MigrationImplFn represents the user defined migration operation function. This method is
-// expected to return a meaningful value if the function succeeds, and an error otherwise.
-type MigrationImplFn = Arc<dyn Fn(&serde_json::Value) -> MigrationResult + Send + Sync>;
-
-struct MigrationConfig {
-    old: MigrationImplFn,
-    new: MigrationImplFn,
-    compare: Option<MigrationComparisonFn>,
+struct MigrationConfig<T, FO, FN>
+where
+    T: Send + Sync,
+    FO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
+    old: FO,
+    new: FN,
+    compare: Option<MigrationComparisonFn<T>>,
 }
 
 /// Migrator represents the interface through which migration support is executed.
-pub trait Migrator {
-    /// read uses the provided flag key and context to execute a migration-backed read operation.
-    fn read(
-        &self,
-        key: String,
-        context: Context,
-        default_stage: Stage,
-        payload: serde_json::Value,
-    ) -> MigrationOriginResult;
-
-    /// write uses the provided flag key and context to execute a migration-backed write operation.
-    fn write(
-        &self,
-        key: String,
-        context: Context,
-        default_stage: Stage,
-        payload: serde_json::Value,
-    ) -> MigrationWriteResult;
-}
+// pub trait Migrator {
+//     /// read uses the provided flag key and context to execute a migration-backed read operation.
+//     fn read(
+//         &self,
+//         key: String,
+//         context: Context,
+//         default_stage: Stage,
+//         payload: serde_json::Value,
+//     ) -> impl Future<Output = MigrationOriginResult>;
+//
+//     /// write uses the provided flag key and context to execute a migration-backed write operation.
+//     fn write(
+//         &self,
+//         key: String,
+//         context: Context,
+//         default_stage: Stage,
+//         payload: serde_json::Value,
+//     ) -> impl Future<Output = MigrationWriteResult>;
+// }
 
 /// The migration builder is used to configure and construct an instance of a [Migrator]. This
 /// migrator can be used to perform LaunchDarkly assisted technology migrations through the use of
 /// migration-based feature flags.
-pub struct MigratorBuilder {
+pub struct MigratorBuilder<T, FRO, FRN, FWO, FWN>
+where
+    T: Send + Sync,
+    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
     client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
 
-    read_config: Option<MigrationConfig>,
-    write_config: Option<MigrationConfig>,
+    read_config: Option<MigrationConfig<T, FRO, FRN>>,
+    write_config: Option<MigrationConfig<T, FWO, FWN>>,
 }
 
-impl MigratorBuilder {
+impl<T, FRO, FRN, FWO, FWN> MigratorBuilder<T, FRO, FRN, FWO, FWN>
+where
+    T: Send + Sync,
+    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
     /// Create a new migrator builder instance with the provided client.
     pub fn new(client: Arc<Client>) -> Self {
         MigratorBuilder {
@@ -123,12 +144,7 @@ impl MigratorBuilder {
     /// comparison function.
     ///
     /// Depending on the migration stage, one or both of these read methods may be called.
-    pub fn read(
-        mut self,
-        old: MigrationImplFn,
-        new: MigrationImplFn,
-        compare: Option<MigrationComparisonFn>,
-    ) -> Self {
+    pub fn read(mut self, old: FRO, new: FRN, compare: Option<MigrationComparisonFn<T>>) -> Self {
         self.read_config = Some(MigrationConfig { old, new, compare });
         self
     }
@@ -140,7 +156,7 @@ impl MigratorBuilder {
     /// migration origin, and one to write to the new origin. Not every stage requires
     ///
     /// Depending on the migration stage, one or both of these write methods may be called.
-    pub fn write(mut self, old: MigrationImplFn, new: MigrationImplFn) -> Self {
+    pub fn write(mut self, old: FWO, new: FWN) -> Self {
         self.write_config = Some(MigrationConfig {
             old,
             new,
@@ -153,42 +169,56 @@ impl MigratorBuilder {
 
     /// Build constructs a [Migrations::Migrator] instance to support migration-based reads and
     /// writes. A string describing any failure conditions will be returned if the build fails.
-    pub fn build(self) -> Result<Box<dyn Migrator>, String> {
+    pub fn build(self) -> Result<Migrator<T, FRO, FRN, FWO, FWN>, String> {
         let read_config = self.read_config.ok_or("read configuration not provided")?;
         let write_config = self
             .write_config
             .ok_or("write configuration not provided")?;
 
-        Ok(Box::new(MigratorImpl::new(
+        Ok(Migrator::new(
             self.client,
             self.read_execution_order,
             self.measure_latency,
             self.measure_errors,
             read_config,
             write_config,
-        )))
+        ))
     }
 }
 
-struct MigratorImpl {
+pub struct Migrator<T, FRO, FRN, FWO, FWN>
+where
+    T: Send + Sync,
+    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
     client: Arc<Client>,
     read_execution_order: ExecutionOrder,
     measure_latency: bool,
     measure_errors: bool,
-    read_config: MigrationConfig,
-    write_config: MigrationConfig,
+    read_config: MigrationConfig<T, FRO, FRN>,
+    write_config: MigrationConfig<T, FWO, FWN>,
 }
 
-impl MigratorImpl {
+impl<T, FRO, FRN, FWO, FWN> Migrator<T, FRO, FRN, FWO, FWN>
+where
+    T: Send + Sync,
+    FRO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FRN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWO: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FWN: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
     fn new(
         client: Arc<Client>,
         read_execution_order: ExecutionOrder,
         measure_latency: bool,
         measure_errors: bool,
-        read_config: MigrationConfig,
-        write_config: MigrationConfig,
+        read_config: MigrationConfig<T, FRO, FRN>,
+        write_config: MigrationConfig<T, FWO, FWN>,
     ) -> Self {
-        MigratorImpl {
+        Migrator {
             client,
             read_execution_order,
             measure_latency,
@@ -197,16 +227,14 @@ impl MigratorImpl {
             write_config,
         }
     }
-}
 
-impl Migrator for MigratorImpl {
-    fn read(
+    pub async fn read(
         &self,
         key: String,
         context: Context,
         default_stage: Stage,
-        payload: serde_json::Value,
-    ) -> MigrationOriginResult {
+        payload: T,
+    ) -> MigrationOriginResult<T> {
         let (stage, mut tracker) = self
             .client
             .migration_variation(&context, &key, default_stage);
@@ -220,7 +248,7 @@ impl Migrator for MigratorImpl {
             tracker: tracker.clone(),
             measure_latency: self.measure_latency,
             measure_errors: self.measure_errors,
-            payload: payload.clone(),
+            payload: &payload,
         };
         let mut new = Executor {
             origin: Origin::New,
@@ -228,28 +256,34 @@ impl Migrator for MigratorImpl {
             tracker: tracker.clone(),
             measure_latency: self.measure_latency,
             measure_errors: self.measure_errors,
-            payload,
+            payload: &payload,
         };
 
         let result = match stage {
-            Stage::Off => old.run(),
-            Stage::DualWrite => old.run(),
-            Stage::Shadow => Executor::read_both(
-                old,
-                new,
-                self.read_config.compare,
-                self.read_execution_order,
-                tracker.clone(),
-            ),
-            Stage::Live => Executor::read_both(
-                new,
-                old,
-                self.read_config.compare,
-                self.read_execution_order,
-                tracker.clone(),
-            ),
-            Stage::Rampdown => new.run(),
-            Stage::Complete => new.run(),
+            Stage::Off => old.run().await,
+            Stage::DualWrite => old.run().await,
+            Stage::Shadow => {
+                read_both(
+                    old,
+                    new,
+                    self.read_config.compare,
+                    self.read_execution_order,
+                    tracker.clone(),
+                )
+                .await
+            }
+            Stage::Live => {
+                read_both(
+                    new,
+                    old,
+                    self.read_config.compare,
+                    self.read_execution_order,
+                    tracker.clone(),
+                )
+                .await
+            }
+            Stage::Rampdown => new.run().await,
+            Stage::Complete => new.run().await,
         };
 
         self.client.track_migration_op(tracker);
@@ -257,13 +291,13 @@ impl Migrator for MigratorImpl {
         result
     }
 
-    fn write(
+    pub async fn write(
         &self,
         key: String,
         context: Context,
         default_stage: Stage,
-        payload: serde_json::Value,
-    ) -> MigrationWriteResult {
+        payload: T,
+    ) -> MigrationWriteResult<T> {
         let (stage, mut tracker) = self
             .client
             .migration_variation(&context, &key, default_stage);
@@ -277,7 +311,7 @@ impl Migrator for MigratorImpl {
             tracker: tracker.clone(),
             measure_latency: self.measure_latency,
             measure_errors: self.measure_errors,
-            payload: payload.clone(),
+            payload: &payload,
         };
         let mut new = Executor {
             origin: Origin::New,
@@ -285,20 +319,20 @@ impl Migrator for MigratorImpl {
             tracker: tracker.clone(),
             measure_latency: self.measure_latency,
             measure_errors: self.measure_errors,
-            payload,
+            payload: &payload,
         };
 
         let result = match stage {
             Stage::Off => MigrationWriteResult {
-                authoritative: old.run(),
+                authoritative: old.run().await,
                 nonauthoritative: None,
             },
-            Stage::DualWrite => Executor::write_both(old, new),
-            Stage::Shadow => Executor::write_both(old, new),
-            Stage::Live => Executor::write_both(new, old),
-            Stage::Rampdown => Executor::write_both(new, old),
+            Stage::DualWrite => write_both(old, new).await,
+            Stage::Shadow => write_both(old, new).await,
+            Stage::Live => write_both(new, old).await,
+            Stage::Rampdown => write_both(new, old).await,
             Stage::Complete => MigrationWriteResult {
-                authoritative: new.run(),
+                authoritative: new.run().await,
                 nonauthoritative: None,
             },
         };
@@ -309,92 +343,115 @@ impl Migrator for MigratorImpl {
     }
 }
 
-struct Executor<'a> {
+async fn read_both<T, FA, FB>(
+    mut authoritative: Executor<'_, T, FA>,
+    mut nonauthoritative: Executor<'_, T, FB>,
+    compare: Option<MigrationComparisonFn<T>>,
+    execution_order: ExecutionOrder,
+    tracker: Arc<Mutex<MigrationOpTracker>>,
+) -> MigrationOriginResult<T>
+where
+    T: Send + Sync,
+    FA: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FB: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
+    let authoritative_result: MigrationOriginResult<T>;
+    let nonauthoritative_result: MigrationOriginResult<T>;
+
+    match execution_order {
+        ExecutionOrder::Parallel => {
+            let auth_handle = authoritative.run().boxed();
+            let nonauth_handle = nonauthoritative.run().boxed();
+            let handles = vec![auth_handle, nonauth_handle];
+
+            let mut results = join_all(handles).await;
+
+            // Note that we are doing this is the reverse order of the handles since we are
+            // popping the results off the end of the vector.
+            nonauthoritative_result = results.pop().unwrap_or_else(|| MigrationOriginResult {
+                origin: nonauthoritative.origin,
+                result: Err("Failed to execute non-authoritative read".into()),
+            });
+
+            authoritative_result = results.pop().unwrap_or_else(|| MigrationOriginResult {
+                origin: authoritative.origin,
+                result: Err("Failed to execute authoritative read".into()),
+            });
+        }
+        // TODO: Add a sampler.sample(2) style call
+        ExecutionOrder::Random => {
+            nonauthoritative_result = nonauthoritative.run().await;
+            authoritative_result = authoritative.run().await;
+        }
+        ExecutionOrder::Serial => {
+            authoritative_result = authoritative.run().await;
+            nonauthoritative_result = nonauthoritative.run().await;
+        }
+    };
+
+    if let Some(compare) = compare {
+        if let (Ok(authoritative), Ok(nonauthoritative)) = (
+            &authoritative_result.result,
+            &nonauthoritative_result.result,
+        ) {
+            if let Ok(mut tracker) = tracker.lock() {
+                tracker.consistent(|| compare(authoritative, nonauthoritative));
+            } else {
+                error!("Failed to acquire tracker lock. Cannot track consistency.");
+            }
+        }
+    }
+
+    authoritative_result
+}
+
+async fn write_both<T, FA, FB>(
+    mut authoritative: Executor<'_, T, FA>,
+    mut nonauthoritative: Executor<'_, T, FB>,
+) -> MigrationWriteResult<T>
+where
+    T: Send + Sync,
+    FA: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+    FB: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
+    let authoritative_result = authoritative.run().await;
+
+    if authoritative_result.result.is_err() {
+        return MigrationWriteResult {
+            authoritative: authoritative_result,
+            nonauthoritative: None,
+        };
+    }
+
+    let nonauthoritative_result = nonauthoritative.run().await;
+
+    MigrationWriteResult {
+        authoritative: authoritative_result,
+        nonauthoritative: Some(nonauthoritative_result),
+    }
+}
+
+struct Executor<'a, T, F>
+where
+    T: Send + Sync,
+    F: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
     origin: Origin,
-    function: &'a MigrationImplFn,
+    function: &'a F,
     tracker: Arc<Mutex<MigrationOpTracker>>,
     measure_latency: bool,
     measure_errors: bool,
-    payload: serde_json::Value,
+    payload: &'a T,
 }
 
-impl Executor<'_> {
-    fn read_both(
-        mut authoritative: Executor,
-        mut nonauthoritative: Executor,
-        compare: Option<MigrationComparisonFn>,
-        execution_order: ExecutionOrder,
-        tracker: Arc<Mutex<MigrationOpTracker>>,
-    ) -> MigrationOriginResult {
-        let authoritative_result: MigrationOriginResult;
-        let nonauthoritative_result: MigrationOriginResult;
-
-        match execution_order {
-            ExecutionOrder::Parallel => {
-                let result = thread::scope(|s| {
-                    let authoritative_handler = s.spawn(|| authoritative.run());
-                    let nonauthoritative_handler = s.spawn(|| nonauthoritative.run());
-
-                    (
-                        authoritative_handler.join().unwrap(),
-                        nonauthoritative_handler.join().unwrap(),
-                    )
-                });
-
-                authoritative_result = result.0;
-                nonauthoritative_result = result.1;
-            }
-            // TODO: Add a sampler.sample(2) style call
-            ExecutionOrder::Random => {
-                nonauthoritative_result = nonauthoritative.run();
-                authoritative_result = authoritative.run();
-            }
-            ExecutionOrder::Serial => {
-                authoritative_result = authoritative.run();
-                nonauthoritative_result = nonauthoritative.run();
-            }
-        };
-
-        if let Some(compare) = compare {
-            if let (Ok(authoritative), Ok(nonauthoritative)) = (
-                &authoritative_result.result,
-                &nonauthoritative_result.result,
-            ) {
-                if let Ok(mut tracker) = tracker.lock() {
-                    tracker.consistent(|| compare(authoritative, nonauthoritative));
-                } else {
-                    error!("Failed to acquire tracker lock. Cannot track consistency.");
-                }
-            }
-        }
-
-        authoritative_result
-    }
-
-    fn write_both(
-        mut authoritative: Executor,
-        mut nonauthoritative: Executor,
-    ) -> MigrationWriteResult {
-        let authoritative_result = authoritative.run();
-
-        if authoritative_result.result.is_err() {
-            return MigrationWriteResult {
-                authoritative: authoritative_result,
-                nonauthoritative: None,
-            };
-        }
-
-        let nonauthoritative_result = nonauthoritative.run();
-
-        MigrationWriteResult {
-            authoritative: authoritative_result,
-            nonauthoritative: Some(nonauthoritative_result),
-        }
-    }
-
-    fn run(&mut self) -> MigrationOriginResult {
+impl<'a, T, F> Executor<'a, T, F>
+where
+    T: Send + Sync,
+    F: Fn(&T) -> BoxFuture<MigrationResult<T>> + Sync + Send,
+{
+    async fn run(&mut self) -> MigrationOriginResult<T> {
         let start = Instant::now();
-        let result = (self.function)(&self.payload);
+        let result = (self.function)(self.payload).await;
         let elapsed = start.elapsed();
 
         let result = match self.tracker.lock() {
@@ -431,23 +488,9 @@ mod tests {
     use crate::{
         migrations::migrator::MigratorBuilder, Client, ConfigBuilder, ExecutionOrder, Stage,
     };
+    use futures::future::FutureExt;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use test_case::test_case;
-
-    fn default_builder(client: Arc<Client>) -> MigratorBuilder {
-        MigratorBuilder::new(client)
-            .track_latency(false)
-            .track_errors(false)
-            .read(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Some(|_, _| true),
-            )
-            .write(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-            )
-    }
 
     #[test]
     fn can_build_successfully() {
@@ -457,13 +500,25 @@ mod tests {
             .expect("config failed to build");
 
         let client = Arc::new(Client::build(config).expect("client failed to build"));
-        let migrator = default_builder(client).build();
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .read(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+                Some(|_, _| true),
+            )
+            .write(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+            )
+            .build();
 
         assert!(migrator.is_ok());
     }
 
-    #[test]
-    fn read_passes_payload_through() {
+    #[tokio::test]
+    async fn read_passes_payload_through() {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -475,88 +530,56 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = default_builder(client)
-            .read_execution_order(ExecutionOrder::Serial)
-            .read(
-                Arc::new(move |payload| {
-                    old_sender.send(payload.clone()).unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(move |payload| {
-                    new_sender.send(payload.clone()).unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
-                None,
-            )
-            .build()
-            .expect("migrator failed to build");
-
-        let _result = migrator.read(
-            "migration-key".into(),
-            ContextBuilder::new("user-key")
-                .build()
-                .expect("context failed to build"),
-            crate::Stage::Shadow,
-            "payload".into(),
-        );
-
-        let old_payload = receiver.recv().unwrap();
-        let new_payload = receiver.recv().unwrap();
-
-        assert_eq!(old_payload, "payload");
-        assert_eq!(new_payload, "payload");
-    }
-
-    #[test]
-    fn write_passes_payload_through() {
-        let config = ConfigBuilder::new("sdk-key")
-            .offline(true)
-            .build()
-            .expect("config failed to build");
-
-        let client = Arc::new(Client::build(config).expect("client failed to build"));
-        client.start_with_default_executor();
-
-        let (sender, receiver) = mpsc::channel();
-        let old_sender = sender.clone();
-        let new_sender = sender.clone();
-        let migrator = default_builder(client)
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
             .write(
-                Arc::new(move |payload| {
-                    old_sender.send(payload.clone()).unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(move |payload| {
-                    new_sender.send(payload.clone()).unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
+                |_| async move { Ok(0) }.boxed(),
+                |_| async move { Ok(0) }.boxed(),
+            )
+            .read_execution_order(ExecutionOrder::Serial)
+            .read(
+                move |&payload| {
+                    let old_sender = old_sender.clone();
+                    async move {
+                        old_sender.send(payload).unwrap();
+                        Ok(0)
+                    }
+                    .boxed()
+                },
+                move |&payload| {
+                    let new_sender = new_sender.clone();
+                    async move {
+                        new_sender.send(payload).unwrap();
+                        Ok(0)
+                    }
+                    .boxed()
+                },
+                None,
             )
             .build()
             .expect("migrator failed to build");
 
-        let _result = migrator.write(
-            "migration-key".into(),
-            ContextBuilder::new("user-key")
-                .build()
-                .expect("context failed to build"),
-            crate::Stage::Shadow,
-            "payload".into(),
-        );
+        let _result = migrator
+            .read(
+                "migration-key".into(),
+                ContextBuilder::new("user-key")
+                    .build()
+                    .expect("context failed to build"),
+                crate::Stage::Shadow,
+                1,
+            )
+            .await;
 
         let old_payload = receiver.recv().unwrap();
         let new_payload = receiver.recv().unwrap();
 
-        assert_eq!(old_payload, "payload");
-        assert_eq!(new_payload, "payload");
+        assert_eq!(old_payload, 1);
+        assert_eq!(new_payload, 1);
     }
 
-    #[test_case(Stage::Off, true, false)]
-    #[test_case(Stage::DualWrite, true, false)]
-    #[test_case(Stage::Shadow, true, true)]
-    #[test_case(Stage::Live, true, true)]
-    #[test_case(Stage::Rampdown, false, true)]
-    #[test_case(Stage::Complete, false, true)]
-    fn read_handles_correct_origin(stage: Stage, expected_old: bool, expected_new: bool) {
+    #[tokio::test]
+    async fn write_passes_payload_through() {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -568,30 +591,119 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = default_builder(client)
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .read(
+                |_| async move { Ok(0) }.boxed(),
+                |_| async move { Ok(0) }.boxed(),
+                Some(|_, _| true),
+            )
+            .write(
+                move |&payload| {
+                    let old_sender = old_sender.clone();
+                    async move {
+                        old_sender.send(payload).unwrap();
+                        Ok(0)
+                    }
+                    .boxed()
+                },
+                move |&payload| {
+                    let new_sender = new_sender.clone();
+                    async move {
+                        new_sender.send(payload).unwrap();
+                        Ok(0)
+                    }
+                    .boxed()
+                },
+            )
+            .build()
+            .expect("migrator failed to build");
+
+        let _result = migrator
+            .write(
+                "migration-key".into(),
+                ContextBuilder::new("user-key")
+                    .build()
+                    .expect("context failed to build"),
+                crate::Stage::Shadow,
+                1,
+            )
+            .await;
+
+        let old_payload = receiver.recv().unwrap();
+        let new_payload = receiver.recv().unwrap();
+
+        assert_eq!(old_payload, 1);
+        assert_eq!(new_payload, 1);
+    }
+
+    #[tokio::test]
+    async fn read_handles_correct_origin() {
+        read_handles_correct_origin_driver(Stage::Off, true, false).await;
+        read_handles_correct_origin_driver(Stage::DualWrite, true, false).await;
+        read_handles_correct_origin_driver(Stage::Shadow, true, true).await;
+        read_handles_correct_origin_driver(Stage::Live, true, true).await;
+        read_handles_correct_origin_driver(Stage::Rampdown, false, true).await;
+        read_handles_correct_origin_driver(Stage::Complete, false, true).await;
+    }
+
+    async fn read_handles_correct_origin_driver(
+        stage: Stage,
+        expected_old: bool,
+        expected_new: bool,
+    ) {
+        let config = ConfigBuilder::new("sdk-key")
+            .offline(true)
+            .build()
+            .expect("config failed to build");
+
+        let client = Arc::new(Client::build(config).expect("client failed to build"));
+        client.start_with_default_executor();
+
+        let (sender, receiver) = mpsc::channel();
+        let old_sender = sender.clone();
+        let new_sender = sender.clone();
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .write(
+                |_| async move { Ok("write") }.boxed(),
+                |_| async move { Ok("write") }.boxed(),
+            )
             .read_execution_order(ExecutionOrder::Serial)
             .read(
-                Arc::new(move |_| {
-                    old_sender.send("old").unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(move |_| {
-                    new_sender.send("new").unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
+                move |_| {
+                    let old_sender = old_sender.clone();
+                    async move {
+                        old_sender.send("old").unwrap();
+                        Ok("read")
+                    }
+                    .boxed()
+                },
+                move |_| {
+                    let new_sender = new_sender.clone();
+                    async move {
+                        new_sender.send("new").unwrap();
+                        Ok("read")
+                    }
+                    .boxed()
+                },
                 None,
             )
             .build()
             .expect("migrator failed to build");
 
-        let _result = migrator.read(
-            "migration-key".into(),
-            ContextBuilder::new("user-key")
-                .build()
-                .expect("context failed to build"),
-            stage,
-            "payload".into(),
-        );
+        let _result = migrator
+            .read(
+                "migration-key".into(),
+                ContextBuilder::new("user-key")
+                    .build()
+                    .expect("context failed to build"),
+                stage,
+                "payload",
+            )
+            .await;
 
         let payloads = receiver.try_iter().collect::<Vec<_>>();
 
@@ -608,8 +720,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn read_handles_parallel_execution() {
+    #[tokio::test]
+    async fn read_handles_parallel_execution() {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -618,39 +730,56 @@ mod tests {
         let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
-        let migrator = default_builder(client)
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .write(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+            )
             .read_execution_order(ExecutionOrder::Parallel)
             .read(
-                Arc::new(|_| {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(|_| {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                    Ok(serde_json::Value::Null)
-                }),
+                |_| {
+                    async move {
+                        async_std::task::sleep(std::time::Duration::from_millis(250)).await;
+                        Ok(())
+                    }
+                    .boxed()
+                },
+                |_| {
+                    async move {
+                        async_std::task::sleep(std::time::Duration::from_millis(250)).await;
+                        Ok(())
+                    }
+                    .boxed()
+                },
                 None,
             )
             .build()
             .expect("migrator failed to build");
 
         let start = Instant::now();
-        let _result = migrator.read(
-            "migration-key".into(),
-            ContextBuilder::new("user-key")
-                .build()
-                .expect("context failed to build"),
-            crate::Stage::Shadow,
-            "payload".into(),
-        );
+        let _result = migrator
+            .read(
+                "migration-key".into(),
+                ContextBuilder::new("user-key")
+                    .build()
+                    .expect("context failed to build"),
+                crate::Stage::Shadow,
+                (),
+            )
+            .await;
         let elapsed = start.elapsed();
-        println!("Elapsed: {:?}", elapsed);
         assert!(elapsed < Duration::from_millis(500));
     }
 
-    #[test_case(ExecutionOrder::Serial)]
-    #[test_case(ExecutionOrder::Random)]
-    fn read_handles_nonparallel_execution(execution_order: ExecutionOrder) {
+    #[tokio::test]
+    async fn read_handles_nonparallel_execution() {
+        read_handles_nonparallel_execution_driver(ExecutionOrder::Serial).await;
+        read_handles_nonparallel_execution_driver(ExecutionOrder::Random).await;
+    }
+
+    async fn read_handles_nonparallel_execution_driver(execution_order: ExecutionOrder) {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -659,42 +788,64 @@ mod tests {
         let client = Arc::new(Client::build(config).expect("client failed to build"));
         client.start_with_default_executor();
 
-        let migrator = default_builder(client)
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .write(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+            )
             .read_execution_order(execution_order)
             .read(
-                Arc::new(|_| {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(|_| {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                    Ok(serde_json::Value::Null)
-                }),
+                |_| {
+                    async move {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        Ok(())
+                    }
+                    .boxed()
+                },
+                |_| {
+                    async move {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        Ok(())
+                    }
+                    .boxed()
+                },
                 None,
             )
             .build()
             .expect("migrator failed to build");
 
         let start = Instant::now();
-        let _result = migrator.read(
-            "migration-key".into(),
-            ContextBuilder::new("user-key")
-                .build()
-                .expect("context failed to build"),
-            crate::Stage::Shadow,
-            "payload".into(),
-        );
+        let _result = migrator
+            .read(
+                "migration-key".into(),
+                ContextBuilder::new("user-key")
+                    .build()
+                    .expect("context failed to build"),
+                crate::Stage::Shadow,
+                (),
+            )
+            .await;
         let elapsed = start.elapsed();
         assert!(elapsed >= Duration::from_millis(500));
     }
 
-    #[test_case(Stage::Off, true, false)]
-    #[test_case(Stage::DualWrite, true, true)]
-    #[test_case(Stage::Shadow, true, true)]
-    #[test_case(Stage::Live, true, true)]
-    #[test_case(Stage::Rampdown, true, true)]
-    #[test_case(Stage::Complete, false, true)]
-    fn write_handles_correct_origin(stage: Stage, expected_old: bool, expected_new: bool) {
+    #[tokio::test]
+    async fn write_handles_correct_origin() {
+        write_handles_correct_origin_driver(Stage::Off, true, false).await;
+        write_handles_correct_origin_driver(Stage::DualWrite, true, true).await;
+        write_handles_correct_origin_driver(Stage::Shadow, true, true).await;
+        write_handles_correct_origin_driver(Stage::Live, true, true).await;
+        write_handles_correct_origin_driver(Stage::Rampdown, true, true).await;
+        write_handles_correct_origin_driver(Stage::Complete, false, true).await;
+    }
+
+    async fn write_handles_correct_origin_driver(
+        stage: Stage,
+        expected_old: bool,
+        expected_new: bool,
+    ) {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -706,28 +857,45 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = default_builder(client)
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .read(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+                Some(|_, _| true),
+            )
             .write(
-                Arc::new(move |_| {
-                    old_sender.send("old").unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
-                Arc::new(move |_| {
-                    new_sender.send("new").unwrap();
-                    Ok(serde_json::Value::Null)
-                }),
+                move |_| {
+                    let old_sender = old_sender.clone();
+                    async move {
+                        old_sender.send("old").unwrap();
+                        Ok(())
+                    }
+                    .boxed()
+                },
+                move |_| {
+                    let new_sender = new_sender.clone();
+                    async move {
+                        new_sender.send("new").unwrap();
+                        Ok(())
+                    }
+                    .boxed()
+                },
             )
             .build()
             .expect("migrator failed to build");
 
-        let _result = migrator.write(
-            "migration-key".into(),
-            ContextBuilder::new("user-key")
-                .build()
-                .expect("context failed to build"),
-            stage,
-            "payload".into(),
-        );
+        let _result = migrator
+            .write(
+                "migration-key".into(),
+                ContextBuilder::new("user-key")
+                    .build()
+                    .expect("context failed to build"),
+                stage,
+                (),
+            )
+            .await;
 
         let payloads = receiver.try_iter().collect::<Vec<_>>();
 
@@ -744,13 +912,25 @@ mod tests {
         }
     }
 
-    // #[test_case(Stage::Off, true, false)]
-    #[test_case(Stage::DualWrite, true, false)]
-    #[test_case(Stage::Shadow, true, false)]
-    #[test_case(Stage::Live, false, true)]
-    #[test_case(Stage::Rampdown, false, true)]
-    // #[test_case(Stage::Complete, false, true)]
-    fn write_stops_if_authoritative_fails(stage: Stage, expected_old: bool, expected_new: bool) {
+    #[tokio::test]
+    async fn write_stops_if_authoritative_fails() {
+        // doesn't write to new if old fails
+        // write_stops_if_authoritative_fails_driver(Stage::Off, true, false).await;
+
+        write_stops_if_authoritative_fails_driver(Stage::DualWrite, true, false).await;
+        write_stops_if_authoritative_fails_driver(Stage::Shadow, true, false).await;
+        write_stops_if_authoritative_fails_driver(Stage::Live, false, true).await;
+        write_stops_if_authoritative_fails_driver(Stage::Rampdown, false, true).await;
+
+        // doesn't write to old if new fails
+        // write_stops_if_authoritative_fails_driver(Stage::Complete, false, true).await;
+    }
+
+    async fn write_stops_if_authoritative_fails_driver(
+        stage: Stage,
+        expected_old: bool,
+        expected_new: bool,
+    ) {
         let config = ConfigBuilder::new("sdk-key")
             .offline(true)
             .build()
@@ -762,28 +942,45 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let old_sender = sender.clone();
         let new_sender = sender.clone();
-        let migrator = default_builder(client)
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .read(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+                Some(|_, _| true),
+            )
             .write(
-                Arc::new(move |_| {
-                    old_sender.send("old").unwrap();
-                    Err("error".into())
-                }),
-                Arc::new(move |_| {
-                    new_sender.send("new").unwrap();
-                    Err("error".into())
-                }),
+                move |_| {
+                    let old_sender = old_sender.clone();
+                    async move {
+                        old_sender.send("old").unwrap();
+                        Err("error".into())
+                    }
+                    .boxed()
+                },
+                move |_| {
+                    let new_sender = new_sender.clone();
+                    async move {
+                        new_sender.send("new").unwrap();
+                        Err("error".into())
+                    }
+                    .boxed()
+                },
             )
             .build()
             .expect("migrator failed to build");
 
-        let _result = migrator.write(
-            "migration-key".into(),
-            ContextBuilder::new("user-key")
-                .build()
-                .expect("context failed to build"),
-            stage,
-            "payload".into(),
-        );
+        let _result = migrator
+            .write(
+                "migration-key".into(),
+                ContextBuilder::new("user-key")
+                    .build()
+                    .expect("context failed to build"),
+                stage,
+                (),
+            )
+            .await;
 
         let payloads = receiver.try_iter().collect::<Vec<_>>();
 
@@ -810,49 +1007,21 @@ mod tests {
             .expect("config failed to build");
 
         let client = Arc::new(Client::build(config).expect("client failed to build"));
-        let migrator = default_builder(client)
+        let migrator = MigratorBuilder::new(client)
+            .track_latency(false)
+            .track_errors(false)
+            .read(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+                Some(|_, _| true),
+            )
+            .write(
+                |_| async move { Ok(()) }.boxed(),
+                |_| async move { Ok(()) }.boxed(),
+            )
             .read_execution_order(execution_order)
             .build();
 
         assert!(migrator.is_ok());
-    }
-
-    #[test]
-    fn build_will_fail_without_read_config() {
-        let config = ConfigBuilder::new("sdk-key")
-            .offline(true)
-            .build()
-            .expect("config failed to build");
-
-        let client = Arc::new(Client::build(config).expect("client failed to build"));
-        let migrator = MigratorBuilder::new(client)
-            .write(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-            )
-            .build();
-
-        assert!(migrator.is_err());
-        assert_eq!(migrator.err().unwrap(), "read configuration not provided");
-    }
-
-    #[test]
-    fn build_will_fail_without_write_config() {
-        let config = ConfigBuilder::new("sdk-key")
-            .offline(true)
-            .build()
-            .expect("config failed to build");
-
-        let client = Arc::new(Client::build(config).expect("client failed to build"));
-        let migrator = MigratorBuilder::new(client)
-            .read(
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Arc::new(|_| Ok(serde_json::Value::Null)),
-                Some(|_, _| true),
-            )
-            .build();
-
-        assert!(migrator.is_err());
-        assert_eq!(migrator.err().unwrap(), "write configuration not provided");
     }
 }

@@ -55,11 +55,12 @@ pub struct EventProcessorImpl {
 impl EventProcessorImpl {
     pub fn new(events_configuration: EventsConfiguration) -> Result<Self, EventProcessorError> {
         let (inbox_tx, inbox_rx) = bounded(events_configuration.capacity);
-
-        match thread::Builder::new().spawn(move || {
+        let dispatch_start = move || {
             let mut dispatcher = EventDispatcher::new(events_configuration);
             dispatcher.start(inbox_rx)
-        }) {
+        };
+
+        match thread::Builder::new().spawn(dispatch_start) {
             Ok(_) => Ok(Self {
                 inbox_tx,
                 inbox_full_once: Once::new(),
