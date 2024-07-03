@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Mutex,
     time::Duration,
 };
 
@@ -14,8 +13,8 @@ use crate::{
 
 use super::{Operation, Origin, Stage};
 
-/// An MigrationOpTracker is responsible for managing the collection of measurements that which a user might wish to record
-/// throughout a migration-assisted operation.
+/// A MigrationOpTracker is responsible for managing the collection of measurements that a user
+/// might wish to record throughout a migration-assisted operation.
 ///
 /// Example measurements include latency, errors, and consistency.
 pub struct MigrationOpTracker {
@@ -24,8 +23,6 @@ pub struct MigrationOpTracker {
     context: Context,
     detail: Detail<Stage>,
     default_stage: Stage,
-
-    mutex: Mutex<()>,
     operation: Option<Operation>,
     invoked: HashSet<Origin>,
     consistent: Option<bool>,
@@ -56,7 +53,6 @@ impl MigrationOpTracker {
             context,
             detail,
             default_stage,
-            mutex: Mutex::new(()),
             operation: None,
             invoked: HashSet::new(),
             consistent: None,
@@ -68,22 +64,12 @@ impl MigrationOpTracker {
 
     /// Sets the migration related operation associated with these tracking measurements.
     pub fn operation(&mut self, operation: Operation) {
-        match self.mutex.lock() {
-            Ok(_guard) => self.operation = Some(operation),
-            Err(e) => {
-                error!("failed to acquire lock for operation tracking: {}", e);
-            }
-        }
+        self.operation = Some(operation);
     }
 
     /// Allows recording which origins were called during a migration.
     pub fn invoked(&mut self, origin: Origin) {
-        match self.mutex.lock() {
-            Ok(_guard) => _ = self.invoked.insert(origin),
-            Err(e) => {
-                error!("failed to acquire lock for invocation tracking: {}", e);
-            }
-        }
+        self.invoked.insert(origin);
     }
 
     /// This method accepts a callable which should take no parameters and return a single boolean
@@ -92,26 +78,14 @@ impl MigrationOpTracker {
     /// A callable is provided in case sampling rules do not require consistency checking to run.
     /// In this case, we can avoid the overhead of a function by not using the callable.
     pub fn consistent(&mut self, is_consistent: impl Fn() -> bool) {
-        match self.mutex.lock() {
-            Ok(_guard) => {
-                if ThreadRngSampler::new(thread_rng()).sample(self.consistent_ratio.unwrap_or(1)) {
-                    self.consistent = Some(is_consistent());
-                }
-            }
-            Err(e) => {
-                error!("failed to acquire lock for consistency tracking: {}", e);
-            }
+        if ThreadRngSampler::new(thread_rng()).sample(self.consistent_ratio.unwrap_or(1)) {
+            self.consistent = Some(is_consistent());
         }
     }
 
     /// Allows recording which origins were called during a migration.
     pub fn error(&mut self, origin: Origin) {
-        match self.mutex.lock() {
-            Ok(_guard) => _ = self.errors.insert(origin),
-            Err(e) => {
-                error!("failed to acquire lock for invocation tracking: {}", e);
-            }
-        }
+        self.errors.insert(origin);
     }
 
     /// Allows tracking the recorded latency for an individual operation.
@@ -120,23 +94,13 @@ impl MigrationOpTracker {
             return;
         }
 
-        match self.mutex.lock() {
-            Ok(_guard) => _ = self.latencies.insert(origin, latency),
-            Err(e) => {
-                error!("failed to acquire lock for latency tracking: {}", e);
-            }
-        }
+        self.latencies.insert(origin, latency);
     }
 
     /// Creates an instance of [crate::MigrationOpEvent]. This event data can be
     /// provided to the [crate::Client::track_migration_op] method to rely this metric
     /// information upstream to LaunchDarkly services.
     pub fn build(&self) -> Result<MigrationOpEvent, String> {
-        let _guard = self
-            .mutex
-            .lock()
-            .map_err(|e| format!("failed to acquire lock for building event: {:?}", e))?;
-
         let operation = self
             .operation
             .ok_or_else(|| "operation not provided".to_string())?;

@@ -1,5 +1,5 @@
 use launchdarkly_server_sdk::{
-    AttributeValue, Context, FlagDetail, FlagValue, Operation, Reason, Stage,
+    AttributeValue, Context, ExecutionOrder, FlagDetail, FlagValue, Operation, Reason, Stage,
 };
 use serde::{self, Deserialize, Serialize};
 use std::collections::HashMap;
@@ -157,7 +157,7 @@ pub struct MigrationOperationParams {
     pub key: String,
     pub context: Context,
     pub default_stage: Stage,
-    pub read_execution_order: String,
+    pub read_execution_order: ExecutionOrder,
     pub operation: Operation,
     pub old_endpoint: String,
     pub new_endpoint: String,
