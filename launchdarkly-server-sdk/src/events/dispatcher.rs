@@ -223,10 +223,7 @@ impl EventDispatcher {
                 if self.events_configuration.omit_anonymous_contexts {
                     match identify.base.context.without_anonymous_contexts() {
                         Ok(context) => identify.base.context = context,
-                        Err(e) => {
-                            error!("Failed to omit anonymous contexts: {}", e);
-                            return;
-                        }
+                        Err(_) => return,
                     }
                 }
 
