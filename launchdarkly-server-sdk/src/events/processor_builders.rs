@@ -83,6 +83,7 @@ pub struct EventProcessorBuilder<C> {
     all_attributes_private: bool,
     private_attributes: HashSet<Reference>,
     connector: Option<C>,
+    omit_anonymous_contexts: bool,
     // diagnostic_recording_interval: Duration
 }
 
@@ -149,6 +150,7 @@ where
             context_keys_flush_interval: self.context_keys_flush_interval,
             all_attributes_private: self.all_attributes_private,
             private_attributes: self.private_attributes.clone(),
+            omit_anonymous_contexts: self.omit_anonymous_contexts,
         };
 
         let events_processor =
@@ -174,6 +176,7 @@ impl<C> EventProcessorBuilder<C> {
             event_sender: None,
             all_attributes_private: false,
             private_attributes: HashSet::new(),
+            omit_anonymous_contexts: false,
             connector: None,
         }
     }
@@ -243,6 +246,15 @@ impl<C> EventProcessorBuilder<C> {
     /// certificates is a substantial portion of the runtime.
     pub fn https_connector(&mut self, connector: C) -> &mut Self {
         self.connector = Some(connector);
+        self
+    }
+
+    /// Sets whether anonymous contexts should be omitted from index and identify events.
+    ///
+    /// The default is false, meaning that anonymous contexts will be included in index and
+    /// identify events.
+    pub fn omit_anonymous_contexts(&mut self, omit: bool) -> &mut Self {
+        self.omit_anonymous_contexts = omit;
         self
     }
 

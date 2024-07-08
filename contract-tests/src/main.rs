@@ -42,6 +42,8 @@ pub struct EventParameters {
     pub all_attributes_private: bool,
     pub global_private_attributes: Option<HashSet<Reference>>,
     pub flush_interval_ms: Option<u64>,
+    #[serde(default = "bool::default")]
+    pub omit_anonymous_contexts: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -103,6 +105,7 @@ async fn status() -> impl Responder {
             "secure-mode-hash".to_string(),
             "inline-context".to_string(),
             "anonymous-redaction".to_string(),
+            "omit-anonymous-contexts".to_string(),
         ],
     })
 }

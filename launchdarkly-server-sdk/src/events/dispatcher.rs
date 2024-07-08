@@ -1,12 +1,10 @@
 use crossbeam_channel::{bounded, select, tick, Receiver, Sender};
-use std::collections::HashSet;
-use std::iter::FromIterator;
 use std::time::SystemTime;
 
 use launchdarkly_server_sdk_evaluation::Context;
 use lru::LruCache;
 
-use super::event::FeatureRequestEvent;
+use super::event::{BaseEvent, FeatureRequestEvent, IndexEvent};
 use super::sender::EventSenderResult;
 use super::{
     event::{EventSummary, InputEvent, OutputEvent},
@@ -192,11 +190,13 @@ impl EventDispatcher {
                     self.events_configuration.private_attributes.clone(),
                 );
 
-                if self.notice_context(&fre.base.context) {
-                    self.outbox.add_event(OutputEvent::Index(fre.to_index_event(
+                if let Some(context) = self.get_indexable_context(&fre.base) {
+                    let base = BaseEvent::new(fre.base.creation_date, context).into_inline(
                         self.events_configuration.all_attributes_private,
                         self.events_configuration.private_attributes.clone(),
-                    )));
+                    );
+                    self.outbox
+                        .add_event(OutputEvent::Index(IndexEvent::from(base)));
                 }
 
                 let now = match SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
@@ -219,28 +219,54 @@ impl EventDispatcher {
                     self.outbox.add_event(OutputEvent::FeatureRequest(inlined));
                 }
             }
-            InputEvent::Identify(identify) => {
+            InputEvent::Identify(mut identify) => {
+                if self.events_configuration.omit_anonymous_contexts {
+                    match identify.base.context.without_anonymous_contexts() {
+                        Ok(context) => identify.base.context = context,
+                        Err(e) => {
+                            error!("Failed to omit anonymous contexts: {}", e);
+                            return;
+                        }
+                    }
+                }
+
                 self.notice_context(&identify.base.context);
                 self.outbox
                     .add_event(OutputEvent::Identify(identify.into_inline(
                         self.events_configuration.all_attributes_private,
-                        HashSet::from_iter(
-                            self.events_configuration.private_attributes.iter().cloned(),
-                        ),
+                        self.events_configuration.private_attributes.clone(),
                     )));
             }
             InputEvent::Custom(custom) => {
-                if self.notice_context(&custom.base.context) {
+                if let Some(context) = self.get_indexable_context(&custom.base) {
+                    let base = BaseEvent::new(custom.base.creation_date, context).into_inline(
+                        self.events_configuration.all_attributes_private,
+                        self.events_configuration.private_attributes.clone(),
+                    );
                     self.outbox
-                        .add_event(OutputEvent::Index(custom.to_index_event(
-                            self.events_configuration.all_attributes_private,
-                            self.events_configuration.private_attributes.clone(),
-                        )));
+                        .add_event(OutputEvent::Index(IndexEvent::from(base)));
                 }
 
                 self.outbox.add_event(OutputEvent::Custom(custom));
             }
         }
+    }
+
+    fn get_indexable_context(&mut self, event: &BaseEvent) -> Option<Context> {
+        let context = match self.events_configuration.omit_anonymous_contexts {
+            true => event.context.without_anonymous_contexts(),
+            false => Ok(event.context.clone()),
+        };
+
+        if let Ok(ctx) = context {
+            if self.notice_context(&ctx) {
+                return Some(ctx);
+            }
+
+            return None;
+        }
+
+        None
     }
 
     fn notice_context(&mut self, context: &Context) -> bool {
@@ -273,7 +299,9 @@ mod tests {
     use crate::events::event::{EventFactory, OutputEvent};
     use crate::events::{create_event_sender, create_events_configuration};
     use crate::test_common::basic_flag;
-    use launchdarkly_server_sdk_evaluation::{ContextBuilder, Detail, FlagValue, Reason};
+    use launchdarkly_server_sdk_evaluation::{
+        ContextBuilder, Detail, FlagValue, MultiContextBuilder, Reason,
+    };
     use test_case::test_case;
 
     #[test]
@@ -356,6 +384,48 @@ mod tests {
         assert_eq!("debug", dispatcher.outbox.events[1].kind());
         assert_eq!("feature", dispatcher.outbox.events[2].kind());
         assert_eq!(1, dispatcher.context_keys.len());
+        assert_eq!(1, dispatcher.outbox.summary.features.len());
+    }
+
+    #[test]
+    fn dispatcher_strips_anonymous_contexts_from_index_for_feature_request_events() {
+        let (event_sender, _) = create_event_sender();
+        let mut events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        events_configuration.omit_anonymous_contexts = true;
+        let mut dispatcher = create_dispatcher(events_configuration);
+
+        let context = ContextBuilder::new("context")
+            .anonymous(true)
+            .build()
+            .expect("Failed to create context");
+        let mut flag = basic_flag("flag");
+        flag.debug_events_until_date = Some(64_060_606_800_000);
+        flag.track_events = true;
+
+        let detail = Detail {
+            value: Some(FlagValue::from(false)),
+            variation_index: Some(1),
+            reason: Reason::Fallthrough {
+                in_experiment: false,
+            },
+        };
+
+        let event_factory = EventFactory::new(true);
+        let feature_request_event = event_factory.new_eval_event(
+            &flag.key,
+            context,
+            &flag,
+            detail,
+            FlagValue::from(false),
+            None,
+        );
+
+        dispatcher.process_event(feature_request_event);
+        assert_eq!(2, dispatcher.outbox.events.len());
+        assert_eq!("debug", dispatcher.outbox.events[0].kind());
+        assert_eq!("feature", dispatcher.outbox.events[1].kind());
+        assert_eq!(0, dispatcher.context_keys.len());
         assert_eq!(1, dispatcher.outbox.summary.features.len());
     }
 
@@ -447,6 +517,61 @@ mod tests {
     }
 
     #[test]
+    fn dispatcher_can_ignore_identify_if_anonymous() {
+        let (event_sender, _) = create_event_sender();
+        let mut events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        events_configuration.omit_anonymous_contexts = true;
+        let mut dispatcher = create_dispatcher(events_configuration);
+
+        let context = ContextBuilder::new("context")
+            .anonymous(true)
+            .build()
+            .expect("Failed to create context");
+        let event_factory = EventFactory::new(true);
+
+        dispatcher.process_event(event_factory.new_identify(context));
+        assert_eq!(0, dispatcher.outbox.events.len());
+        assert_eq!(0, dispatcher.context_keys.len());
+    }
+
+    #[test]
+    fn dispatcher_strips_anon_contexts_from_multi_kind_identify() {
+        let (event_sender, _) = create_event_sender();
+        let mut events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        events_configuration.omit_anonymous_contexts = true;
+        let mut dispatcher = create_dispatcher(events_configuration);
+
+        let user_context = ContextBuilder::new("user")
+            .anonymous(true)
+            .build()
+            .expect("Failed to create context");
+        let org_context = ContextBuilder::new("org")
+            .kind("org")
+            .build()
+            .expect("Failed to create context");
+        let context = MultiContextBuilder::new()
+            .add_context(user_context)
+            .add_context(org_context)
+            .build()
+            .expect("Failed to create context");
+
+        let event_factory = EventFactory::new(true);
+
+        dispatcher.process_event(event_factory.new_identify(context));
+        assert_eq!(1, dispatcher.outbox.events.len());
+        assert_eq!("identify", dispatcher.outbox.events[0].kind());
+        assert_eq!(1, dispatcher.context_keys.len());
+
+        if let OutputEvent::Identify(identify) = &dispatcher.outbox.events[0] {
+            assert_eq!("org:org", identify.base.context.canonical_key());
+        } else {
+            panic!("Expected an identify event");
+        }
+    }
+
+    #[test]
     fn dispatcher_adds_index_on_custom_event() {
         let (event_sender, _) = create_event_sender();
         let events_configuration =
@@ -454,6 +579,62 @@ mod tests {
         let mut dispatcher = create_dispatcher(events_configuration);
 
         let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
+        let event_factory = EventFactory::new(true);
+        let custom_event = event_factory
+            .new_custom(context, "context", None, "")
+            .expect("failed to make new custom event");
+
+        dispatcher.process_event(custom_event);
+        assert_eq!(2, dispatcher.outbox.events.len());
+        assert_eq!("index", dispatcher.outbox.events[0].kind());
+        assert_eq!("custom", dispatcher.outbox.events[1].kind());
+        assert_eq!(1, dispatcher.context_keys.len());
+    }
+
+    #[test]
+    fn dispatcher_can_strip_anonymous_from_index_events() {
+        let (event_sender, _) = create_event_sender();
+        let mut events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        events_configuration.omit_anonymous_contexts = true;
+        let mut dispatcher = create_dispatcher(events_configuration);
+
+        let context = ContextBuilder::new("context")
+            .anonymous(true)
+            .build()
+            .expect("Failed to create context");
+        let event_factory = EventFactory::new(true);
+        let custom_event = event_factory
+            .new_custom(context, "context", None, "")
+            .expect("failed to make new custom event");
+
+        dispatcher.process_event(custom_event);
+        assert_eq!(1, dispatcher.outbox.events.len());
+        assert_eq!("custom", dispatcher.outbox.events[0].kind());
+        assert_eq!(0, dispatcher.context_keys.len());
+    }
+
+    #[test]
+    fn dispatcher_can_strip_anonymous_from_index_events_with_multi_kinds() {
+        let (event_sender, _) = create_event_sender();
+        let mut events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        events_configuration.omit_anonymous_contexts = true;
+        let mut dispatcher = create_dispatcher(events_configuration);
+
+        let user_context = ContextBuilder::new("user")
+            .anonymous(true)
+            .build()
+            .expect("Failed to create context");
+        let org_context = ContextBuilder::new("org")
+            .kind("org")
+            .build()
+            .expect("Failed to create context");
+        let context = MultiContextBuilder::new()
+            .add_context(user_context)
+            .add_context(org_context)
             .build()
             .expect("Failed to create context");
         let event_factory = EventFactory::new(true);
