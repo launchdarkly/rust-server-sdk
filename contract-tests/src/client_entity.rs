@@ -117,6 +117,7 @@ impl ClientEntity {
                 processor_builder.private_attributes(attributes);
             }
             processor_builder.https_connector(connector.clone());
+            processor_builder.omit_anonymous_contexts(events.omit_anonymous_contexts);
 
             config_builder.event_processor(&processor_builder)
         } else {
