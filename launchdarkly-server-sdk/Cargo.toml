@@ -4,8 +4,6 @@ description = "LaunchDarkly Server-Side SDK"
 version = "2.1.0"
 authors = ["LaunchDarkly"]
 edition = "2021"
-# TODO: When you change this to 1.76+, remove the explicit triomphe dependency
-# below.
 rust-version = "1.74.0"  # MSRV
 license = "Apache-2.0"
 homepage = "https://docs.launchdarkly.com/sdk/server-side/rust"
@@ -33,10 +31,6 @@ tokio = { version = "1.17.0", features = ["rt-multi-thread"] }
 parking_lot = "0.12.0"
 tokio-stream = { version = "0.1.8", features = ["sync"] }
 moka = { version = "0.12.1", features = ["sync"] }
-# NOTE: This dependency is only here to deal with a rustc compliation issue.
-# Once we move to rustc 1.76, we should be able to remove this explicit
-# dependency.
-triomphe = { version = "<=0.1.10" }
 uuid = {version = "1.2.2", features = ["v4"] }
 hyper = { version = "0.14.19", features = ["client", "http1", "http2", "tcp"] }
 hyper-rustls = { version = "0.24.1" , optional = true}
