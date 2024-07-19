@@ -32,6 +32,7 @@ pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
 };
 pub use evaluation::{FlagDetail, FlagDetailConfig};
+pub use events::event::MigrationOpEvent;
 pub use events::processor::EventProcessor;
 pub use events::processor_builders::{
     BuildError as EventProcessorBuildError, EventProcessorBuilder, NullEventProcessorBuilder,
@@ -40,6 +41,9 @@ pub use feature_requester_builders::{
     BuildError as FeatureRequestBuilderError, FeatureRequesterFactory,
 };
 pub use launchdarkly_server_sdk_evaluation::{Flag, Segment, Versioned};
+pub use migrations::{
+    ExecutionOrder, MigrationOpTracker, Migrator, MigratorBuilder, Operation, Origin, Stage,
+};
 pub use service_endpoints::ServiceEndpointsBuilder;
 pub use stores::persistent_store::{PersistentDataStore, PersistentStoreError};
 pub use stores::persistent_store_builders::{
@@ -56,7 +60,9 @@ mod evaluation;
 mod events;
 mod feature_requester;
 mod feature_requester_builders;
+mod migrations;
 mod reqwest;
+mod sampler;
 mod service_endpoints;
 mod stores;
 mod test_common;

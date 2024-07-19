@@ -1,12 +1,15 @@
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
+use std::time::Duration;
 
 use launchdarkly_server_sdk_evaluation::{
     Context, ContextAttributes, Detail, Flag, FlagValue, Kind, Reason, Reference, VariationIndex,
 };
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
+
+use crate::migrations::{Operation, Origin, Stage};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseEvent {
@@ -92,6 +95,156 @@ impl BaseEvent {
     }
 }
 
+/// A MigrationOpEvent is generated through the migration op tracker provided through the SDK.
+#[derive(Clone, Debug)]
+pub struct MigrationOpEvent {
+    pub(crate) base: BaseEvent,
+    pub(crate) key: String,
+    pub(crate) version: Option<u64>,
+    pub(crate) operation: Operation,
+    pub(crate) default_stage: Stage,
+    pub(crate) evaluation: Detail<Stage>,
+    pub(crate) sampling_ratio: Option<u32>,
+    pub(crate) invoked: HashSet<Origin>,
+    pub(crate) consistency_check: Option<bool>,
+    pub(crate) consistency_check_ratio: Option<u32>,
+    pub(crate) errors: HashSet<Origin>,
+    pub(crate) latency: HashMap<Origin, Duration>,
+}
+
+impl Serialize for MigrationOpEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("MigrationOpEvent", 10)?;
+        state.serialize_field("kind", "migration_op")?;
+        state.serialize_field("creationDate", &self.base.creation_date)?;
+        state.serialize_field("contextKeys", &self.base.context.context_keys())?;
+        state.serialize_field("operation", &self.operation)?;
+
+        if !is_default_ratio(&self.sampling_ratio) {
+            state.serialize_field("samplingRatio", &self.sampling_ratio.unwrap_or(1))?;
+        }
+
+        let evaluation = MigrationOpEvaluation {
+            key: self.key.clone(),
+            value: self.evaluation.value,
+            default: self.default_stage,
+            reason: self.evaluation.reason.clone(),
+            variation_index: self.evaluation.variation_index,
+            version: self.version,
+        };
+        state.serialize_field("evaluation", &evaluation)?;
+
+        let mut measurements = vec![];
+        if !self.invoked.is_empty() {
+            measurements.push(MigrationOpMeasurement::Invoked(&self.invoked));
+        }
+
+        if let Some(consistency_check) = self.consistency_check {
+            measurements.push(MigrationOpMeasurement::ConsistencyCheck(
+                consistency_check,
+                self.consistency_check_ratio,
+            ));
+        }
+
+        if !self.errors.is_empty() {
+            measurements.push(MigrationOpMeasurement::Errors(&self.errors));
+        }
+
+        if !self.latency.is_empty() {
+            measurements.push(MigrationOpMeasurement::Latency(&self.latency));
+        }
+
+        if !measurements.is_empty() {
+            state.serialize_field("measurements", &measurements)?;
+        }
+
+        state.end()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MigrationOpEvaluation {
+    pub key: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<Stage>,
+
+    pub(crate) default: Stage,
+
+    pub reason: Reason,
+
+    #[serde(rename = "variation", skip_serializing_if = "Option::is_none")]
+    pub variation_index: Option<VariationIndex>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+}
+
+enum MigrationOpMeasurement<'a> {
+    Invoked(&'a HashSet<Origin>),
+    ConsistencyCheck(bool, Option<u32>),
+    Errors(&'a HashSet<Origin>),
+    Latency(&'a HashMap<Origin, Duration>),
+}
+
+impl Serialize for MigrationOpMeasurement<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            MigrationOpMeasurement::Invoked(invoked) => {
+                let mut state = serializer.serialize_struct("invoked", 2)?;
+                state.serialize_field("key", "invoked")?;
+
+                let invoked = invoked
+                    .iter()
+                    .map(|origin| (origin, true))
+                    .collect::<HashMap<_, _>>();
+                state.serialize_field("values", &invoked)?;
+                state.end()
+            }
+            MigrationOpMeasurement::ConsistencyCheck(consistency_check, consistency_ratio) => {
+                let mut state = serializer.serialize_struct("consistency", 2)?;
+                state.serialize_field("key", "consistent")?;
+                state.serialize_field("value", &consistency_check)?;
+
+                match consistency_ratio {
+                    None | Some(1) => (),
+                    Some(ratio) => state.serialize_field("samplingRatio", &ratio)?,
+                }
+
+                state.end()
+            }
+            MigrationOpMeasurement::Errors(errors) => {
+                let mut state = serializer.serialize_struct("errors", 2)?;
+                state.serialize_field("key", "error")?;
+
+                let errors = errors
+                    .iter()
+                    .map(|origin| (origin, true))
+                    .collect::<HashMap<_, _>>();
+                state.serialize_field("values", &errors)?;
+                state.end()
+            }
+            MigrationOpMeasurement::Latency(latency) => {
+                let mut state = serializer.serialize_struct("latencies", 2)?;
+                state.serialize_field("key", "latency_ms")?;
+                let latencies = latency
+                    .iter()
+                    .map(|(origin, duration)| (origin, duration.as_millis() as u64))
+                    .collect::<HashMap<_, _>>();
+                state.serialize_field("values", &latencies)?;
+                state.end()
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeatureRequestEvent {
@@ -112,6 +265,12 @@ pub struct FeatureRequestEvent {
 
     #[serde(skip)]
     pub(crate) debug_events_until_date: Option<u64>,
+
+    #[serde(skip_serializing_if = "is_default_ratio")]
+    pub(crate) sampling_ratio: Option<u32>,
+
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) exclude_from_summaries: bool,
 }
 
 impl FeatureRequestEvent {
@@ -176,6 +335,8 @@ pub struct IdentifyEvent {
     #[serde(flatten)]
     pub(crate) base: BaseEvent,
     key: String,
+    #[serde(skip_serializing_if = "is_default_ratio")]
+    pub(crate) sampling_ratio: Option<u32>,
 }
 
 impl IdentifyEvent {
@@ -203,6 +364,8 @@ pub struct CustomEvent {
     metric_value: Option<f64>,
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     data: serde_json::Value,
+    #[serde(skip_serializing_if = "is_default_ratio")]
+    pub(crate) sampling_ratio: Option<u32>,
 }
 
 impl CustomEvent {
@@ -239,6 +402,9 @@ pub enum OutputEvent {
 
     #[serde(rename = "summary")]
     Summary(EventSummary),
+
+    #[serde(rename = "migration_op")]
+    MigrationOp(MigrationOpEvent),
 }
 
 impl OutputEvent {
@@ -251,6 +417,7 @@ impl OutputEvent {
             OutputEvent::Identify { .. } => "identify",
             OutputEvent::Custom { .. } => "custom",
             OutputEvent::Summary { .. } => "summary",
+            OutputEvent::MigrationOp { .. } => "migration_op",
         }
     }
 }
@@ -260,6 +427,7 @@ pub enum InputEvent {
     FeatureRequest(FeatureRequestEvent),
     Identify(IdentifyEvent),
     Custom(CustomEvent),
+    MigrationOp(MigrationOpEvent),
 }
 
 impl InputEvent {
@@ -269,6 +437,7 @@ impl InputEvent {
             InputEvent::FeatureRequest(FeatureRequestEvent { base, .. }) => Some(base),
             InputEvent::Identify(IdentifyEvent { base, .. }) => Some(base),
             InputEvent::Custom(CustomEvent { base, .. }) => Some(base),
+            InputEvent::MigrationOp(MigrationOpEvent { base, .. }) => Some(base),
         }
     }
 }
@@ -290,7 +459,7 @@ impl EventFactory {
         Self { send_reason }
     }
 
-    fn now() -> u64 {
+    pub(crate) fn now() -> u64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -335,15 +504,21 @@ impl EventFactory {
         let flag_track_events;
         let require_experiment_data;
         let debug_events_until_date;
+        let sampling_ratio;
+        let exclude_from_summaries;
 
         if let Some(f) = flag {
             flag_track_events = f.track_events;
             require_experiment_data = f.is_experimentation_enabled(&detail.reason);
             debug_events_until_date = f.debug_events_until_date;
+            sampling_ratio = f.sampling_ratio;
+            exclude_from_summaries = f.exclude_from_summaries;
         } else {
             flag_track_events = false;
             require_experiment_data = false;
-            debug_events_until_date = None
+            debug_events_until_date = None;
+            sampling_ratio = None;
+            exclude_from_summaries = false;
         }
 
         let reason = if self.send_reason || require_experiment_data {
@@ -363,6 +538,8 @@ impl EventFactory {
             prereq_of,
             track_events: flag_track_events || require_experiment_data,
             debug_events_until_date,
+            sampling_ratio,
+            exclude_from_summaries,
         })
     }
 
@@ -370,7 +547,12 @@ impl EventFactory {
         InputEvent::Identify(IdentifyEvent {
             key: context.key().to_owned(),
             base: BaseEvent::new(Self::now(), context),
+            sampling_ratio: None,
         })
+    }
+
+    pub(crate) fn new_migration_op(&self, event: MigrationOpEvent) -> InputEvent {
+        InputEvent::MigrationOp(event)
     }
 
     pub fn new_custom(
@@ -387,6 +569,7 @@ impl EventFactory {
             key: key.into(),
             metric_value,
             data,
+            sampling_ratio: None,
         }))
     }
 }
@@ -591,6 +774,11 @@ impl From<(VariationKey, VariationSummary)> for VariationCounterOutput {
             variation: variation_key.variation,
         }
     }
+}
+
+// Used strictly for serialization to determine if a ratio should be included in the JSON.
+fn is_default_ratio(sampling_ratio: &Option<u32>) -> bool {
+    sampling_ratio.unwrap_or(1) == 1
 }
 
 #[cfg(test)]
@@ -1196,6 +1384,8 @@ mod tests {
             prereq_of: None,
             track_events: false,
             debug_events_until_date: None,
+            sampling_ratio: flag.sampling_ratio,
+            exclude_from_summaries: flag.exclude_from_summaries,
         };
 
         summary.add(&fallthrough_request);

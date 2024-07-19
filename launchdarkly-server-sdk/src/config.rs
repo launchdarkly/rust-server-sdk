@@ -37,9 +37,9 @@ impl Tag {
     }
 }
 
-impl ToString for &Tag {
-    fn to_string(&self) -> String {
-        format!("{}/{}", self.key, self.value)
+impl std::fmt::Display for Tag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.key, self.value)
     }
 }
 

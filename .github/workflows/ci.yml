@@ -1,11 +1,11 @@
 name: Run CI
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'feat/**' ]
     paths-ignore:
       - '**.md' # Do not need to run CI for markdown changes.
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'feat/**' ]
     paths-ignore:
       - '**.md'
 
@@ -57,4 +57,4 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
-        run: TARGET_CC=musl-gcc RUSTFLAGS="-C linker=musl-gcc" cargo build --release --target=x86_64-unknown-linux-musl
+        run: TARGET_CC=musl-gcc RUSTFLAGS="-C linker=musl-gcc" cargo build --release --target=x86_64-unknown-linux-musl -p launchdarkly-server-sdk

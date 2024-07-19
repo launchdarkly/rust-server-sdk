@@ -4,13 +4,14 @@ mod command_params;
 use crate::command_params::CommandParams;
 use actix_web::error::{ErrorBadRequest, ErrorInternalServerError};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
+use async_mutex::Mutex;
 use client_entity::ClientEntity;
 use futures::executor;
 use hyper::client::HttpConnector;
 use launchdarkly_server_sdk::Reference;
 use serde::{self, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 use std::thread;
 
 #[derive(Serialize)]
@@ -106,6 +107,8 @@ async fn status() -> impl Responder {
             "inline-context".to_string(),
             "anonymous-redaction".to_string(),
             "omit-anonymous-contexts".to_string(),
+            "migrations".to_string(),
+            "event-sampling".to_string(),
         ],
     })
 }
@@ -132,17 +135,8 @@ async fn create_client(
         Err(e) => return HttpResponse::InternalServerError().body(format!("{}", e)),
     };
 
-    let mut counter = match app_state.counter.lock() {
-        Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().body("Unable to retrieve counter"),
-    };
-
-    let mut entities = match app_state.client_entities.lock() {
-        Ok(h) => h,
-        Err(_) => {
-            return HttpResponse::InternalServerError().body("Unable to lock client_entities")
-        }
-    };
+    let mut counter = app_state.counter.lock().await;
+    let mut entities = app_state.client_entities.lock().await;
 
     *counter += 1;
     let client_resource = match req.url_for("client_path", [counter.to_string()]) {
@@ -171,10 +165,7 @@ async fn do_command(
 
     let client_id = client_id.parse::<u32>().map_err(ErrorInternalServerError)?;
 
-    let entities = app_state
-        .client_entities
-        .lock()
-        .expect("Client entities cannot be locked");
+    let entities = app_state.client_entities.lock().await;
 
     let entity = entities
         .get(&client_id)
@@ -182,6 +173,7 @@ async fn do_command(
 
     let result = entity
         .do_command(command_params.into_inner())
+        .await
         .map_err(ErrorBadRequest)?;
 
     match result {
@@ -197,14 +189,8 @@ async fn stop_client(req: HttpRequest, app_state: web::Data<AppState>) -> HttpRe
             Err(_) => return HttpResponse::BadRequest().body("Unable to parse client id"),
         };
 
-        match app_state.client_entities.lock() {
-            Ok(mut entities) => {
-                entities.remove(&client_id);
-            }
-            Err(_) => {
-                return HttpResponse::InternalServerError().body("Unable to retrieve handles")
-            }
-        };
+        let mut entities = app_state.client_entities.lock().await;
+        entities.remove(&client_id);
 
         HttpResponse::NoContent().finish()
     } else {

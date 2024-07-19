@@ -1,4 +1,6 @@
-use launchdarkly_server_sdk::{AttributeValue, Context, FlagDetail, FlagValue, Reason};
+use launchdarkly_server_sdk::{
+    AttributeValue, Context, ExecutionOrder, FlagDetail, FlagValue, Operation, Reason, Stage,
+};
 use serde::{self, Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -9,6 +11,8 @@ pub enum CommandResponse {
     EvaluateAll(EvaluateAllFlagsResponse),
     ContextBuildOrConvert(ContextResponse),
     SecureModeHash(SecureModeHashResponse),
+    MigrationVariation(MigrationVariationResponse),
+    MigrationOperation(MigrationOperationResponse),
 }
 
 #[derive(Deserialize, Debug)]
@@ -22,6 +26,8 @@ pub struct CommandParams {
     pub context_build: Option<ContextBuildParams>,
     pub context_convert: Option<ContextConvertParams>,
     pub secure_mode_hash: Option<SecureModeHashParams>,
+    pub migration_variation: Option<MigrationVariationParams>,
+    pub migration_operation: Option<MigrationOperationParams>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -128,5 +134,41 @@ pub struct SecureModeHashParams {
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SecureModeHashResponse {
+    pub result: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationVariationParams {
+    pub key: String,
+    pub context: Context,
+    pub default_stage: Stage,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationVariationResponse {
+    pub result: Stage,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationOperationParams {
+    pub key: String,
+    pub context: Context,
+    pub default_stage: Stage,
+    pub read_execution_order: ExecutionOrder,
+    pub operation: Operation,
+    pub old_endpoint: String,
+    pub new_endpoint: String,
+    pub payload: Option<String>,
+    pub track_latency: bool,
+    pub track_errors: bool,
+    pub track_consistency: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationOperationResponse {
     pub result: String,
 }
