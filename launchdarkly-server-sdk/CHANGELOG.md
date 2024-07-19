@@ -2,6 +2,20 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.2.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.1.0...2.2.0) (2024-07-19)
+
+
+### Features
+
+* Add option to omit anonymous users from index and identify events ([#89](https://github.com/launchdarkly/rust-server-sdk/issues/89)) ([78c9668](https://github.com/launchdarkly/rust-server-sdk/commit/78c9668ed7999873b8ff045b61092363adbd6fc2))
+* Add support for migrations ([#90](https://github.com/launchdarkly/rust-server-sdk/issues/90)) ([445ab74](https://github.com/launchdarkly/rust-server-sdk/commit/445ab74b9da88b8cf3904c50d74900f448ae02fe))
+* Add wait_for_initialization with timeout parameter ([#76](https://github.com/launchdarkly/rust-server-sdk/issues/76)) ([45e3451](https://github.com/launchdarkly/rust-server-sdk/commit/45e3451b80e4f3104795410655e845cf9bfb7962))
+
+
+### Bug Fixes
+
+* Bump rustc to 1.74 ([#78](https://github.com/launchdarkly/rust-server-sdk/issues/78)) ([0c1c58d](https://github.com/launchdarkly/rust-server-sdk/commit/0c1c58d446b1f8c4cbaaf0813ee1855683cd319f))
+
 ## [2.1.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.0.2...2.1.0) (2024-03-15)
 
 
