@@ -107,8 +107,8 @@ where
                 }
             };
 
-            for attempt in 0..2 {
-                if attempt == 1 {
+            for attempt in 1..=2 {
+                if attempt == 2 {
                     sleep(Duration::from_secs(1)).await;
                 }
 
@@ -134,6 +134,7 @@ where
 
                 let response = match result {
                     Ok(response) => response,
+                    Err(_) if attempt == 1 => continue,
                     Err(e) => {
                         // It appears this type of error will not be an HTTP error.
                         // It will be a closed connection, aborted write, timeout, etc.
