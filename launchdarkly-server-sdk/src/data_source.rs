@@ -131,18 +131,22 @@ impl DataSource for StreamingDataSource {
                     event = event_stream.next() => {
                         let event = match event {
                             Some(Ok(event)) => match event {
+                                es::SSE::Connected(_) => {
+                                    debug!("data source connected");
+                                    continue;
+                                },
                                 es::SSE::Comment(str)=> {
                                     debug!("data source got a comment: {}", str);
                                     continue;
                                 },
                                 es::SSE::Event(ev) => ev,
                             },
-                            Some(Err(es::Error::UnexpectedResponse(status_code))) => {
-                                match is_http_error_recoverable(status_code.as_u16()) {
+                            Some(Err(es::Error::UnexpectedResponse(response, _))) => {
+                                match is_http_error_recoverable(response.status()) {
                                     true => continue,
                                     _ => {
                                         notify_init.call_once(|| (init_complete)(false));
-                                        warn!("Returned unrecoverable failure. Unexpected response {:?}", status_code);
+                                        warn!("Returned unrecoverable failure. Unexpected response {}", response.status());
                                         break
                                     }
                                 }
