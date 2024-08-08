@@ -2,6 +2,14 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.2.1](https://github.com/launchdarkly/rust-server-sdk/compare/2.2.0...2.2.1) (2024-08-08)
+
+
+### Bug Fixes
+
+* Allow event retries even if initial request fails to connect ([#93](https://github.com/launchdarkly/rust-server-sdk/issues/93)) ([a9c0150](https://github.com/launchdarkly/rust-server-sdk/commit/a9c01501296be0f12ad23c0c8ee9441c5b531d73))
+* Suppress error log on `es::Error::Eof` ([#96](https://github.com/launchdarkly/rust-server-sdk/issues/96)) ([20d0891](https://github.com/launchdarkly/rust-server-sdk/commit/20d0891f410dac7b16d52e1be3aa97e47428114c))
+
 ## [2.2.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.1.0...2.2.0) (2024-07-19)
 
 
