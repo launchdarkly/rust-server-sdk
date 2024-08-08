@@ -152,14 +152,12 @@ impl DataSource for StreamingDataSource {
                                 }
                             },
                             Some(Err(e)) => {
-                                error!("error on event stream: {:?}", e);
-
                                 match e {
                                     es::Error::Eof => {
                                         continue;
                                     }
                                     _ => {
-                                        debug!("unhandled error; break");
+                                        error!("unhandled error on event stream: {:?}", e);
                                         break;
                                     }
                                 }
