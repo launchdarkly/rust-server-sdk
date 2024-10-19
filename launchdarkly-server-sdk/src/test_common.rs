@@ -53,6 +53,21 @@ pub fn basic_off_flag(key: &str) -> Flag {
 }
 
 pub fn basic_flag_with_prereq(key: &str, prereq_key: &str) -> Flag {
+    basic_flag_with_prereqs(key, &[prereq_key])
+}
+
+pub fn basic_flag_with_prereqs(key: &str, prereq_keys: &[&str]) -> Flag {
+    let prereqs_json: String = prereq_keys
+        .iter()
+        .map(|&prereq_key| {
+            format!(
+                r#"{{"key": {}, "variation": 1}}"#,
+                serde_json::Value::String(prereq_key.to_string())
+            )
+        })
+        .collect::<Vec<String>>()
+        .join(",");
+
     serde_json::from_str(&format!(
         r#"{{
             "key": {},
@@ -60,7 +75,7 @@ pub fn basic_flag_with_prereq(key: &str, prereq_key: &str) -> Flag {
             "on": true,
             "targets": [],
             "rules": [],
-            "prerequisites": [{{"key": {}, "variation": 1}}],
+            "prerequisites": [{}],
             "fallthrough": {{"variation": 1}},
             "offVariation": 0,
             "variations": [false, true],
@@ -71,7 +86,7 @@ pub fn basic_flag_with_prereq(key: &str, prereq_key: &str) -> Flag {
             "salt": "kosher"
         }}"#,
         serde_json::Value::String(key.to_string()),
-        serde_json::Value::String(prereq_key.to_string()),
+        prereqs_json
     ))
     .unwrap()
 }

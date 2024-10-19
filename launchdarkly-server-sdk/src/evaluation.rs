@@ -1,7 +1,10 @@
 use super::stores::store::DataStore;
 use serde::Serialize;
+use std::cell::RefCell;
 
-use launchdarkly_server_sdk_evaluation::{evaluate, Context, FlagValue, Reason};
+use launchdarkly_server_sdk_evaluation::{
+    evaluate, Context, FlagValue, PrerequisiteEvent, PrerequisiteEventRecorder, Reason,
+};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -78,6 +81,9 @@ pub struct FlagState {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     debug_events_until_date: Option<u64>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    prerequisites: Vec<String>,
 }
 
 /// FlagDetail is a snapshot of the state of multiple feature flags with regard to a specific user.
@@ -95,6 +101,29 @@ pub struct FlagDetail {
 
     #[serde(rename = "$valid")]
     valid: bool,
+}
+
+struct DirectPrerequisiteRecorder {
+    target_flag_key: String,
+    prerequisites: RefCell<Vec<String>>,
+}
+
+impl DirectPrerequisiteRecorder {
+    pub fn new(target_flag_key: impl Into<String>) -> Self {
+        Self {
+            target_flag_key: target_flag_key.into(),
+            prerequisites: RefCell::new(Vec::new()),
+        }
+    }
+}
+impl PrerequisiteEventRecorder for DirectPrerequisiteRecorder {
+    fn record(&self, event: PrerequisiteEvent) {
+        if event.target_flag_key == self.target_flag_key {
+            self.prerequisites
+                .borrow_mut()
+                .push(event.prerequisite_flag.key)
+        }
+    }
 }
 
 impl FlagDetail {
@@ -118,7 +147,9 @@ impl FlagDetail {
                 continue;
             }
 
-            let detail = evaluate(store.to_store(), &flag, context, None);
+            let event_recorder = DirectPrerequisiteRecorder::new(key.clone());
+
+            let detail = evaluate(store.to_store(), &flag, context, Some(&event_recorder));
 
             // Here we are applying the same logic used in EventFactory.new_feature_request_event
             // to determine whether the evaluation involved an experiment, in which case both
@@ -171,6 +202,7 @@ impl FlagDetail {
                     track_events,
                     track_reason,
                     debug_events_until_date: flag.debug_events_until_date,
+                    prerequisites: event_recorder.prerequisites.take(),
                 },
             );
         }
@@ -186,8 +218,9 @@ mod tests {
     use crate::stores::store::DataStore;
     use crate::stores::store::InMemoryDataStore;
     use crate::stores::store_types::{PatchTarget, StorageItem};
-    use crate::test_common::basic_flag;
+    use crate::test_common::{basic_flag, basic_flag_with_prereqs};
     use crate::FlagDetailConfig;
+    use assert_json_diff::assert_json_eq;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
 
     #[test]
@@ -409,5 +442,56 @@ mod tests {
             serde_json::to_string_pretty(&flag_detail).unwrap(),
             serde_json::to_string_pretty(&expected).unwrap(),
         );
+    }
+
+    #[test]
+    fn flag_prerequisites_should_be_exposed() {
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let mut store = InMemoryDataStore::new();
+
+        let prereq1 = basic_flag("prereq1");
+        let prereq2 = basic_flag("prereq2");
+        let toplevel = basic_flag_with_prereqs("toplevel", &["prereq1", "prereq2"]);
+
+        store
+            .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
+            .expect("patch should apply");
+
+        store
+            .upsert("prereq2", PatchTarget::Flag(StorageItem::Item(prereq2)))
+            .expect("patch should apply");
+
+        store
+            .upsert("toplevel", PatchTarget::Flag(StorageItem::Item(toplevel)))
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+        flag_detail.populate(&store, &context, FlagDetailConfig::new());
+
+        let expected = json!({
+            "prereq1": true,
+            "prereq2": true,
+            "toplevel": true,
+            "$flagsState": {
+                "toplevel": {
+                    "version": 42,
+                    "variation": 1,
+                    "prerequisites": ["prereq1", "prereq2"]
+                },
+                "prereq2": {
+                    "version": 42,
+                    "variation": 1
+                },
+                "prereq1": {
+                    "version": 42,
+                    "variation": 1,
+                },
+            },
+            "$valid": true
+        });
+
+        assert_json_eq!(expected, flag_detail);
     }
 }
