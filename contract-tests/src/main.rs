@@ -109,6 +109,7 @@ async fn status() -> impl Responder {
             "omit-anonymous-contexts".to_string(),
             "migrations".to_string(),
             "event-sampling".to_string(),
+            "client-prereq-events".to_string(),
         ],
     })
 }
