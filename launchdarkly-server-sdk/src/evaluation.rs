@@ -600,6 +600,5 @@ mod tests {
         });
 
         assert_json_eq!(expected, flag_detail);
-
     }
 }
