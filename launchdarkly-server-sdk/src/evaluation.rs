@@ -218,7 +218,7 @@ mod tests {
     use crate::stores::store::DataStore;
     use crate::stores::store::InMemoryDataStore;
     use crate::stores::store_types::{PatchTarget, StorageItem};
-    use crate::test_common::{basic_flag, basic_flag_with_prereqs};
+    use crate::test_common::{basic_flag, basic_flag_with_prereqs_and_visibility, basic_flag_with_visibility, basic_off_flag};
     use crate::FlagDetailConfig;
     use assert_json_diff::assert_json_eq;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
@@ -453,7 +453,7 @@ mod tests {
 
         let prereq1 = basic_flag("prereq1");
         let prereq2 = basic_flag("prereq2");
-        let toplevel = basic_flag_with_prereqs("toplevel", &["prereq1", "prereq2"]);
+        let toplevel = basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], false);
 
         store
             .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
@@ -493,5 +493,113 @@ mod tests {
         });
 
         assert_json_eq!(expected, flag_detail);
+    }
+
+
+    #[test]
+    fn flag_prerequisites_should_be_exposed_even_if_not_available_to_clients() {
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let mut store = InMemoryDataStore::new();
+
+        // These two prerequisites won't be visible to clients (environment ID) SDKs.
+        let prereq1 = basic_flag_with_visibility("prereq1", false);
+        let prereq2 = basic_flag_with_visibility("prereq2", false);
+
+        // But, the top-level flag will.
+        let toplevel = basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+
+        store
+            .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
+            .expect("patch should apply");
+
+        store
+            .upsert("prereq2", PatchTarget::Flag(StorageItem::Item(prereq2)))
+            .expect("patch should apply");
+
+        store
+            .upsert("toplevel", PatchTarget::Flag(StorageItem::Item(toplevel)))
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+
+        let mut config = FlagDetailConfig::new();
+        config.client_side_only();
+
+        flag_detail.populate(&store, &context, config);
+
+        // Even though the two prereqs are omitted, we should still see their metadata in the
+        // toplevel flag.
+        let expected = json!({
+            "toplevel": true,
+            "$flagsState": {
+                "toplevel": {
+                    "version": 42,
+                    "variation": 1,
+                    "prerequisites": ["prereq1", "prereq2"]
+                },
+            },
+            "$valid": true
+        });
+
+        assert_json_eq!(expected, flag_detail);
+    }
+
+
+    #[test]
+    fn flag_prerequisites_should_be_in_evaluation_order() {
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let mut store = InMemoryDataStore::new();
+
+        // Since prereq1 will be listed as the first prerequisite, and it is off,
+        // evaluation will short circuit and we shouldn't see the second prerequisite.
+        let prereq1 = basic_off_flag("prereq1");
+        let prereq2 = basic_flag("prereq2");
+
+        let toplevel = basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+
+        store
+            .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
+            .expect("patch should apply");
+
+        store
+            .upsert("prereq2", PatchTarget::Flag(StorageItem::Item(prereq2)))
+            .expect("patch should apply");
+
+        store
+            .upsert("toplevel", PatchTarget::Flag(StorageItem::Item(toplevel)))
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+
+        flag_detail.populate(&store, &context, FlagDetailConfig::new());
+
+        let expected = json!({
+            "prereq1": null,
+            "prereq2": true,
+            "toplevel": false,
+            "$flagsState": {
+                "toplevel": {
+                    "version": 42,
+                    "variation": 0,
+                    "prerequisites": ["prereq1"]
+                },
+                "prereq2": {
+                    "version": 42,
+                    "variation": 1
+                },
+                "prereq1": {
+                    "version": 42
+                }
+
+            },
+            "$valid": true
+        });
+
+        assert_json_eq!(expected, flag_detail);
+
     }
 }

@@ -7,6 +7,10 @@ use crate::Stage;
 pub const FLOAT_TO_INT_MAX: i64 = 9007199254740991;
 
 pub fn basic_flag(key: &str) -> Flag {
+    return basic_flag_with_visibility(key, false);
+}
+
+pub fn basic_flag_with_visibility(key: &str, visible_to_environment_id: bool) -> Flag {
     serde_json::from_str(&format!(
         r#"{{
             "key": {},
@@ -20,15 +24,15 @@ pub fn basic_flag(key: &str) -> Flag {
             "variations": [false, true],
             "clientSideAvailability": {{
                 "usingMobileKey": false,
-                "usingEnvironmentId": false
+                "usingEnvironmentId": {}
             }},
             "salt": "kosher"
         }}"#,
-        serde_json::Value::String(key.to_string())
+        serde_json::Value::String(key.to_string()),
+        visible_to_environment_id
     ))
-    .unwrap()
+        .unwrap()
 }
-
 pub fn basic_off_flag(key: &str) -> Flag {
     serde_json::from_str(&format!(
         r#"{{
@@ -53,10 +57,12 @@ pub fn basic_off_flag(key: &str) -> Flag {
 }
 
 pub fn basic_flag_with_prereq(key: &str, prereq_key: &str) -> Flag {
-    basic_flag_with_prereqs(key, &[prereq_key])
+    basic_flag_with_prereqs_and_visibility(key, &[prereq_key], false)
 }
 
-pub fn basic_flag_with_prereqs(key: &str, prereq_keys: &[&str]) -> Flag {
+
+
+pub fn basic_flag_with_prereqs_and_visibility(key: &str, prereq_keys: &[&str], visible_to_environment_id: bool) -> Flag {
     let prereqs_json: String = prereq_keys
         .iter()
         .map(|&prereq_key| {
@@ -81,12 +87,13 @@ pub fn basic_flag_with_prereqs(key: &str, prereq_keys: &[&str]) -> Flag {
             "variations": [false, true],
             "clientSideAvailability": {{
                 "usingMobileKey": false,
-                "usingEnvironmentId": false
+                "usingEnvironmentId": {}
             }},
             "salt": "kosher"
         }}"#,
         serde_json::Value::String(key.to_string()),
-        prereqs_json
+        prereqs_json,
+        visible_to_environment_id
     ))
     .unwrap()
 }
