@@ -31,7 +31,7 @@ pub fn basic_flag_with_visibility(key: &str, visible_to_environment_id: bool) ->
         serde_json::Value::String(key.to_string()),
         visible_to_environment_id
     ))
-        .unwrap()
+    .unwrap()
 }
 pub fn basic_off_flag(key: &str) -> Flag {
     serde_json::from_str(&format!(
@@ -60,9 +60,11 @@ pub fn basic_flag_with_prereq(key: &str, prereq_key: &str) -> Flag {
     basic_flag_with_prereqs_and_visibility(key, &[prereq_key], false)
 }
 
-
-
-pub fn basic_flag_with_prereqs_and_visibility(key: &str, prereq_keys: &[&str], visible_to_environment_id: bool) -> Flag {
+pub fn basic_flag_with_prereqs_and_visibility(
+    key: &str,
+    prereq_keys: &[&str],
+    visible_to_environment_id: bool,
+) -> Flag {
     let prereqs_json: String = prereq_keys
         .iter()
         .map(|&prereq_key| {

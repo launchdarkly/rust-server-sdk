@@ -839,13 +839,13 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use assert_json_diff::assert_json_eq;
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
     use futures::FutureExt;
     use hyper::client::HttpConnector;
     use launchdarkly_server_sdk_evaluation::Reason;
     use std::collections::HashMap;
-    use assert_json_diff::assert_json_eq;
     use tokio::time::Instant;
 
     use crate::data_source::MockDataSource;
@@ -854,7 +854,10 @@ mod tests {
     use crate::events::event::{OutputEvent, VariationKey};
     use crate::events::processor_builders::EventProcessorBuilder;
     use crate::stores::store_types::{PatchTarget, StorageItem};
-    use crate::test_common::{self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility, basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag};
+    use crate::test_common::{
+        self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility,
+        basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag,
+    };
     use crate::{ConfigBuilder, MigratorBuilder, Operation, Origin};
     use test_case::test_case;
 
@@ -987,7 +990,6 @@ mod tests {
         assert_json_eq!(all_flags, json!({"$valid": false, "$flagsState" : {}}));
     }
 
-
     #[test]
     fn all_flags_detail_returns_flag_states() {
         let (client, _event_rx) = make_mocked_client();
@@ -1016,23 +1018,25 @@ mod tests {
 
         client.close();
 
-        assert_json_eq!(all_flags, json!({
-            "myFlag1": true,
-            "myFlag2": true,
-            "$flagsState": {
-                "myFlag1": {
-                    "version": 42,
-                    "variation": 1
+        assert_json_eq!(
+            all_flags,
+            json!({
+                "myFlag1": true,
+                "myFlag2": true,
+                "$flagsState": {
+                    "myFlag1": {
+                        "version": 42,
+                        "variation": 1
+                    },
+                     "myFlag2": {
+                        "version": 42,
+                        "variation": 1
+                    },
                 },
-                 "myFlag2": {
-                    "version": 42,
-                    "variation": 1
-                },
-            },
-            "$valid": true
-        }));
+                "$valid": true
+            })
+        );
     }
-
 
     #[test]
     fn all_flags_detail_returns_prerequisite_relations() {
@@ -1055,11 +1059,16 @@ mod tests {
             )
             .expect("patch should apply");
 
-        client.data_store
+        client
+            .data_store
             .write()
             .upsert(
                 "toplevel",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], false))),
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility(
+                    "toplevel",
+                    &["prereq1", "prereq2"],
+                    false,
+                ))),
             )
             .expect("patch should apply");
 
@@ -1071,29 +1080,31 @@ mod tests {
 
         client.close();
 
-        assert_json_eq!(all_flags, json!({
-            "prereq1": true,
-            "prereq2": true,
-            "toplevel": true,
-            "$flagsState": {
-                "toplevel": {
-                    "version": 42,
-                    "variation": 1,
-                    "prerequisites": ["prereq1", "prereq2"]
+        assert_json_eq!(
+            all_flags,
+            json!({
+                "prereq1": true,
+                "prereq2": true,
+                "toplevel": true,
+                "$flagsState": {
+                    "toplevel": {
+                        "version": 42,
+                        "variation": 1,
+                        "prerequisites": ["prereq1", "prereq2"]
+                    },
+                    "prereq1": {
+                        "version": 42,
+                        "variation": 1
+                    },
+                     "prereq2": {
+                        "version": 42,
+                        "variation": 1
+                    },
                 },
-                "prereq1": {
-                    "version": 42,
-                    "variation": 1
-                },
-                 "prereq2": {
-                    "version": 42,
-                    "variation": 1
-                },
-            },
-            "$valid": true
-        }));
+                "$valid": true
+            })
+        );
     }
-
 
     #[test]
     fn all_flags_detail_returns_prerequisite_relations_when_not_visible_to_clients() {
@@ -1104,7 +1115,9 @@ mod tests {
             .write()
             .upsert(
                 "prereq1",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility("prereq1", false))),
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "prereq1", false,
+                ))),
             )
             .expect("patch should apply");
         client
@@ -1112,15 +1125,22 @@ mod tests {
             .write()
             .upsert(
                 "prereq2",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility("prereq2", false))),
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "prereq2", false,
+                ))),
             )
             .expect("patch should apply");
 
-        client.data_store
+        client
+            .data_store
             .write()
             .upsert(
                 "toplevel",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true))),
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility(
+                    "toplevel",
+                    &["prereq1", "prereq2"],
+                    true,
+                ))),
             )
             .expect("patch should apply");
 
@@ -1131,21 +1151,24 @@ mod tests {
         let mut config = FlagDetailConfig::new();
         config.client_side_only();
 
-        let all_flags = client.all_flags_detail(&context,config );
+        let all_flags = client.all_flags_detail(&context, config);
 
         client.close();
 
-        assert_json_eq!(all_flags, json!({
-            "toplevel": true,
-            "$flagsState": {
-                "toplevel": {
-                    "version": 42,
-                    "variation": 1,
-                    "prerequisites": ["prereq1", "prereq2"]
+        assert_json_eq!(
+            all_flags,
+            json!({
+                "toplevel": true,
+                "$flagsState": {
+                    "toplevel": {
+                        "version": 42,
+                        "variation": 1,
+                        "prerequisites": ["prereq1", "prereq2"]
+                    },
                 },
-            },
-            "$valid": true
-        }));
+                "$valid": true
+            })
+        );
     }
 
     #[test]

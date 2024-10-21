@@ -103,12 +103,17 @@ pub struct FlagDetail {
     valid: bool,
 }
 
+/// DirectPrerequisiteRecorder records only the direct (top-level) prerequisites of a
+/// flag.
 struct DirectPrerequisiteRecorder {
     target_flag_key: String,
     prerequisites: RefCell<Vec<String>>,
 }
 
 impl DirectPrerequisiteRecorder {
+    /// Creates a new instance of [DirectPrerequisiteRecorder] for a given target flag. The
+    /// direct prerequisites of the flag will be available in the prerequisites field of the
+    /// recorder.
     pub fn new(target_flag_key: impl Into<String>) -> Self {
         Self {
             target_flag_key: target_flag_key.into(),
@@ -218,7 +223,10 @@ mod tests {
     use crate::stores::store::DataStore;
     use crate::stores::store::InMemoryDataStore;
     use crate::stores::store_types::{PatchTarget, StorageItem};
-    use crate::test_common::{basic_flag, basic_flag_with_prereqs_and_visibility, basic_flag_with_visibility, basic_off_flag};
+    use crate::test_common::{
+        basic_flag, basic_flag_with_prereqs_and_visibility, basic_flag_with_visibility,
+        basic_off_flag,
+    };
     use crate::FlagDetailConfig;
     use assert_json_diff::assert_json_eq;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
@@ -453,7 +461,8 @@ mod tests {
 
         let prereq1 = basic_flag("prereq1");
         let prereq2 = basic_flag("prereq2");
-        let toplevel = basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], false);
+        let toplevel =
+            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], false);
 
         store
             .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
@@ -495,7 +504,6 @@ mod tests {
         assert_json_eq!(expected, flag_detail);
     }
 
-
     #[test]
     fn flag_prerequisites_should_be_exposed_even_if_not_available_to_clients() {
         let context = ContextBuilder::new("bob")
@@ -508,7 +516,8 @@ mod tests {
         let prereq2 = basic_flag_with_visibility("prereq2", false);
 
         // But, the top-level flag will.
-        let toplevel = basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+        let toplevel =
+            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
 
         store
             .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
@@ -546,7 +555,6 @@ mod tests {
         assert_json_eq!(expected, flag_detail);
     }
 
-
     #[test]
     fn flag_prerequisites_should_be_in_evaluation_order() {
         let context = ContextBuilder::new("bob")
@@ -559,7 +567,8 @@ mod tests {
         let prereq1 = basic_off_flag("prereq1");
         let prereq2 = basic_flag("prereq2");
 
-        let toplevel = basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+        let toplevel =
+            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
 
         store
             .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
