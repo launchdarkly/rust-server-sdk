@@ -839,13 +839,13 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use assert_json_diff::assert_json_eq;
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
     use futures::FutureExt;
     use hyper::client::HttpConnector;
     use launchdarkly_server_sdk_evaluation::Reason;
     use std::collections::HashMap;
-
     use tokio::time::Instant;
 
     use crate::data_source::MockDataSource;
@@ -855,8 +855,8 @@ mod tests {
     use crate::events::processor_builders::EventProcessorBuilder;
     use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::{
-        self, basic_flag, basic_flag_with_prereq, basic_int_flag, basic_migration_flag,
-        basic_off_flag,
+        self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility,
+        basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag,
     };
     use crate::{ConfigBuilder, MigratorBuilder, Operation, Origin};
     use test_case::test_case;
@@ -963,6 +963,212 @@ mod tests {
                 in_experiment: false
             }
         ));
+    }
+
+    #[test]
+    fn all_flags_detail_is_invalid_when_offline() {
+        let (client, _event_rx) = make_mocked_offline_client();
+        client.start_with_default_executor();
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let all_flags = client.all_flags_detail(&context, FlagDetailConfig::new());
+        assert_json_eq!(all_flags, json!({"$valid": false, "$flagsState" : {}}));
+    }
+
+    #[test]
+    fn all_flags_detail_is_invalid_when_not_initialized() {
+        let (client, _event_rx) = make_mocked_client();
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let all_flags = client.all_flags_detail(&context, FlagDetailConfig::new());
+        assert_json_eq!(all_flags, json!({"$valid": false, "$flagsState" : {}}));
+    }
+
+    #[test]
+    fn all_flags_detail_returns_flag_states() {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "myFlag1",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag1"))),
+            )
+            .expect("patch should apply");
+        client
+            .data_store
+            .write()
+            .upsert(
+                "myFlag2",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag2"))),
+            )
+            .expect("patch should apply");
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let all_flags = client.all_flags_detail(&context, FlagDetailConfig::new());
+
+        client.close();
+
+        assert_json_eq!(
+            all_flags,
+            json!({
+                "myFlag1": true,
+                "myFlag2": true,
+                "$flagsState": {
+                    "myFlag1": {
+                        "version": 42,
+                        "variation": 1
+                    },
+                     "myFlag2": {
+                        "version": 42,
+                        "variation": 1
+                    },
+                },
+                "$valid": true
+            })
+        );
+    }
+
+    #[test]
+    fn all_flags_detail_returns_prerequisite_relations() {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "prereq1",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("prereq1"))),
+            )
+            .expect("patch should apply");
+        client
+            .data_store
+            .write()
+            .upsert(
+                "prereq2",
+                PatchTarget::Flag(StorageItem::Item(basic_flag("prereq2"))),
+            )
+            .expect("patch should apply");
+
+        client
+            .data_store
+            .write()
+            .upsert(
+                "toplevel",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility(
+                    "toplevel",
+                    &["prereq1", "prereq2"],
+                    false,
+                ))),
+            )
+            .expect("patch should apply");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let all_flags = client.all_flags_detail(&context, FlagDetailConfig::new());
+
+        client.close();
+
+        assert_json_eq!(
+            all_flags,
+            json!({
+                "prereq1": true,
+                "prereq2": true,
+                "toplevel": true,
+                "$flagsState": {
+                    "toplevel": {
+                        "version": 42,
+                        "variation": 1,
+                        "prerequisites": ["prereq1", "prereq2"]
+                    },
+                    "prereq1": {
+                        "version": 42,
+                        "variation": 1
+                    },
+                     "prereq2": {
+                        "version": 42,
+                        "variation": 1
+                    },
+                },
+                "$valid": true
+            })
+        );
+    }
+
+    #[test]
+    fn all_flags_detail_returns_prerequisite_relations_when_not_visible_to_clients() {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client
+            .data_store
+            .write()
+            .upsert(
+                "prereq1",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "prereq1", false,
+                ))),
+            )
+            .expect("patch should apply");
+        client
+            .data_store
+            .write()
+            .upsert(
+                "prereq2",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "prereq2", false,
+                ))),
+            )
+            .expect("patch should apply");
+
+        client
+            .data_store
+            .write()
+            .upsert(
+                "toplevel",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility(
+                    "toplevel",
+                    &["prereq1", "prereq2"],
+                    true,
+                ))),
+            )
+            .expect("patch should apply");
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let mut config = FlagDetailConfig::new();
+        config.client_side_only();
+
+        let all_flags = client.all_flags_detail(&context, config);
+
+        client.close();
+
+        assert_json_eq!(
+            all_flags,
+            json!({
+                "toplevel": true,
+                "$flagsState": {
+                    "toplevel": {
+                        "version": 42,
+                        "variation": 1,
+                        "prerequisites": ["prereq1", "prereq2"]
+                    },
+                },
+                "$valid": true
+            })
+        );
     }
 
     #[test]

@@ -1,7 +1,10 @@
 use super::stores::store::DataStore;
 use serde::Serialize;
+use std::cell::RefCell;
 
-use launchdarkly_server_sdk_evaluation::{evaluate, Context, FlagValue, Reason};
+use launchdarkly_server_sdk_evaluation::{
+    evaluate, Context, FlagValue, PrerequisiteEvent, PrerequisiteEventRecorder, Reason,
+};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -78,6 +81,9 @@ pub struct FlagState {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     debug_events_until_date: Option<u64>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    prerequisites: Vec<String>,
 }
 
 /// FlagDetail is a snapshot of the state of multiple feature flags with regard to a specific user.
@@ -95,6 +101,34 @@ pub struct FlagDetail {
 
     #[serde(rename = "$valid")]
     valid: bool,
+}
+
+/// DirectPrerequisiteRecorder records only the direct (top-level) prerequisites of a
+/// flag.
+struct DirectPrerequisiteRecorder {
+    target_flag_key: String,
+    prerequisites: RefCell<Vec<String>>,
+}
+
+impl DirectPrerequisiteRecorder {
+    /// Creates a new instance of [DirectPrerequisiteRecorder] for a given target flag. The
+    /// direct prerequisites of the flag will be available in the prerequisites field of the
+    /// recorder.
+    pub fn new(target_flag_key: impl Into<String>) -> Self {
+        Self {
+            target_flag_key: target_flag_key.into(),
+            prerequisites: RefCell::new(Vec::new()),
+        }
+    }
+}
+impl PrerequisiteEventRecorder for DirectPrerequisiteRecorder {
+    fn record(&self, event: PrerequisiteEvent) {
+        if event.target_flag_key == self.target_flag_key {
+            self.prerequisites
+                .borrow_mut()
+                .push(event.prerequisite_flag.key)
+        }
+    }
 }
 
 impl FlagDetail {
@@ -118,7 +152,9 @@ impl FlagDetail {
                 continue;
             }
 
-            let detail = evaluate(store.to_store(), &flag, context, None);
+            let event_recorder = DirectPrerequisiteRecorder::new(key.clone());
+
+            let detail = evaluate(store.to_store(), &flag, context, Some(&event_recorder));
 
             // Here we are applying the same logic used in EventFactory.new_feature_request_event
             // to determine whether the evaluation involved an experiment, in which case both
@@ -171,6 +207,7 @@ impl FlagDetail {
                     track_events,
                     track_reason,
                     debug_events_until_date: flag.debug_events_until_date,
+                    prerequisites: event_recorder.prerequisites.take(),
                 },
             );
         }
@@ -186,8 +223,12 @@ mod tests {
     use crate::stores::store::DataStore;
     use crate::stores::store::InMemoryDataStore;
     use crate::stores::store_types::{PatchTarget, StorageItem};
-    use crate::test_common::basic_flag;
+    use crate::test_common::{
+        basic_flag, basic_flag_with_prereqs_and_visibility, basic_flag_with_visibility,
+        basic_off_flag,
+    };
     use crate::FlagDetailConfig;
+    use assert_json_diff::assert_json_eq;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
 
     #[test]
@@ -409,5 +450,164 @@ mod tests {
             serde_json::to_string_pretty(&flag_detail).unwrap(),
             serde_json::to_string_pretty(&expected).unwrap(),
         );
+    }
+
+    #[test]
+    fn flag_prerequisites_should_be_exposed() {
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let mut store = InMemoryDataStore::new();
+
+        let prereq1 = basic_flag("prereq1");
+        let prereq2 = basic_flag("prereq2");
+        let toplevel =
+            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], false);
+
+        store
+            .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
+            .expect("patch should apply");
+
+        store
+            .upsert("prereq2", PatchTarget::Flag(StorageItem::Item(prereq2)))
+            .expect("patch should apply");
+
+        store
+            .upsert("toplevel", PatchTarget::Flag(StorageItem::Item(toplevel)))
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+        flag_detail.populate(&store, &context, FlagDetailConfig::new());
+
+        let expected = json!({
+            "prereq1": true,
+            "prereq2": true,
+            "toplevel": true,
+            "$flagsState": {
+                "toplevel": {
+                    "version": 42,
+                    "variation": 1,
+                    "prerequisites": ["prereq1", "prereq2"]
+                },
+                "prereq2": {
+                    "version": 42,
+                    "variation": 1
+                },
+                "prereq1": {
+                    "version": 42,
+                    "variation": 1,
+                },
+            },
+            "$valid": true
+        });
+
+        assert_json_eq!(expected, flag_detail);
+    }
+
+    #[test]
+    fn flag_prerequisites_should_be_exposed_even_if_not_available_to_clients() {
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let mut store = InMemoryDataStore::new();
+
+        // These two prerequisites won't be visible to clients (environment ID) SDKs.
+        let prereq1 = basic_flag_with_visibility("prereq1", false);
+        let prereq2 = basic_flag_with_visibility("prereq2", false);
+
+        // But, the top-level flag will.
+        let toplevel =
+            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+
+        store
+            .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
+            .expect("patch should apply");
+
+        store
+            .upsert("prereq2", PatchTarget::Flag(StorageItem::Item(prereq2)))
+            .expect("patch should apply");
+
+        store
+            .upsert("toplevel", PatchTarget::Flag(StorageItem::Item(toplevel)))
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+
+        let mut config = FlagDetailConfig::new();
+        config.client_side_only();
+
+        flag_detail.populate(&store, &context, config);
+
+        // Even though the two prereqs are omitted, we should still see their metadata in the
+        // toplevel flag.
+        let expected = json!({
+            "toplevel": true,
+            "$flagsState": {
+                "toplevel": {
+                    "version": 42,
+                    "variation": 1,
+                    "prerequisites": ["prereq1", "prereq2"]
+                },
+            },
+            "$valid": true
+        });
+
+        assert_json_eq!(expected, flag_detail);
+    }
+
+    #[test]
+    fn flag_prerequisites_should_be_in_evaluation_order() {
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let mut store = InMemoryDataStore::new();
+
+        // Since prereq1 will be listed as the first prerequisite, and it is off,
+        // evaluation will short circuit and we shouldn't see the second prerequisite.
+        let prereq1 = basic_off_flag("prereq1");
+        let prereq2 = basic_flag("prereq2");
+
+        let toplevel =
+            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+
+        store
+            .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
+            .expect("patch should apply");
+
+        store
+            .upsert("prereq2", PatchTarget::Flag(StorageItem::Item(prereq2)))
+            .expect("patch should apply");
+
+        store
+            .upsert("toplevel", PatchTarget::Flag(StorageItem::Item(toplevel)))
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+
+        flag_detail.populate(&store, &context, FlagDetailConfig::new());
+
+        let expected = json!({
+            "prereq1": null,
+            "prereq2": true,
+            "toplevel": false,
+            "$flagsState": {
+                "toplevel": {
+                    "version": 42,
+                    "variation": 0,
+                    "prerequisites": ["prereq1"]
+                },
+                "prereq2": {
+                    "version": 42,
+                    "variation": 1
+                },
+                "prereq1": {
+                    "version": 42
+                }
+
+            },
+            "$valid": true
+        });
+
+        assert_json_eq!(expected, flag_detail);
     }
 }
