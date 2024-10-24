@@ -2,6 +2,13 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.3.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.2.1...2.3.0) (2024-10-24)
+
+
+### Features
+
+* support prerequisite relation data in all_flags_detail ([#99](https://github.com/launchdarkly/rust-server-sdk/issues/99)) ([d0ad003](https://github.com/launchdarkly/rust-server-sdk/commit/d0ad00309b83d0157c729b534a873e230d71a4c8))
+
 ## [2.2.1](https://github.com/launchdarkly/rust-server-sdk/compare/2.2.0...2.2.1) (2024-08-08)
 
 
