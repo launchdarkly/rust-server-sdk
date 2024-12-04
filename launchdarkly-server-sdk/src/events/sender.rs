@@ -106,7 +106,8 @@ where
                 serde_json::to_string_pretty(&events).unwrap_or_else(|e| e.to_string())
             );
 
-            #[allow(unused_mut, reason = "mut is needed for compress feature")]
+            // mut is needed for compress feature
+            #[allow(unused_mut)]
             let mut payload = match serde_json::to_vec(&events) {
                 Ok(json) => json,
                 Err(e) => {
