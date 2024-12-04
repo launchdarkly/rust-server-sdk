@@ -21,7 +21,6 @@ pub struct EventsConfiguration {
     all_attributes_private: bool,
     private_attributes: HashSet<Reference>,
     omit_anonymous_contexts: bool,
-    compress_events: bool,
 }
 
 #[cfg(test)]
@@ -38,7 +37,6 @@ fn create_events_configuration(
         all_attributes_private: false,
         private_attributes: HashSet::new(),
         omit_anonymous_contexts: false,
-        compress_events: false,
     }
 }
 

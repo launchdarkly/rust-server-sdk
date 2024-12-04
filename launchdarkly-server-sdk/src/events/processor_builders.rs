@@ -155,7 +155,6 @@ where
             all_attributes_private: self.all_attributes_private,
             private_attributes: self.private_attributes.clone(),
             omit_anonymous_contexts: self.omit_anonymous_contexts,
-            compress_events: self.compress_events,
         };
 
         let events_processor =

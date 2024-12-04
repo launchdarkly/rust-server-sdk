@@ -43,6 +43,9 @@ pub struct HyperEventSender<C> {
     sdk_key: String,
     http: hyper::Client<C>,
     default_headers: HashMap<&'static str, String>,
+
+    // used with compress feature
+    #[allow(dead_code)]
     compress_events: bool,
 }
 
@@ -119,6 +122,8 @@ where
                 }
             };
 
+            // mut is needed for compress feature
+            #[allow(unused_mut)]
             let mut additional_headers = self.default_headers.clone();
 
             #[cfg(feature = "compress")]
