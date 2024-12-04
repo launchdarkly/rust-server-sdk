@@ -7,7 +7,7 @@ use crate::Stage;
 pub const FLOAT_TO_INT_MAX: i64 = 9007199254740991;
 
 pub fn basic_flag(key: &str) -> Flag {
-    return basic_flag_with_visibility(key, false);
+    basic_flag_with_visibility(key, false)
 }
 
 pub fn basic_flag_with_visibility(key: &str, visible_to_environment_id: bool) -> Flag {

@@ -5,12 +5,13 @@ use crate::{
 use chrono::DateTime;
 use crossbeam_channel::Sender;
 use std::collections::HashMap;
-use std::io::Write;
 
 #[cfg(feature = "compress")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compress")]
 use flate2::Compression;
+#[cfg(feature = "compress")]
+use std::io::Write;
 
 use futures::future::BoxFuture;
 use hyper::{client::connect::Connection, service::Service, Uri};
@@ -105,6 +106,7 @@ where
                 serde_json::to_string_pretty(&events).unwrap_or_else(|e| e.to_string())
             );
 
+            #[allow(unused_mut, reason = "mut is needed for compress feature")]
             let mut payload = match serde_json::to_vec(&events) {
                 Ok(json) => json,
                 Err(e) => {
@@ -121,7 +123,7 @@ where
             #[cfg(feature = "compress")]
             if self.compress_events {
                 let mut e = GzEncoder::new(Vec::new(), Compression::default());
-                if let Ok(_) = e.write_all(payload.as_slice()) {
+                if e.write_all(payload.as_slice()).is_ok() {
                     if let Ok(compressed) = e.finish() {
                         payload = compressed;
                         additional_headers.insert("Content-Encoding", "gzip".into());
