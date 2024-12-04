@@ -84,6 +84,7 @@ pub struct EventProcessorBuilder<C> {
     private_attributes: HashSet<Reference>,
     connector: Option<C>,
     omit_anonymous_contexts: bool,
+    compress_events: bool,
     // diagnostic_recording_interval: Duration
 }
 
@@ -109,6 +110,7 @@ where
         }
 
         let event_sender_result: Result<Arc<dyn EventSender>, BuildError> =
+            // NOTE: This would only be possible under unit testing conditions.
             if let Some(event_sender) = &self.event_sender {
                 Ok(event_sender.clone())
             } else if let Some(connector) = &self.connector {
@@ -117,6 +119,7 @@ where
                     hyper::Uri::from_str(url_string.as_str()).unwrap(),
                     sdk_key,
                     default_headers,
+                    self.compress_events,
                 )))
             } else {
                 #[cfg(feature = "rustls")]
@@ -133,6 +136,7 @@ where
                         hyper::Uri::from_str(url_string.as_str()).unwrap(),
                         sdk_key,
                         default_headers,
+                        self.compress_events,
                     )))
                 }
                 #[cfg(not(feature = "rustls"))]
@@ -151,6 +155,7 @@ where
             all_attributes_private: self.all_attributes_private,
             private_attributes: self.private_attributes.clone(),
             omit_anonymous_contexts: self.omit_anonymous_contexts,
+            compress_events: self.compress_events,
         };
 
         let events_processor =
@@ -178,6 +183,7 @@ impl<C> EventProcessorBuilder<C> {
             private_attributes: HashSet::new(),
             omit_anonymous_contexts: false,
             connector: None,
+            compress_events: false,
         }
     }
 
@@ -258,7 +264,20 @@ impl<C> EventProcessorBuilder<C> {
         self
     }
 
+    #[cfg(feature = "compress")]
+    /// Should the event payload sent to LaunchDarkly use gzip compression. By
+    /// default this is false to prevent backward breaking compatibility issues with
+    /// older versions of the relay proxy.
+    //
+    /// Customers not using the relay proxy are strongly encouraged to enable this
+    /// feature to reduce egress bandwidth cost.
+    pub fn compress_events(&mut self, enabled: bool) -> &mut Self {
+        self.compress_events = enabled;
+        self
+    }
+
     #[cfg(test)]
+    /// Test only functionality that allows us to override the event sender.
     pub fn event_sender(&mut self, event_sender: Arc<dyn EventSender>) -> &mut Self {
         self.event_sender = Some(event_sender);
         self

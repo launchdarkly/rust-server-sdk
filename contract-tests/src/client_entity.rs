@@ -113,6 +113,9 @@ impl ClientEntity {
                 processor_builder.capacity(capacity);
             }
             processor_builder.all_attributes_private(events.all_attributes_private);
+            if let Some(e) = events.enable_gzip {
+                processor_builder.compress_events(e);
+            }
 
             if let Some(interval) = events.flush_interval_ms {
                 processor_builder.flush_interval(Duration::from_millis(interval));

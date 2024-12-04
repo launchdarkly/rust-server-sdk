@@ -41,6 +41,7 @@ pub struct EventParameters {
     pub enable_diagnostics: bool,
     #[serde(default = "bool::default")]
     pub all_attributes_private: bool,
+    pub enable_gzip: Option<bool>,
     pub global_private_attributes: Option<HashSet<Reference>>,
     pub flush_interval_ms: Option<u64>,
     #[serde(default = "bool::default")]
@@ -110,6 +111,8 @@ async fn status() -> impl Responder {
             "migrations".to_string(),
             "event-sampling".to_string(),
             "client-prereq-events".to_string(),
+            "event-gzip".to_string(),
+            "optional-event-gzip".to_string(),
         ],
     })
 }
