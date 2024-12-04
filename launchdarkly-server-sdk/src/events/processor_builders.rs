@@ -263,7 +263,7 @@ impl<C> EventProcessorBuilder<C> {
         self
     }
 
-    #[cfg(feature = "compress")]
+    #[cfg(feature = "event-compression")]
     /// Should the event payload sent to LaunchDarkly use gzip compression. By
     /// default this is false to prevent backward breaking compatibility issues with
     /// older versions of the relay proxy.

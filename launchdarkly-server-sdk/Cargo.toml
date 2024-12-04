@@ -51,7 +51,7 @@ reqwest = { version = "0.12.4", features = ["json"] }
 [features]
 default = ["rustls"]
 rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "eventsource-client/rustls"]
-compress = ["flate2"]
+event-compression = ["flate2"]
 
 [[example]]
 name = "print_flags"
