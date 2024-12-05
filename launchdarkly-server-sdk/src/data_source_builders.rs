@@ -345,7 +345,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         _sdk_key: &str,
         _tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
-        return Ok(self.data_source.as_ref().unwrap().clone());
+        Ok(self.data_source.as_ref().unwrap().clone())
     }
 
     fn to_owned(&self) -> Box<dyn DataSourceFactory> {

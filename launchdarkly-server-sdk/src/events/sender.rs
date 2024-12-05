@@ -2,10 +2,17 @@ use crate::{
     reqwest::is_http_error_recoverable, LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
     LAUNCHDARKLY_PAYLOAD_ID_HEADER,
 };
-use std::collections::HashMap;
-
 use chrono::DateTime;
 use crossbeam_channel::Sender;
+use std::collections::HashMap;
+
+#[cfg(feature = "event-compression")]
+use flate2::write::GzEncoder;
+#[cfg(feature = "event-compression")]
+use flate2::Compression;
+#[cfg(feature = "event-compression")]
+use std::io::Write;
+
 use futures::future::BoxFuture;
 use hyper::{client::connect::Connection, service::Service, Uri};
 use tokio::{
@@ -36,6 +43,10 @@ pub struct HyperEventSender<C> {
     sdk_key: String,
     http: hyper::Client<C>,
     default_headers: HashMap<&'static str, String>,
+
+    // used with event-compression feature
+    #[allow(dead_code)]
+    compress_events: bool,
 }
 
 impl<C> HyperEventSender<C>
@@ -50,12 +61,14 @@ where
         url: hyper::Uri,
         sdk_key: &str,
         default_headers: HashMap<&'static str, String>,
+        compress_events: bool,
     ) -> Self {
         Self {
             url,
             sdk_key: sdk_key.to_owned(),
             http: hyper::Client::builder().build(connector),
             default_headers,
+            compress_events,
         }
     }
 
@@ -96,7 +109,9 @@ where
                 serde_json::to_string_pretty(&events).unwrap_or_else(|e| e.to_string())
             );
 
-            let json = match serde_json::to_vec(&events) {
+            // mut is needed for event-compression feature
+            #[allow(unused_mut)]
+            let mut payload = match serde_json::to_vec(&events) {
                 Ok(json) => json,
                 Err(e) => {
                     error!(
@@ -106,6 +121,21 @@ where
                     return;
                 }
             };
+
+            // mut is needed for event-compression feature
+            #[allow(unused_mut)]
+            let mut additional_headers = self.default_headers.clone();
+
+            #[cfg(feature = "event-compression")]
+            if self.compress_events {
+                let mut e = GzEncoder::new(Vec::new(), Compression::default());
+                if e.write_all(payload.as_slice()).is_ok() {
+                    if let Ok(compressed) = e.finish() {
+                        payload = compressed;
+                        additional_headers.insert("Content-Encoding", "gzip".into());
+                    }
+                }
+            }
 
             for attempt in 1..=2 {
                 if attempt == 2 {
@@ -124,11 +154,11 @@ where
                     )
                     .header(LAUNCHDARKLY_PAYLOAD_ID_HEADER, uuid.to_string());
 
-                for default_header in &self.default_headers {
+                for default_header in &additional_headers {
                     request_builder =
                         request_builder.header(*default_header.0, default_header.1.as_str());
                 }
-                let request = request_builder.body(hyper::Body::from(json.clone()));
+                let request = request_builder.body(hyper::Body::from(payload.clone()));
 
                 let result = self.http.request(request.unwrap()).await;
 
@@ -334,6 +364,7 @@ mod tests {
             url,
             "sdk-key",
             HashMap::<&str, String>::new(),
+            false,
         )
     }
 }
