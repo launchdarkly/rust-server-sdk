@@ -155,7 +155,6 @@ where
                     .header(LAUNCHDARKLY_PAYLOAD_ID_HEADER, uuid.to_string());
 
                 for default_header in &additional_headers {
-                    error!("Adding header: {} = {}", default_header.0, default_header.1);
                     request_builder =
                         request_builder.header(*default_header.0, default_header.1.as_str());
                 }
