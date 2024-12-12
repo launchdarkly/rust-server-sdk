@@ -13,6 +13,9 @@ exclude = [
     "coverage.sh"
 ]
 
+[package.metadata.docs.rs]
+features = ["event-compression"]
+
 [dependencies]
 chrono = "0.4.19"
 crossbeam-channel = "0.5.1"
