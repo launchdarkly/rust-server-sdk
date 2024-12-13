@@ -2,6 +2,13 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.4.1](https://github.com/launchdarkly/rust-server-sdk/compare/2.4.0...2.4.1) (2024-12-13)
+
+
+### Bug Fixes
+
+* Enable event-compression during docs.rs generation ([#104](https://github.com/launchdarkly/rust-server-sdk/issues/104)) ([c50a65d](https://github.com/launchdarkly/rust-server-sdk/commit/c50a65d15551984828b405f18902651ab25f4387))
+
 ## [2.4.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.3.0...2.4.0) (2024-12-05)
 
 
