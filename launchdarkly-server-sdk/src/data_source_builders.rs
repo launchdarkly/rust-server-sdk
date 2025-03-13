@@ -1,9 +1,15 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
+#[cfg(feature = "native-certs")]
+use hyper::client::HttpConnector;
 use hyper::{client::connect::Connection, service::Service, Uri};
+#[cfg(feature = "native-certs")]
+use hyper_rustls::HttpsConnector;
 #[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
+#[cfg(feature = "native-certs")]
+use rustls::ClientConfig;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -86,6 +92,42 @@ impl<C> StreamingDataSourceBuilder<C> {
     }
 }
 
+#[cfg(feature = "native-certs")]
+fn create_https_connector_with_native_certs() -> HttpsConnector<HttpConnector> {
+    // Load native certs
+    let mut root_store = rustls::RootCertStore::empty();
+    match rustls_native_certs::load_native_certs() {
+        Ok(certs) => {
+            for cert in certs {
+                root_store
+                    .add(&rustls::Certificate(cert.0))
+                    .unwrap_or_else(|e| {
+                        eprintln!("Failed to add certificate: {}", e);
+                    });
+            }
+            println!("Added {} certificates", root_store.len());
+        }
+        Err(e) => {
+            eprintln!("Failed to load native certificates: {}", e);
+            // Fall back to an empty store, which will likely fail connections
+        }
+    }
+
+    // Create TLS config
+    let tls_config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    // Build the HTTPS connector
+    HttpsConnectorBuilder::new()
+        .with_tls_config(tls_config)
+        .https_only()
+        .enable_http1()
+        .enable_http2()
+        .build()
+}
+
 impl<C> DataSourceFactory for StreamingDataSourceBuilder<C>
 where
     C: Service<Uri> + Clone + Send + Sync + 'static,
@@ -102,19 +144,34 @@ where
         let data_source_result = match &self.connector {
             #[cfg(feature = "rustls")]
             None => {
-                let connector = HttpsConnectorBuilder::new()
-                    .with_native_roots()
-                    .https_or_http()
-                    .enable_http1()
-                    .enable_http2()
-                    .build();
-                Ok(StreamingDataSource::new(
-                    endpoints.streaming_base_url(),
-                    sdk_key,
-                    self.initial_reconnect_delay,
-                    &tags,
-                    connector,
-                ))
+                #[cfg(feature = "native-certs")]
+                {
+                    let connector = create_https_connector_with_native_certs();
+                    Ok(StreamingDataSource::new(
+                        endpoints.streaming_base_url(),
+                        sdk_key,
+                        self.initial_reconnect_delay,
+                        &tags,
+                        connector,
+                    ))
+                }
+
+                #[cfg(not(feature = "native-certs"))]
+                {
+                    let connector = HttpsConnectorBuilder::new()
+                        .with_native_roots()
+                        .https_or_http()
+                        .enable_http1()
+                        .enable_http2()
+                        .build();
+                    Ok(StreamingDataSource::new(
+                        endpoints.streaming_base_url(),
+                        sdk_key,
+                        self.initial_reconnect_delay,
+                        &tags,
+                        connector,
+                    ))
+                }
             }
             #[cfg(not(feature = "rustls"))]
             None => Err(BuildError::InvalidConfig(
