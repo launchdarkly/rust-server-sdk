@@ -65,7 +65,7 @@ rustls = [
     "hyper-rustls/http2",
     "eventsource-client/rustls",
 ]
-native-certs = []
+native-certs = ["rustls-native-certs"]
 event-compression = ["flate2"]
 
 [[example]]
