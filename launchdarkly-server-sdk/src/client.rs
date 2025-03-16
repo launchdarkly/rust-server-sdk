@@ -269,6 +269,16 @@ impl Client {
         Ok(true)
     }
 
+    /// Forcefully sets the client to initialized without making any outbound calls.
+    ///
+    /// This acts as a pseudo-offline mode, where the `DataStore` is still read from. This should only be used in
+    /// cases where the `DataStore` is managed outside of launchdarkly-server-sdk.
+    pub fn force_initialized(&self) {
+        self.started.store(true, Ordering::SeqCst);
+        self.init_state
+            .store(ClientInitState::Initialized as usize, Ordering::SeqCst);
+    }
+
     /// This is an async method that will resolve once initialization is complete.
     /// Initialization being complete does not mean that initialization was a success.
     /// The return value from the method indicates if the client successfully initialized.

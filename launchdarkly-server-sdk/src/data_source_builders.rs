@@ -144,10 +144,13 @@ impl<C> Default for StreamingDataSourceBuilder<C> {
     }
 }
 
+/// An implementation of DataSourceFactory that will not make any outbound calls. This should
+/// only be used when filling a DataStore externally.
 #[derive(Clone)]
 pub struct NullDataSourceBuilder {}
 
 impl NullDataSourceBuilder {
+    /// Create a new [NullDataSourceBuilder] with all default values.
     pub fn new() -> Self {
         Self {}
     }

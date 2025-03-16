@@ -29,7 +29,8 @@ pub use client::Client;
 pub use client::{BuildError, StartError};
 pub use config::{ApplicationInfo, BuildError as ConfigBuildError, Config, ConfigBuilder};
 pub use data_source_builders::{
-    BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
+    BuildError as DataSourceBuildError, NullDataSourceBuilder, PollingDataSourceBuilder,
+    StreamingDataSourceBuilder,
 };
 pub use evaluation::{FlagDetail, FlagDetailConfig};
 pub use events::event::MigrationOpEvent;
