@@ -42,7 +42,6 @@ hyper = { version = "0.14.19", features = ["client", "http1", "http2", "tcp"] }
 hyper-rustls = { version = "0.24.1", optional = true }
 rand = "0.8"
 flate2 = { version = "1.0.35", optional = true }
-rustls = "0.21.0"                                                               # Matches the current version used by hyper-rustls
 
 [dev-dependencies]
 maplit = "1.0.1"
