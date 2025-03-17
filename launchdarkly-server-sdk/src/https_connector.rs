@@ -2,8 +2,6 @@ use hyper::client::HttpConnector;
 use hyper_rustls::HttpsConnector;
 #[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
-#[cfg(feature = "native-certs")]
-use rustls::ClientConfig;
 
 /// Creates an HTTPS connector for secure HTTP requests.
 ///
@@ -14,11 +12,9 @@ use rustls::ClientConfig;
 ///
 /// This function has different implementations based on crate features:
 ///
-/// - When the `native-certs` feature is enabled, it loads certificates from the system's
-///   native certificate store and configures TLS with these certificates.
+/// - When the `webpki-roots` feature is enabled, it uses WebPKI roots for certificate verification.
 ///
-/// - When `native-certs` is not enabled, it uses the default configuration from
-///   `HttpsConnectorBuilder` with native roots.
+/// - When `webpki-roots` is not enabled, it uses the system's native certificate store.
 ///
 /// # Returns
 ///
@@ -51,11 +47,9 @@ pub fn create_https_connector() -> HttpsConnector<HttpConnector> {
 ///
 /// This function has different implementations based on crate features:
 ///
-/// - When the `native-certs` feature is enabled, it loads certificates from the system's
-///   native certificate store and configures TLS with these certificates.
+/// - When the `webpki-roots` feature is enabled, it uses WebPKI roots for certificate verification.
 ///
-/// - When `native-certs` is not enabled, it uses the default configuration from
-///   `HttpsConnectorBuilder` with native roots.
+/// - When `webpki-roots` is not enabled, it uses the system's native certificate store.
 ///
 /// # Returns
 ///
