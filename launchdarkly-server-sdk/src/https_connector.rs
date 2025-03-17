@@ -32,36 +32,10 @@ use rustls::ClientConfig;
 /// let connector = create_https_connector();
 /// let client = hyper::Client::builder().build::<_, hyper::Body>(connector);
 /// ```
-#[cfg(feature = "native-certs")]
+#[cfg(feature = "webpki-roots")]
 pub fn create_https_connector() -> HttpsConnector<HttpConnector> {
-    // Load native certs
-    let mut root_store = rustls::RootCertStore::empty();
-    match rustls_native_certs::load_native_certs() {
-        Ok(certs) => {
-            for cert in certs {
-                root_store
-                    .add(&rustls::Certificate(cert.0))
-                    .unwrap_or_else(|e| {
-                        eprintln!("Failed to add certificate: {}", e);
-                    });
-            }
-            println!("Added {} certificates", root_store.len());
-        }
-        Err(e) => {
-            eprintln!("Failed to load native certificates: {}", e);
-            // Fall back to an empty store, which will likely fail connections
-        }
-    }
-
-    // Create TLS config
-    let tls_config = ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-
-    // Build the HTTPS connector
     HttpsConnectorBuilder::new()
-        .with_tls_config(tls_config)
+        .with_webpki_roots()
         .https_or_http()
         .enable_http1()
         .enable_http2()
@@ -95,7 +69,7 @@ pub fn create_https_connector() -> HttpsConnector<HttpConnector> {
 /// let connector = create_https_connector();
 /// let client = hyper::Client::builder().build::<_, hyper::Body>(connector);
 /// ```
-#[cfg(not(feature = "native-certs"))]
+#[cfg(not(feature = "webpki-roots"))]
 pub fn create_https_connector() -> HttpsConnector<HttpConnector> {
     HttpsConnectorBuilder::new()
         .with_native_roots()
