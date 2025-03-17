@@ -12,6 +12,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::events::sender::HyperEventSender;
+use crate::https_connector::create_https_connector;
 use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
 
 use super::processor::{
@@ -122,7 +123,7 @@ where
             } else {
                 #[cfg(feature = "rustls")]
                 {
-                    let connector = crate::create_https_connector();
+                    let connector = create_https_connector();
                     Ok(Arc::new(HyperEventSender::new(
                         connector,
                         hyper::Uri::from_str(url_string.as_str()).unwrap(),

@@ -40,7 +40,6 @@ pub use events::processor_builders::{
 pub use feature_requester_builders::{
     BuildError as FeatureRequestBuilderError, FeatureRequesterFactory,
 };
-pub use https_connector::create_https_connector;
 pub use launchdarkly_server_sdk_evaluation::{Flag, Segment, Versioned};
 pub use migrations::{
     ExecutionOrder, MigrationOpTracker, Migrator, MigratorBuilder, Operation, Origin, Stage,

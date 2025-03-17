@@ -1,6 +1,7 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
+use crate::https_connector::create_https_connector;
 use hyper::{client::connect::Connection, service::Service, Uri};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -100,7 +101,7 @@ where
         let data_source_result = match &self.connector {
             #[cfg(feature = "rustls")]
             None => {
-                let connector = crate::create_https_connector();
+                let connector = create_https_connector();
                 Ok(StreamingDataSource::new(
                     endpoints.streaming_base_url(),
                     sdk_key,
@@ -265,7 +266,7 @@ where
             match &self.connector {
                 #[cfg(feature = "rustls")]
                 None => {
-                    let connector = crate::create_https_connector();
+                    let connector = create_https_connector();
                     Ok(Box::new(HyperFeatureRequesterBuilder::new(
                         endpoints.polling_base_url(),
                         sdk_key,
