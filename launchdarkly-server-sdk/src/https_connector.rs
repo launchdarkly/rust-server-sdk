@@ -1,74 +1,34 @@
 use hyper::client::HttpConnector;
+use hyper_rustls::builderstates::WantsSchemes;
 use hyper_rustls::HttpsConnector;
-#[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
 
-/// Creates an HTTPS connector for secure HTTP requests.
-///
-/// This function configures and returns a connector that provides HTTPS capabilities to
-/// HTTP client implementations.
-///
-/// # Features
-///
-/// This function has different implementations based on crate features:
-///
-/// - When the `webpki-roots` feature is enabled, it uses WebPKI roots for certificate verification.
-///
-/// - When `webpki-roots` is not enabled, it uses the system's native certificate store.
-///
-/// # Returns
-///
-/// Returns an `HttpsConnector<HttpConnector>` configured for secure HTTP connections.
-///
-/// # Examples
-///
-/// ```
-/// use launchdarkly_server_sdk::https_connector::create_https_connector;
-///
-/// let connector = create_https_connector();
-/// let client = hyper::Client::builder().build::<_, hyper::Body>(connector);
-/// ```
-#[cfg(feature = "webpki-roots")]
+// Creates an HTTPS connector for secure HTTP requests.
+//
+// This function configures and returns a connector that provides HTTPS capabilities to
+// HTTP client implementations.
+//
+// # Features
+//
+// By default, this function uses the system's native certificate store for certificate
+// verification. However, if the `webpki-roots` feature is enabled, it will use the
+// WebPKI library instead. This is useful in environments where the system's certificate
+// store is not available or not reliable.
+//
 pub fn create_https_connector() -> HttpsConnector<HttpConnector> {
-    HttpsConnectorBuilder::new()
-        .with_webpki_roots()
+    builder()
         .https_or_http()
         .enable_http1()
         .enable_http2()
         .build()
 }
 
-/// Creates an HTTPS connector for secure HTTP requests.
-///
-/// This function configures and returns a connector that provides HTTPS capabilities to
-/// HTTP client implementations.
-///
-/// # Features
-///
-/// This function has different implementations based on crate features:
-///
-/// - When the `webpki-roots` feature is enabled, it uses WebPKI roots for certificate verification.
-///
-/// - When `webpki-roots` is not enabled, it uses the system's native certificate store.
-///
-/// # Returns
-///
-/// Returns an `HttpsConnector<HttpConnector>` configured for secure HTTP connections.
-///
-/// # Examples
-///
-/// ```
-/// use launchdarkly_server_sdk::https_connector::create_https_connector;
-///
-/// let connector = create_https_connector();
-/// let client = hyper::Client::builder().build::<_, hyper::Body>(connector);
-/// ```
+#[cfg(feature = "webpki-roots")]
+fn builder() -> HttpsConnectorBuilder<WantsSchemes> {
+    HttpsConnectorBuilder::new().with_webpki_roots()
+}
+
 #[cfg(not(feature = "webpki-roots"))]
-pub fn create_https_connector() -> HttpsConnector<HttpConnector> {
-    HttpsConnectorBuilder::new()
-        .with_native_roots()
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .build()
+fn builder() -> HttpsConnectorBuilder<WantsSchemes> {
+    HttpsConnectorBuilder::new().with_native_roots()
 }
