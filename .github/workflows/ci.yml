@@ -25,16 +25,22 @@ jobs:
 
       - uses: ./.github/actions/ci
 
-      - name: 'Run contract tests with hyper_rustls'
+      - name: 'Run contract tests with hyper_rustls and native cert store'
         uses: ./.github/actions/contract-tests
         with:
-          tls_feature: 'rustls'
+          features: 'rustls'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 'Run contract tests with hyper_rustls and WebPKI cert store'
+        uses: ./.github/actions/contract-tests
+        with:
+          features: 'rustls,webpki-roots'
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 'Run contract tests with hyper_tls'
         uses: ./.github/actions/contract-tests
         with:
-          tls_feature: 'tls'
+          features: 'tls'
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: ./.github/actions/build-docs

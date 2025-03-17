@@ -1,8 +1,8 @@
 TEMP_TEST_OUTPUT=/tmp/contract-test-service.log
-TLS_FEATURE ?= rustls
+FEATURES ?= rustls
 
 build-contract-tests:
-	cargo build -p contract-tests --release --no-default-features --features "$(TLS_FEATURE)"
+	cargo build -p contract-tests --release --no-default-features --features "$(FEATURES)"
 
 start-contract-test-service: build-contract-tests
 	@./target/release/contract-tests

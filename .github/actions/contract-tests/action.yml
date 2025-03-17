@@ -1,8 +1,8 @@
 name: Contract test runner
 description: 'Reusable contract runner action'
 inputs:
-  tls_feature:
-    description: 'Which TLS feature do you want to enable?'
+  features:
+    description: 'Which features should be enabled during build?'
     required: true
   token:
     description: 'GH Token used for retrieving SDK test harness.'
@@ -13,7 +13,7 @@ runs:
   steps:
     - name: Build contract tests
       shell: bash
-      run: TLS_FEATURE="${{ inputs.tls_feature }}" make build-contract-tests
+      run: FEATURES="${{ inputs.features }}" make build-contract-tests
 
     - name: Start contract test service
       shell: bash
