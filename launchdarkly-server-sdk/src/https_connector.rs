@@ -1,6 +1,4 @@
-#[cfg(feature = "native-certs")]
 use hyper::client::HttpConnector;
-#[cfg(feature = "native-certs")]
 use hyper_rustls::HttpsConnector;
 #[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
@@ -104,5 +102,5 @@ pub fn create_https_connector() -> HttpsConnector<HttpConnector> {
         .https_or_http()
         .enable_http1()
         .enable_http2()
-        .build();
+        .build()
 }
