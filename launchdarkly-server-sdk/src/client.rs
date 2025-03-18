@@ -155,6 +155,7 @@ pub struct Client {
     init_state: Arc<AtomicUsize>,
     started: AtomicBool,
     offline: bool,
+    daemon_mode: bool,
     sdk_key: String,
     shutdown_broadcast: broadcast::Sender<()>,
     runtime: RwLock<Option<Runtime>>,
@@ -165,6 +166,8 @@ impl Client {
     pub fn build(config: Config) -> Result<Self, BuildError> {
         if config.offline() {
             info!("Started LaunchDarkly Client in offline mode");
+        } else if config.daemon_mode() {
+            info!("Started LaunchDarkly Client in daemon mode");
         }
 
         let tags = config.application_tag();
@@ -210,6 +213,7 @@ impl Client {
             init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
             started: AtomicBool::new(false),
             offline: config.offline(),
+            daemon_mode: config.daemon_mode(),
             sdk_key: config.sdk_key().into(),
             shutdown_broadcast: shutdown_tx,
             runtime: RwLock::new(None),
@@ -297,7 +301,7 @@ impl Client {
     }
 
     async fn initialized_async_internal(&self) -> bool {
-        if self.offline {
+        if self.offline || self.daemon_mode {
             return true;
         }
 
@@ -316,7 +320,9 @@ impl Client {
     /// In the case of unrecoverable errors in establishing a connection it is possible for the
     /// SDK to never become initialized.
     pub fn initialized(&self) -> bool {
-        self.offline || ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
+        self.offline
+            || self.daemon_mode
+            || ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
     }
 
     /// Close shuts down the LaunchDarkly client. After calling this, the LaunchDarkly client
@@ -872,7 +878,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, false);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -885,7 +891,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes_within_timeout() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, false);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -900,7 +906,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes_slower_than_timeout() {
-        let (client, _event_rx) = make_mocked_client_with_delay(2000, false);
+        let (client, _event_rx) = make_mocked_client_with_delay(2000, false, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -915,7 +921,23 @@ mod tests {
 
     #[tokio::test]
     async fn client_initializes_immediately_in_offline_mode() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, true);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, true, false);
+        client.start_with_default_executor();
+
+        assert!(client.initialized());
+
+        let now = Instant::now();
+        let initialized = client
+            .wait_for_initialization(Duration::from_millis(2000))
+            .await;
+        let elapsed_time = now.elapsed();
+        assert_eq!(initialized, Some(true));
+        assert!(elapsed_time.as_millis() < 500)
+    }
+
+    #[tokio::test]
+    async fn client_initializes_immediately_in_daemon_mode() {
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, true);
         client.start_with_default_executor();
 
         assert!(client.initialized());
@@ -1394,6 +1416,30 @@ mod tests {
     }
 
     #[test]
+    fn variation_detail_handles_daemon_mode() {
+        let (client, event_rx) = make_mocked_client_with_delay(1000, false, true);
+        client.start_with_default_executor();
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let detail = client.variation_detail(&context, "myFlag", FlagValue::Bool(false));
+
+        assert!(!detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Error {
+                error: eval::Error::FlagNotFound
+            }
+        ));
+        client.flush();
+        client.close();
+
+        assert_eq!(event_rx.iter().count(), 2);
+    }
+
+    #[test]
     fn variation_handles_off_flag_without_variation() {
         let (client, event_rx) = make_mocked_client();
         client.start_with_default_executor();
@@ -1612,7 +1658,7 @@ mod tests {
 
     #[tokio::test]
     async fn variation_detail_handles_client_not_ready() {
-        let (client, event_rx) = make_mocked_client_with_delay(u64::MAX, false);
+        let (client, event_rx) = make_mocked_client_with_delay(u64::MAX, false, false);
         client.start_with_default_executor();
         let context = ContextBuilder::new("bob")
             .build()
@@ -2475,12 +2521,17 @@ mod tests {
         }
     }
 
-    fn make_mocked_client_with_delay(delay: u64, offline: bool) -> (Client, Receiver<OutputEvent>) {
+    fn make_mocked_client_with_delay(
+        delay: u64,
+        offline: bool,
+        daemon_mode: bool,
+    ) -> (Client, Receiver<OutputEvent>) {
         let updates = Arc::new(MockDataSource::new_with_init_delay(delay));
         let (event_sender, event_rx) = create_event_sender();
 
         let config = ConfigBuilder::new("sdk-key")
             .offline(offline)
+            .daemon_mode(daemon_mode)
             .data_source(MockDataSourceBuilder::new().data_source(updates))
             .event_processor(
                 EventProcessorBuilder::<HttpConnector>::new().event_sender(Arc::new(event_sender)),
@@ -2494,10 +2545,10 @@ mod tests {
     }
 
     fn make_mocked_offline_client() -> (Client, Receiver<OutputEvent>) {
-        make_mocked_client_with_delay(0, true)
+        make_mocked_client_with_delay(0, true, false)
     }
 
     fn make_mocked_client() -> (Client, Receiver<OutputEvent>) {
-        make_mocked_client_with_delay(0, false)
+        make_mocked_client_with_delay(0, false, false)
     }
 }
