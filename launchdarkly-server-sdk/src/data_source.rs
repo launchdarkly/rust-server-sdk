@@ -24,7 +24,7 @@ const FLAGS_PREFIX: &str = "/flags/";
 const SEGMENTS_PREFIX: &str = "/segments/";
 
 #[derive(Debug)]
-#[allow(clippy::enum_variant_names)]
+#[allow(clippy::enum_variant_names, dead_code)]
 pub enum Error {
     InvalidEventData {
         event_type: String,

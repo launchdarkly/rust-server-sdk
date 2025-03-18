@@ -32,16 +32,17 @@ impl ServiceEndpoints {
 /// changing these properties:
 ///
 /// - You are using the <a href="https://docs.launchdarkly.com/home/advanced/relay-proxy">LaunchDarkly
-/// Relay Proxy</a>. In this case, use [ServiceEndpointsBuilder::relay_proxy] with the URL of the relay proxy instance.
+///   Relay Proxy</a>. In this case, use [ServiceEndpointsBuilder::relay_proxy] with the URL of the
+///   relay proxy instance.
 ///
 /// - You are connecting to a private instance of LaunchDarkly, rather than the standard production
-/// services. In this case, there will be custom base URIs for each service. You need to configure
-/// each endpoint with [ServiceEndpointsBuilder::polling_base_url],
-/// [ServiceEndpointsBuilder::streaming_base_url], and [ServiceEndpointsBuilder::events_base_url].
+///   services. In this case, there will be custom base URIs for each service. You need to configure
+///   each endpoint with [ServiceEndpointsBuilder::polling_base_url],
+///   [ServiceEndpointsBuilder::streaming_base_url], and [ServiceEndpointsBuilder::events_base_url].
 ///
 /// - You are connecting to a test fixture that simulates the service endpoints. In this case, you
-/// may set the base URLs to whatever you want, although the SDK will still set the URL paths to
-/// the expected paths for LaunchDarkly services.
+///   may set the base URLs to whatever you want, although the SDK will still set the URL paths to
+///   the expected paths for LaunchDarkly services.
 ///
 /// # Examples
 ///
