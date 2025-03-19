@@ -82,7 +82,7 @@ where
                 Err(e) => {
                     // It appears this type of error will not be an HTTP error.
                     // It will be a closed connection, aborted write, timeout, etc.
-                    error!("An error occurred while retrieving flag information {}", e,);
+                    error!(target: "ld-server-sdk", "An error occurred while retrieving flag information {}", e,);
                     return Err(FeatureRequesterError::Temporary);
                 }
             };
@@ -105,9 +105,10 @@ where
                     .await
                     .map_err(|e| {
                         error!(
-                            "An error occurred while reading the polling response body: {}",
-                            e
-                        );
+                        target: "ld-server-sdk",
+                                    "An error occurred while reading the polling response body: {}",
+                                    e
+                                );
                         FeatureRequesterError::Temporary
                     })?;
                 let json = serde_json::from_slice::<AllData<Flag, Segment>>(bytes.as_ref());
@@ -115,19 +116,20 @@ where
                 return match json {
                     Ok(all_data) => {
                         if !etag.is_empty() {
-                            debug!("Caching data for future use with etag: {}", etag);
+                            debug!(target: "ld-server-sdk", "Caching data for future use with etag: {}", etag);
                             self.cache = Some(CachedEntry(all_data.clone(), etag));
                         }
                         Ok(all_data)
                     }
                     Err(e) => {
-                        error!("An error occurred while parsing the json response: {}", e);
+                        error!(target: "ld-server-sdk", "An error occurred while parsing the json response: {}", e);
                         Err(FeatureRequesterError::Temporary)
                     }
                 };
             }
 
             error!(
+                target: "ld-server-sdk",
                 "An error occurred while retrieving flag information. (status: {})",
                 response.status().as_str()
             );

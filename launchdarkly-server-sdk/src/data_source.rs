@@ -132,11 +132,11 @@ impl DataSource for StreamingDataSource {
                         let event = match event {
                             Some(Ok(event)) => match event {
                                 es::SSE::Connected(_) => {
-                                    debug!("data source connected");
+                                    debug!(target: "ld-server-sdk", "data source connected");
                                     continue;
                                 },
                                 es::SSE::Comment(str)=> {
-                                    debug!("data source got a comment: {}", str);
+                                    debug!(target: "ld-server-sdk", "data source got a comment: {}", str);
                                     continue;
                                 },
                                 es::SSE::Event(ev) => ev,
@@ -146,7 +146,7 @@ impl DataSource for StreamingDataSource {
                                     true => continue,
                                     _ => {
                                         notify_init.call_once(|| (init_complete)(false));
-                                        warn!("Returned unrecoverable failure. Unexpected response {}", response.status());
+                                        warn!(target: "ld-server-sdk", "Returned unrecoverable failure. Unexpected response {}", response.status());
                                         break
                                     }
                                 }
@@ -157,13 +157,13 @@ impl DataSource for StreamingDataSource {
                                         continue;
                                     }
                                     _ => {
-                                        error!("unhandled error on event stream: {:?}", e);
+                                        error!(target: "ld-server-sdk", "unhandled error on event stream: {:?}", e);
                                         break;
                                     }
                                 }
                             },
                             None => {
-                                error!("unexpected end of event stream");
+                                error!(target: "ld-server-sdk", "unexpected end of event stream");
                                 break;
                             }
                         };
@@ -171,7 +171,7 @@ impl DataSource for StreamingDataSource {
                         let data_store = data_store.clone();
                         let mut data_store = data_store.write();
 
-                        debug!("data source got an event: {}", event.event_type);
+                        debug!(target: "ld-server-sdk", "data source got an event: {}", event.event_type);
 
                         let stored = match event.event_type.as_str() {
                             "put" => process_put(&mut *data_store, event),
@@ -181,7 +181,7 @@ impl DataSource for StreamingDataSource {
                         };
                         if let Err(e) = stored {
                             init_success = false;
-                            error!("error processing update: {:?}", e);
+                            error!(target: "ld-server-sdk", "error processing update: {:?}", e);
                         }
 
                         notify_init.call_once(|| (init_complete)(init_success));
@@ -223,12 +223,12 @@ impl DataSource for PollingDataSource {
             Ok(factory) => match factory.build(self.tags.clone()) {
                 Ok(requester) => requester,
                 Err(e) => {
-                    error!("{:?}", e);
+                    error!(target: "ld-server-sdk", "{:?}", e);
                     return;
                 }
             },
             Err(e) => {
-                error!("{:?}", e);
+                error!(target: "ld-server-sdk", "{:?}", e);
                 return;
             }
         };
@@ -252,10 +252,10 @@ impl DataSource for PollingDataSource {
                                 notify_init.call_once(|| init_complete(true));
                             }
                             Err(FeatureRequesterError::Temporary) => {
-                                warn!("feature requester has returned a temporary failure");
+                                warn!(target: "ld-server-sdk", "feature requester has returned a temporary failure");
                             }
                             Err(FeatureRequesterError::Permanent) => {
-                                error!("feature requester has returned a permanent failure");
+                                error!(target: "ld-server-sdk", "feature requester has returned a permanent failure");
                                 notify_init.call_once(|| init_complete(false));
                                 break;
                             }

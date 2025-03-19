@@ -238,7 +238,7 @@ where
         if let Ok(mut tracker) = tracker.lock() {
             tracker.operation(Operation::Read);
         } else {
-            error!("Failed to acquire tracker lock. Cannot track migration write.");
+            error!(target: "ld-server-sdk", "Failed to acquire tracker lock. Cannot track migration write.");
         }
 
         let mut old = Executor {
@@ -307,7 +307,7 @@ where
         if let Ok(mut tracker) = tracker.lock() {
             tracker.operation(Operation::Write);
         } else {
-            error!("Failed to acquire tracker lock. Cannot track migration write.");
+            error!(target: "ld-server-sdk", "Failed to acquire tracker lock. Cannot track migration write.");
         }
 
         let mut old = Executor {
@@ -403,7 +403,7 @@ where
             if let Ok(mut tracker) = tracker.lock() {
                 tracker.consistent(|| compare(authoritative, nonauthoritative));
             } else {
-                error!("Failed to acquire tracker lock. Cannot track consistency.");
+                error!(target: "ld-server-sdk", "Failed to acquire tracker lock. Cannot track consistency.");
             }
         }
     }

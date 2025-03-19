@@ -164,7 +164,7 @@ impl Client {
     /// Create a new instance of a [Client] based on the provided [Config] parameter.
     pub fn build(config: Config) -> Result<Self, BuildError> {
         if config.offline() {
-            info!("Started LaunchDarkly Client in offline mode");
+            info!(target: "ld-server-sdk", "Started LaunchDarkly Client in offline mode");
         }
 
         let tags = config.application_tag();
@@ -286,7 +286,7 @@ impl Client {
     /// return a boolean indicating whether or not the SDK has successfully initialized.
     pub async fn wait_for_initialization(&self, timeout: Duration) -> Option<bool> {
         if timeout > Duration::from_secs(60) {
-            warn!("wait_for_initialization was configured to block for up to {} seconds. We recommend blocking no longer than 60 seconds.", timeout.as_secs());
+            warn!(target: "ld-server-sdk", "wait_for_initialization was configured to block for up to {} seconds. We recommend blocking no longer than 60 seconds.", timeout.as_secs());
         }
 
         let initialized = tokio::time::timeout(timeout, self.initialized_async_internal()).await;
@@ -329,7 +329,7 @@ impl Client {
         // channel, so sending on it would always result in an error.
         if !self.offline {
             if let Err(e) = self.shutdown_broadcast.send(()) {
-                error!("Failed to shutdown client appropriately: {}", e);
+                error!(target: "ld-server-sdk", "Failed to shutdown client appropriately: {}", e);
             }
         }
 
@@ -374,6 +374,7 @@ impl Client {
             b
         } else {
             warn!(
+                target: "ld-server-sdk",
                 "bool_variation called for a non-bool flag {:?} (got {:?})",
                 flag_key, val
             );
@@ -394,6 +395,7 @@ impl Client {
             s
         } else {
             warn!(
+                target: "ld-server-sdk",
                 "str_variation called for a non-string flag {:?} (got {:?})",
                 flag_key, val
             );
@@ -414,6 +416,7 @@ impl Client {
             f
         } else {
             warn!(
+                target: "ld-server-sdk",
                 "float_variation called for a non-float flag {:?} (got {:?})",
                 flag_key, val
             );
@@ -434,6 +437,7 @@ impl Client {
             f
         } else {
             warn!(
+                target: "ld-server-sdk",
                 "int_variation called for a non-int flag {:?} (got {:?})",
                 flag_key, val
             );
@@ -578,13 +582,14 @@ impl Client {
     ) -> FlagDetail {
         if self.offline {
             warn!(
+                target: "ld-server-sdk",
                 "all_flags_detail() called, but client is in offline mode. Returning empty state"
             );
             return FlagDetail::new(false);
         }
 
         if !self.initialized() {
-            warn!("all_flags_detail() called before client has finished initializing! Feature store unavailable - returning empty state");
+            warn!(target: "ld-server-sdk", "all_flags_detail() called before client has finished initializing! Feature store unavailable - returning empty state");
             return FlagDetail::new(false);
         }
 
@@ -755,12 +760,14 @@ impl Client {
                         );
                     }
                     Err(e) => error!(
-                        "Failed to build migration event, no event will be sent: {}",
-                        e
-                    ),
+                    target: "ld-server-sdk",
+                            "Failed to build migration event, no event will be sent: {}",
+                            e
+                        ),
                 }
             }
             Err(e) => error!(
+                target: "ld-server-sdk",
                 "Failed to lock migration tracker, no event will be sent: {}",
                 e
             ),

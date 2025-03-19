@@ -64,6 +64,7 @@ fn main() {
         (Err(_), Err(_), Err(_)) => {}
         _ => {
             error!(
+                    target: "ld-server-sdk::example",
                 "Please specify all URLs LAUNCHDARKLY_STREAM_URL,\
              LAUNCHDARKLY_EVENTS_URL, and LAUNCHDARKLY_POLLING_URL"
             );

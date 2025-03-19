@@ -85,7 +85,7 @@ impl ApplicationInfo {
         match tag.is_valid() {
             Ok(_) => self.tags.push(tag),
             Err(e) => {
-                warn!("{}", e)
+                warn!(target: "ld-server-sdk", "{}", e)
             }
         }
 
@@ -269,30 +269,31 @@ impl ConfigBuilder {
             Some(_data_store_builder) => self.data_store_builder.unwrap(),
         };
 
-        let data_source_builder_result: Result<Box<dyn DataSourceFactory>, BuildError> =
-            match self.data_source_builder {
-                None if self.offline => Ok(Box::new(NullDataSourceBuilder::new())),
-                Some(_) if self.offline => {
-                    warn!("Custom data source builders will be ignored when in offline mode");
-                    Ok(Box::new(NullDataSourceBuilder::new()))
-                }
-                Some(builder) => Ok(builder),
-                #[cfg(feature = "rustls")]
-                None => Ok(Box::new(StreamingDataSourceBuilder::<
-                    hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
-                >::new())),
-                #[cfg(not(feature = "rustls"))]
-                None => Err(BuildError::InvalidConfig(
-                    "data source builder required when rustls is disabled".into(),
-                )),
-            };
+        let data_source_builder_result: Result<Box<dyn DataSourceFactory>, BuildError> = match self
+            .data_source_builder
+        {
+            None if self.offline => Ok(Box::new(NullDataSourceBuilder::new())),
+            Some(_) if self.offline => {
+                warn!(target: "ld-server-sdk", "Custom data source builders will be ignored when in offline mode");
+                Ok(Box::new(NullDataSourceBuilder::new()))
+            }
+            Some(builder) => Ok(builder),
+            #[cfg(feature = "rustls")]
+            None => Ok(Box::new(StreamingDataSourceBuilder::<
+                hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
+            >::new())),
+            #[cfg(not(feature = "rustls"))]
+            None => Err(BuildError::InvalidConfig(
+                "data source builder required when rustls is disabled".into(),
+            )),
+        };
         let data_source_builder = data_source_builder_result?;
 
         let event_processor_builder_result: Result<Box<dyn EventProcessorFactory>, BuildError> =
             match self.event_processor_builder {
                 None if self.offline => Ok(Box::new(NullEventProcessorBuilder::new())),
                 Some(_) if self.offline => {
-                    warn!("Custom event processor builders will be ignored when in offline mode");
+                    warn!(target: "ld-server-sdk", "Custom event processor builders will be ignored when in offline mode");
                     Ok(Box::new(NullEventProcessorBuilder::new()))
                 }
                 Some(builder) => Ok(builder),

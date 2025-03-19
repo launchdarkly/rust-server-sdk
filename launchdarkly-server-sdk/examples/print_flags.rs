@@ -14,7 +14,7 @@ use tokio::time;
 async fn main() {
     env_logger::init_from_env(Env::new().default_filter_or("info"));
 
-    info!("Connecting...");
+    info!(target: "ld-server-sdk::example", "Connecting...");
 
     let flags: Vec<String> = env::args().skip(1).collect();
     let mut bool_flags = Vec::<String>::new();
@@ -27,7 +27,7 @@ async fn main() {
         } else if let ["str", name] = bits {
             str_flags.push(name.to_string());
         } else if let [flag_type, _] = bits {
-            error!("Unsupported flag type {} in {}", flag_type, flag);
+            error!(target: "ld-server-sdk::example", "Unsupported flag type {} in {}", flag_type, flag);
             exit(2);
         } else if let [name] = bits {
             bool_flags.push(name.to_string());
@@ -36,7 +36,7 @@ async fn main() {
         }
     }
     if bool_flags.is_empty() && str_flags.is_empty() {
-        error!("Please list some flags to watch.");
+        error!(target: "ld-server-sdk::example", "Please list some flags to watch.");
         exit(1);
     }
 
@@ -67,6 +67,7 @@ async fn main() {
         (Err(_), Err(_), Err(_)) => {}
         _ => {
             error!(
+                target: "ld-server-sdk::example",
                 "Please specify all URLs LAUNCHDARKLY_STREAM_URL,\
              LAUNCHDARKLY_EVENTS_URL, and LAUNCHDARKLY_POLLING_URL"
             );
@@ -85,7 +86,7 @@ async fn main() {
         .unwrap_or(false); // A timeout (None) can be treated as initialization failure
 
     if !initialized {
-        error!("The client failed to initialize!");
+        error!(target: "ld-server-sdk::example", "The client failed to initialize!");
     }
 
     loop {
@@ -95,6 +96,7 @@ async fn main() {
             for flag_key in &bool_flags {
                 let flag_detail = client.bool_variation_detail(context, flag_key, false);
                 info!(
+                    target: "ld-server-sdk::example",
                     "context {:?}, flag {}: {:?}",
                     context.key(),
                     flag_key,
@@ -105,6 +107,7 @@ async fn main() {
                 let flag_detail =
                     client.str_variation_detail(context, flag_key, "default".to_string());
                 info!(
+                    target: "ld-server-sdk::example",
                     "context {:?}, flag {}: {:?}",
                     context.key(),
                     flag_key,

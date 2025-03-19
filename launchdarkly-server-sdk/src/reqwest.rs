@@ -12,7 +12,7 @@ pub fn is_http_error_recoverable(status: u16) -> bool {
         );
     }
 
-    warn!("Unable to determine if status code is recoverable");
+    warn!(target: "ld-server-sdk", "Unable to determine if status code is recoverable");
     false
 }
 

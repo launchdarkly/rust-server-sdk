@@ -35,7 +35,7 @@ impl Outbox {
         if self.events.len() == self.capacity {
             if !self.capacity_exceeded {
                 self.capacity_exceeded = true;
-                warn!("Exceeded event queue capacity. Increase capacity to avoid dropping events.");
+                warn!(target: "ld-server-sdk", "Exceeded event queue capacity. Increase capacity to avoid dropping events.");
             }
             return;
         }
@@ -108,7 +108,7 @@ impl EventDispatcher {
         let rt = match rt {
             Ok(rt) => rt,
             Err(e) => {
-                error!("Could not start runtime for event sending: {}", e);
+                error!(target: "ld-server-sdk", "Could not start runtime for event sending: {}", e);
                 return;
             }
         };
@@ -116,7 +116,7 @@ impl EventDispatcher {
         let (send, recv) = bounded::<()>(1);
 
         loop {
-            debug!("waiting for a batch to send");
+            debug!(target: "ld-server-sdk", "waiting for a batch to send");
 
             loop {
                 select! {
@@ -128,7 +128,7 @@ impl EventDispatcher {
                         },
                         Ok(_) => continue,
                         Err(e) => {
-                            error!("event_result_rx is disconnected. Shutting down dispatcher: {}", e);
+                            error!(target: "ld-server-sdk", "event_result_rx is disconnected. Shutting down dispatcher: {}", e);
                             return;
                         }
                     },
@@ -158,7 +158,7 @@ impl EventDispatcher {
                             return;
                         }
                         Err(e) => {
-                            error!("inbox_rx is disconnected. Shutting down dispatcher: {}", e);
+                            error!(target: "ld-server-sdk", "inbox_rx is disconnected. Shutting down dispatcher: {}", e);
                             return;
                         }
                     }
@@ -172,7 +172,7 @@ impl EventDispatcher {
             if !self.outbox.is_empty() {
                 let payload = self.outbox.get_payload();
 
-                debug!("Sending batch of {} events", payload.len());
+                debug!(target: "ld-server-sdk", "Sending batch of {} events", payload.len());
 
                 let sender = self.events_configuration.event_sender.clone();
                 let results = event_result_tx.clone();
@@ -293,11 +293,11 @@ impl EventDispatcher {
         let key = context.canonical_key();
 
         if self.context_keys.get(key).is_none() {
-            trace!("noticing new context {:?}", key);
+            trace!(target: "ld-server-sdk", "noticing new context {:?}", key);
             self.context_keys.put(key.to_owned(), ());
             true
         } else {
-            trace!("ignoring already-seen context {:?}", key);
+            trace!(target: "ld-server-sdk", "ignoring already-seen context {:?}", key);
             false
         }
     }

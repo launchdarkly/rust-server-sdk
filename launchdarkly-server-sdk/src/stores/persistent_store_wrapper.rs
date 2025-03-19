@@ -125,7 +125,7 @@ impl PersistentDataStoreWrapper {
     fn cache_items(&self, all_data: AllData<StorageItem<Flag>, StorageItem<Segment>>) {
         self.cache_flags(all_data.flags);
         self.cache_segments(all_data.segments);
-        debug!("flag and segment caches have been updated");
+        debug!(target: "ld-server-sdk", "flag and segment caches have been updated");
     }
 }
 
@@ -145,14 +145,14 @@ impl Store for PersistentDataStoreWrapper {
                         item.into()
                     }
                     Err(e) => {
-                        warn!("failed to convert serialized item into flag: {}", e);
+                        warn!(target: "ld-server-sdk", "failed to convert serialized item into flag: {}", e);
                         None
                     }
                 }
             }
             Ok(None) => None,
             Err(e) => {
-                warn!("persistent store failed to retrieve flag: {}", e);
+                warn!(target: "ld-server-sdk", "persistent store failed to retrieve flag: {}", e);
                 None
             }
         }
@@ -173,14 +173,14 @@ impl Store for PersistentDataStoreWrapper {
                         item.into()
                     }
                     Err(e) => {
-                        warn!("failed to convert serialized item into segment: {}", e);
+                        warn!(target: "ld-server-sdk", "failed to convert serialized item into segment: {}", e);
                         None
                     }
                 }
             }
             Ok(None) => None,
             Err(e) => {
-                warn!("persistent store failed to retrieve segment: {}", e);
+                warn!(target: "ld-server-sdk", "persistent store failed to retrieve segment: {}", e);
                 None
             }
         }
@@ -196,6 +196,7 @@ impl DataStore for PersistentDataStoreWrapper {
 
         match serialized_data {
             Err(e) => warn!(
+                target: "ld-server-sdk",
                 "failed to deserialize payload; cannot initialize store {}",
                 e
             ),
@@ -204,13 +205,13 @@ impl DataStore for PersistentDataStoreWrapper {
 
                 match result {
                     Ok(()) => {
-                        debug!("data store has been updated with new flag data");
+                        debug!(target: "ld-server-sdk", "data store has been updated with new flag data");
                         self.cache_items(all_data.into());
                     }
                     Err(e) => {
-                        error!("failed to init store: {}", e);
+                        error!(target: "ld-server-sdk", "failed to init store: {}", e);
                         if self.flags.cache_is_infinite() {
-                            debug!("updating non-expiring cache");
+                            debug!(target: "ld-server-sdk", "updating non-expiring cache");
                             self.cache_items(all_data.into())
                         }
                     }
@@ -249,13 +250,13 @@ impl DataStore for PersistentDataStoreWrapper {
                         HashMap::from_iter(flag_iter)
                     }
                     Err(e) => {
-                        warn!("failed to convert serialized items into flags: {}", e);
+                        warn!(target: "ld-server-sdk", "failed to convert serialized items into flags: {}", e);
                         HashMap::new()
                     }
                 }
             }
             Err(e) => {
-                warn!("persistent store failed to retrieve all flags: {}", e);
+                warn!(target: "ld-server-sdk", "persistent store failed to retrieve all flags: {}", e);
                 HashMap::new()
             }
         }

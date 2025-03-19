@@ -80,7 +80,7 @@ impl Store for InMemoryDataStore {
 impl DataStore for InMemoryDataStore {
     fn init(&mut self, new_data: AllData<Flag, Segment>) {
         self.data = new_data.into();
-        debug!("data store has been updated with new flag data");
+        debug!(target: "ldsdk", "data store has been updated with new flag data");
     }
 
     fn all_flags(&self) -> HashMap<String, Flag> {

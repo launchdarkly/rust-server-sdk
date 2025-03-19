@@ -78,7 +78,7 @@ impl EventProcessor for EventProcessorImpl {
             .is_err()
         {
             self.inbox_full_once.call_once(|| {
-                warn!("Events are being produced faster than they can be processed; some events will be dropped")
+                warn!(target: "ld-server-sdk", "Events are being produced faster than they can be processed; some events will be dropped")
             });
         }
     }
@@ -91,7 +91,7 @@ impl EventProcessor for EventProcessorImpl {
         let (sender, receiver) = bounded::<()>(1);
 
         if self.inbox_tx.send(EventDispatcherMessage::Flush).is_err() {
-            error!("Failed to send final flush message. Cannot stop event processor");
+            error!(target: "ld-server-sdk", "Failed to send final flush message. Cannot stop event processor");
             return;
         }
 
@@ -100,7 +100,7 @@ impl EventProcessor for EventProcessorImpl {
             .send(EventDispatcherMessage::Close(sender))
             .is_err()
         {
-            error!("Failed to send close message. Cannot stop event processor");
+            error!(target: "ld-server-sdk", "Failed to send close message. Cannot stop event processor");
             return;
         }
 
