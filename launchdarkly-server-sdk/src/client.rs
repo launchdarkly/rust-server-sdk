@@ -331,9 +331,9 @@ impl Client {
     pub fn close(&self) {
         self.event_processor.close();
 
-        // If the system is in offline mode, no receiver will be listening to this broadcast
-        // channel, so sending on it would always result in an error.
-        if !self.offline {
+        // If the system is in offline mode or daemon mode, no receiver will be listening to this
+        // broadcast channel, so sending on it would always result in an error.
+        if !self.offline && !self.daemon_mode {
             if let Err(e) = self.shutdown_broadcast.send(()) {
                 error!("Failed to shutdown client appropriately: {}", e);
             }
@@ -850,7 +850,8 @@ mod tests {
     use eval::{ContextBuilder, MultiContextBuilder};
     use futures::FutureExt;
     use hyper::client::HttpConnector;
-    use launchdarkly_server_sdk_evaluation::Reason;
+    use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
+    use maplit::hashmap;
     use std::collections::HashMap;
     use tokio::time::Instant;
 
@@ -859,12 +860,17 @@ mod tests {
     use crate::events::create_event_sender;
     use crate::events::event::{OutputEvent, VariationKey};
     use crate::events::processor_builders::EventProcessorBuilder;
+    use crate::stores::persistent_store::tests::InMemoryPersistentDataStore;
     use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::{
         self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility,
         basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag,
     };
-    use crate::{ConfigBuilder, MigratorBuilder, Operation, Origin};
+    use crate::{
+        AllData, ConfigBuilder, MigratorBuilder, NullEventProcessorBuilder, Operation, Origin,
+        PersistentDataStore, PersistentDataStoreBuilder, PersistentDataStoreFactory,
+        SerializedItem,
+    };
     use test_case::test_case;
 
     use super::*;
@@ -1415,28 +1421,109 @@ mod tests {
         assert_eq!(event_rx.iter().count(), 0);
     }
 
+    struct InMemoryPersistentDataStoreFactory {
+        data: AllData<Flag, Segment>,
+        initialized: bool,
+    }
+
+    impl PersistentDataStoreFactory for InMemoryPersistentDataStoreFactory {
+        fn create_persistent_data_store(
+            &self,
+        ) -> Result<Box<(dyn PersistentDataStore + 'static)>, std::io::Error> {
+            let serialized_data =
+                AllData::<SerializedItem, SerializedItem>::try_from(self.data.clone())?;
+            Ok(Box::new(InMemoryPersistentDataStore {
+                data: serialized_data,
+                initialized: self.initialized,
+            }))
+        }
+    }
+
     #[test]
     fn variation_detail_handles_daemon_mode() {
-        let (client, event_rx) = make_mocked_client_with_delay(1000, false, true);
+        testing_logger::setup();
+        let factory = InMemoryPersistentDataStoreFactory {
+            data: AllData {
+                flags: hashmap!["flag".into() => basic_flag("flag")],
+                segments: HashMap::new(),
+            },
+            initialized: true,
+        };
+        let builder = PersistentDataStoreBuilder::new(Arc::new(factory));
+
+        let config = ConfigBuilder::new("sdk-key")
+            .daemon_mode(true)
+            .data_store(&builder)
+            .event_processor(&NullEventProcessorBuilder::new())
+            .build()
+            .expect("config should build");
+
+        let client = Client::build(config).expect("Should be built.");
+
         client.start_with_default_executor();
 
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
 
-        let detail = client.variation_detail(&context, "myFlag", FlagValue::Bool(false));
+        let detail = client.variation_detail(&context, "flag", FlagValue::Bool(false));
 
-        assert!(!detail.value.unwrap().as_bool().unwrap());
+        assert!(detail.value.unwrap().as_bool().unwrap());
         assert!(matches!(
             detail.reason,
-            Reason::Error {
-                error: eval::Error::FlagNotFound
+            Reason::Fallthrough {
+                in_experiment: false
             }
         ));
         client.flush();
         client.close();
 
-        assert_eq!(event_rx.iter().count(), 2);
+        testing_logger::validate(|captured_logs| {
+            assert_eq!(captured_logs.len(), 1);
+            assert_eq!(
+                captured_logs[0].body,
+                "Started LaunchDarkly Client in daemon mode"
+            );
+        });
+    }
+
+    #[test]
+    fn daemon_mode_is_quiet_if_store_is_not_initialized() {
+        testing_logger::setup();
+
+        let factory = InMemoryPersistentDataStoreFactory {
+            data: AllData {
+                flags: HashMap::new(),
+                segments: HashMap::new(),
+            },
+            initialized: false,
+        };
+        let builder = PersistentDataStoreBuilder::new(Arc::new(factory));
+
+        let config = ConfigBuilder::new("sdk-key")
+            .daemon_mode(true)
+            .data_store(&builder)
+            .event_processor(&NullEventProcessorBuilder::new())
+            .build()
+            .expect("config should build");
+
+        let client = Client::build(config).expect("Should be built.");
+
+        client.start_with_default_executor();
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        client.variation_detail(&context, "flag", FlagValue::Bool(false));
+
+        testing_logger::validate(|captured_logs| {
+            assert_eq!(captured_logs.len(), 1);
+            assert_eq!(
+                captured_logs[0].body,
+                "Started LaunchDarkly Client in daemon mode"
+            );
+        });
     }
 
     #[test]
