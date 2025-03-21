@@ -155,6 +155,7 @@ pub struct Client {
     init_state: Arc<AtomicUsize>,
     started: AtomicBool,
     offline: bool,
+    daemon_mode: bool,
     sdk_key: String,
     shutdown_broadcast: broadcast::Sender<()>,
     runtime: RwLock<Option<Runtime>>,
@@ -165,6 +166,8 @@ impl Client {
     pub fn build(config: Config) -> Result<Self, BuildError> {
         if config.offline() {
             info!("Started LaunchDarkly Client in offline mode");
+        } else if config.daemon_mode() {
+            info!("Started LaunchDarkly Client in daemon mode");
         }
 
         let tags = config.application_tag();
@@ -210,6 +213,7 @@ impl Client {
             init_state: Arc::new(AtomicUsize::new(ClientInitState::Initializing as usize)),
             started: AtomicBool::new(false),
             offline: config.offline(),
+            daemon_mode: config.daemon_mode(),
             sdk_key: config.sdk_key().into(),
             shutdown_broadcast: shutdown_tx,
             runtime: RwLock::new(None),
@@ -297,7 +301,7 @@ impl Client {
     }
 
     async fn initialized_async_internal(&self) -> bool {
-        if self.offline {
+        if self.offline || self.daemon_mode {
             return true;
         }
 
@@ -316,7 +320,9 @@ impl Client {
     /// In the case of unrecoverable errors in establishing a connection it is possible for the
     /// SDK to never become initialized.
     pub fn initialized(&self) -> bool {
-        self.offline || ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
+        self.offline
+            || self.daemon_mode
+            || ClientInitState::Initialized == self.init_state.load(Ordering::SeqCst)
     }
 
     /// Close shuts down the LaunchDarkly client. After calling this, the LaunchDarkly client
@@ -325,9 +331,9 @@ impl Client {
     pub fn close(&self) {
         self.event_processor.close();
 
-        // If the system is in offline mode, no receiver will be listening to this broadcast
-        // channel, so sending on it would always result in an error.
-        if !self.offline {
+        // If the system is in offline mode or daemon mode, no receiver will be listening to this
+        // broadcast channel, so sending on it would always result in an error.
+        if !self.offline && !self.daemon_mode {
             if let Err(e) = self.shutdown_broadcast.send(()) {
                 error!("Failed to shutdown client appropriately: {}", e);
             }
@@ -844,7 +850,8 @@ mod tests {
     use eval::{ContextBuilder, MultiContextBuilder};
     use futures::FutureExt;
     use hyper::client::HttpConnector;
-    use launchdarkly_server_sdk_evaluation::Reason;
+    use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
+    use maplit::hashmap;
     use std::collections::HashMap;
     use tokio::time::Instant;
 
@@ -853,12 +860,17 @@ mod tests {
     use crate::events::create_event_sender;
     use crate::events::event::{OutputEvent, VariationKey};
     use crate::events::processor_builders::EventProcessorBuilder;
+    use crate::stores::persistent_store::tests::InMemoryPersistentDataStore;
     use crate::stores::store_types::{PatchTarget, StorageItem};
     use crate::test_common::{
         self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility,
         basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag,
     };
-    use crate::{ConfigBuilder, MigratorBuilder, Operation, Origin};
+    use crate::{
+        AllData, ConfigBuilder, MigratorBuilder, NullEventProcessorBuilder, Operation, Origin,
+        PersistentDataStore, PersistentDataStoreBuilder, PersistentDataStoreFactory,
+        SerializedItem,
+    };
     use test_case::test_case;
 
     use super::*;
@@ -872,7 +884,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, false);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -885,7 +897,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes_within_timeout() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, false);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -900,7 +912,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_asynchronously_initializes_slower_than_timeout() {
-        let (client, _event_rx) = make_mocked_client_with_delay(2000, false);
+        let (client, _event_rx) = make_mocked_client_with_delay(2000, false, false);
         client.start_with_default_executor();
 
         let now = Instant::now();
@@ -915,7 +927,23 @@ mod tests {
 
     #[tokio::test]
     async fn client_initializes_immediately_in_offline_mode() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, true);
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, true, false);
+        client.start_with_default_executor();
+
+        assert!(client.initialized());
+
+        let now = Instant::now();
+        let initialized = client
+            .wait_for_initialization(Duration::from_millis(2000))
+            .await;
+        let elapsed_time = now.elapsed();
+        assert_eq!(initialized, Some(true));
+        assert!(elapsed_time.as_millis() < 500)
+    }
+
+    #[tokio::test]
+    async fn client_initializes_immediately_in_daemon_mode() {
+        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, true);
         client.start_with_default_executor();
 
         assert!(client.initialized());
@@ -1393,6 +1421,111 @@ mod tests {
         assert_eq!(event_rx.iter().count(), 0);
     }
 
+    struct InMemoryPersistentDataStoreFactory {
+        data: AllData<Flag, Segment>,
+        initialized: bool,
+    }
+
+    impl PersistentDataStoreFactory for InMemoryPersistentDataStoreFactory {
+        fn create_persistent_data_store(
+            &self,
+        ) -> Result<Box<(dyn PersistentDataStore + 'static)>, std::io::Error> {
+            let serialized_data =
+                AllData::<SerializedItem, SerializedItem>::try_from(self.data.clone())?;
+            Ok(Box::new(InMemoryPersistentDataStore {
+                data: serialized_data,
+                initialized: self.initialized,
+            }))
+        }
+    }
+
+    #[test]
+    fn variation_detail_handles_daemon_mode() {
+        testing_logger::setup();
+        let factory = InMemoryPersistentDataStoreFactory {
+            data: AllData {
+                flags: hashmap!["flag".into() => basic_flag("flag")],
+                segments: HashMap::new(),
+            },
+            initialized: true,
+        };
+        let builder = PersistentDataStoreBuilder::new(Arc::new(factory));
+
+        let config = ConfigBuilder::new("sdk-key")
+            .daemon_mode(true)
+            .data_store(&builder)
+            .event_processor(&NullEventProcessorBuilder::new())
+            .build()
+            .expect("config should build");
+
+        let client = Client::build(config).expect("Should be built.");
+
+        client.start_with_default_executor();
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        let detail = client.variation_detail(&context, "flag", FlagValue::Bool(false));
+
+        assert!(detail.value.unwrap().as_bool().unwrap());
+        assert!(matches!(
+            detail.reason,
+            Reason::Fallthrough {
+                in_experiment: false
+            }
+        ));
+        client.flush();
+        client.close();
+
+        testing_logger::validate(|captured_logs| {
+            assert_eq!(captured_logs.len(), 1);
+            assert_eq!(
+                captured_logs[0].body,
+                "Started LaunchDarkly Client in daemon mode"
+            );
+        });
+    }
+
+    #[test]
+    fn daemon_mode_is_quiet_if_store_is_not_initialized() {
+        testing_logger::setup();
+
+        let factory = InMemoryPersistentDataStoreFactory {
+            data: AllData {
+                flags: HashMap::new(),
+                segments: HashMap::new(),
+            },
+            initialized: false,
+        };
+        let builder = PersistentDataStoreBuilder::new(Arc::new(factory));
+
+        let config = ConfigBuilder::new("sdk-key")
+            .daemon_mode(true)
+            .data_store(&builder)
+            .event_processor(&NullEventProcessorBuilder::new())
+            .build()
+            .expect("config should build");
+
+        let client = Client::build(config).expect("Should be built.");
+
+        client.start_with_default_executor();
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+
+        client.variation_detail(&context, "flag", FlagValue::Bool(false));
+
+        testing_logger::validate(|captured_logs| {
+            assert_eq!(captured_logs.len(), 1);
+            assert_eq!(
+                captured_logs[0].body,
+                "Started LaunchDarkly Client in daemon mode"
+            );
+        });
+    }
+
     #[test]
     fn variation_handles_off_flag_without_variation() {
         let (client, event_rx) = make_mocked_client();
@@ -1612,7 +1745,7 @@ mod tests {
 
     #[tokio::test]
     async fn variation_detail_handles_client_not_ready() {
-        let (client, event_rx) = make_mocked_client_with_delay(u64::MAX, false);
+        let (client, event_rx) = make_mocked_client_with_delay(u64::MAX, false, false);
         client.start_with_default_executor();
         let context = ContextBuilder::new("bob")
             .build()
@@ -2475,12 +2608,17 @@ mod tests {
         }
     }
 
-    fn make_mocked_client_with_delay(delay: u64, offline: bool) -> (Client, Receiver<OutputEvent>) {
+    fn make_mocked_client_with_delay(
+        delay: u64,
+        offline: bool,
+        daemon_mode: bool,
+    ) -> (Client, Receiver<OutputEvent>) {
         let updates = Arc::new(MockDataSource::new_with_init_delay(delay));
         let (event_sender, event_rx) = create_event_sender();
 
         let config = ConfigBuilder::new("sdk-key")
             .offline(offline)
+            .daemon_mode(daemon_mode)
             .data_source(MockDataSourceBuilder::new().data_source(updates))
             .event_processor(
                 EventProcessorBuilder::<HttpConnector>::new().event_sender(Arc::new(event_sender)),
@@ -2494,10 +2632,10 @@ mod tests {
     }
 
     fn make_mocked_offline_client() -> (Client, Receiver<OutputEvent>) {
-        make_mocked_client_with_delay(0, true)
+        make_mocked_client_with_delay(0, true, false)
     }
 
     fn make_mocked_client() -> (Client, Receiver<OutputEvent>) {
-        make_mocked_client_with_delay(0, false)
+        make_mocked_client_with_delay(0, false, false)
     }
 }

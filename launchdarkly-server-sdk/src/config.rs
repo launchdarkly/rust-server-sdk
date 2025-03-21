@@ -127,6 +127,7 @@ pub struct Config {
     event_processor_builder: Box<dyn EventProcessorFactory>,
     application_tag: Option<String>,
     offline: bool,
+    daemon_mode: bool,
 }
 
 impl Config {
@@ -160,6 +161,11 @@ impl Config {
         self.offline
     }
 
+    /// Returns the daemon mode status
+    pub fn daemon_mode(&self) -> bool {
+        self.daemon_mode
+    }
+
     /// Returns the tag builder if provided
     pub fn application_tag(&self) -> &Option<String> {
         &self.application_tag
@@ -189,6 +195,7 @@ pub struct ConfigBuilder {
     event_processor_builder: Option<Box<dyn EventProcessorFactory>>,
     application_info: Option<ApplicationInfo>,
     offline: bool,
+    daemon_mode: bool,
     sdk_key: String,
 }
 
@@ -201,6 +208,7 @@ impl ConfigBuilder {
             data_source_builder: None,
             event_processor_builder: None,
             offline: false,
+            daemon_mode: false,
             application_info: None,
             sdk_key: sdk_key.to_string(),
         }
@@ -248,6 +256,16 @@ impl ConfigBuilder {
         self
     }
 
+    /// Whether the client should operate in daemon mode.
+    ///
+    /// In daemon mode, the client will not receive updates directly from LaunchDarkly. Instead,
+    /// the client will rely on the data store to provide the latest feature flag values. By
+    /// default, this is false.
+    pub fn daemon_mode(mut self, enable: bool) -> Self {
+        self.daemon_mode = enable;
+        self
+    }
+
     /// Provides configuration of application metadata.
     ///
     /// These properties are optional and informational. They may be used in LaunchDarkly analytics
@@ -274,6 +292,11 @@ impl ConfigBuilder {
                 None if self.offline => Ok(Box::new(NullDataSourceBuilder::new())),
                 Some(_) if self.offline => {
                     warn!("Custom data source builders will be ignored when in offline mode");
+                    Ok(Box::new(NullDataSourceBuilder::new()))
+                }
+                None if self.daemon_mode => Ok(Box::new(NullDataSourceBuilder::new())),
+                Some(_) if self.daemon_mode => {
+                    warn!("Custom data source builders will be ignored when in daemon mode");
                     Ok(Box::new(NullDataSourceBuilder::new()))
                 }
                 Some(builder) => Ok(builder),
@@ -320,6 +343,7 @@ impl ConfigBuilder {
             event_processor_builder,
             application_tag,
             offline: self.offline,
+            daemon_mode: self.daemon_mode,
         })
     }
 }

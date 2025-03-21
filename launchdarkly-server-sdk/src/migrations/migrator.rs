@@ -452,7 +452,7 @@ where
     payload: &'a P,
 }
 
-impl<'a, P, T, F> Executor<'a, P, T, F>
+impl<P, T, F> Executor<'_, P, T, F>
 where
     P: Send + Sync,
     T: Send + Sync,

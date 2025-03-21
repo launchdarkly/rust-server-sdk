@@ -63,6 +63,7 @@ pub struct EvaluateAllFlagsResponse {
     pub state: FlagDetail,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomEventParams {

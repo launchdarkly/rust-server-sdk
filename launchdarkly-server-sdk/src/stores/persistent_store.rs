@@ -94,7 +94,7 @@ pub trait PersistentDataStore: Send + Sync {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use crate::stores::persistent_store::PersistentDataStore;
     use crate::stores::store_types::{AllData, DataKind, SerializedItem};
     use std::collections::HashMap;
