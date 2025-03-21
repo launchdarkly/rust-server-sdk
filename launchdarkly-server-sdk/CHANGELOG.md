@@ -2,6 +2,18 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.5.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.4.1...2.5.0) (2025-03-21)
+
+
+### Features
+
+* Add support for daemon mode ([#110](https://github.com/launchdarkly/rust-server-sdk/issues/110)) ([1a16e39](https://github.com/launchdarkly/rust-server-sdk/commit/1a16e395a677b0a395279e25bc671e0149526e68))
+
+
+### Bug Fixes
+
+* Bump MSRV to 1.81 ([#109](https://github.com/launchdarkly/rust-server-sdk/issues/109)) ([1b472ff](https://github.com/launchdarkly/rust-server-sdk/commit/1b472ff0cab78802bd57ba217fd31e7aae11f685))
+
 ## [2.4.1](https://github.com/launchdarkly/rust-server-sdk/compare/2.4.0...2.4.1) (2024-12-13)
 
 
