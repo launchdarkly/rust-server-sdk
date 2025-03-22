@@ -1,5 +1,5 @@
 use crossbeam_channel::{bounded, select, tick, Receiver, Sender};
-use rand::thread_rng;
+use rand::rng;
 use std::time::SystemTime;
 
 use launchdarkly_server_sdk_evaluation::Context;
@@ -89,7 +89,7 @@ impl EventDispatcher {
             last_known_time: 0,
             disabled: false,
             thread_count: 5,
-            sampler: Box::new(ThreadRngSampler::new(thread_rng())),
+            sampler: Box::new(ThreadRngSampler::new(rng())),
         }
     }
 

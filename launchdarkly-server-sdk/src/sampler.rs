@@ -24,7 +24,7 @@ impl<R: Rng> Sampler for ThreadRngSampler<R> {
             return true;
         }
 
-        self.rng.gen_ratio(1, ratio)
+        self.rng.random_ratio(1, ratio)
     }
 }
 
@@ -36,13 +36,13 @@ mod tests {
 
     #[test]
     fn test_zero_is_false() {
-        let mut sampler = ThreadRngSampler::new(rand::thread_rng());
+        let mut sampler = ThreadRngSampler::new(rand::rng());
         assert!(!sampler.sample(0));
     }
 
     #[test]
     fn test_one_is_true() {
-        let mut sampler = ThreadRngSampler::new(rand::thread_rng());
+        let mut sampler = ThreadRngSampler::new(rand::rng());
         assert!(sampler.sample(1));
     }
 
