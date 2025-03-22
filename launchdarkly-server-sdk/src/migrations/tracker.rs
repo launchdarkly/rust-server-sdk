@@ -4,7 +4,7 @@ use std::{
 };
 
 use launchdarkly_server_sdk_evaluation::{Context, Detail, Flag};
-use rand::thread_rng;
+use rand::rng;
 
 use crate::{
     events::event::{BaseEvent, EventFactory, MigrationOpEvent},
@@ -78,7 +78,7 @@ impl MigrationOpTracker {
     /// A callable is provided in case sampling rules do not require consistency checking to run.
     /// In this case, we can avoid the overhead of a function by not using the callable.
     pub fn consistent(&mut self, is_consistent: impl Fn() -> bool) {
-        if ThreadRngSampler::new(thread_rng()).sample(self.consistent_ratio.unwrap_or(1)) {
+        if ThreadRngSampler::new(rng()).sample(self.consistent_ratio.unwrap_or(1)) {
             self.consistent = Some(is_consistent());
         }
     }
