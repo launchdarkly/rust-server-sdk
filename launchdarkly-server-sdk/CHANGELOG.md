@@ -2,6 +2,16 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.5.1](https://github.com/launchdarkly/rust-server-sdk/compare/2.5.0...2.5.1) (2025-03-24)
+
+
+### Bug Fixes
+
+* Bump eventsource-client 0.13 -&gt; 0.14 ([ae56d7c](https://github.com/launchdarkly/rust-server-sdk/commit/ae56d7c0d0d7d86f58b3fd2c27d93b04901721b8))
+* Bump lru 0.12 -&gt; 0.13 ([ae56d7c](https://github.com/launchdarkly/rust-server-sdk/commit/ae56d7c0d0d7d86f58b3fd2c27d93b04901721b8))
+* Bump rand 0.8 -&gt; 0.9 ([ae56d7c](https://github.com/launchdarkly/rust-server-sdk/commit/ae56d7c0d0d7d86f58b3fd2c27d93b04901721b8))
+* Bump thiserror 1.0 -&gt; 2.0 ([ae56d7c](https://github.com/launchdarkly/rust-server-sdk/commit/ae56d7c0d0d7d86f58b3fd2c27d93b04901721b8))
+
 ## [2.5.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.4.1...2.5.0) (2025-03-21)
 
 
