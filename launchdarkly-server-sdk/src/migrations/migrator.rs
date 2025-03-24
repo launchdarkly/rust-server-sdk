@@ -6,7 +6,7 @@ use futures::future::join_all;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use launchdarkly_server_sdk_evaluation::Context;
-use rand::thread_rng;
+use rand::rng;
 use serde::Serialize;
 
 use crate::sampler::Sampler;
@@ -219,7 +219,7 @@ where
             measure_errors,
             read_config,
             write_config,
-            sampler: Box::new(ThreadRngSampler::new(thread_rng())),
+            sampler: Box::new(ThreadRngSampler::new(rng())),
         }
     }
 
