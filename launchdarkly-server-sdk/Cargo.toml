@@ -4,14 +4,17 @@ description = "LaunchDarkly Server-Side SDK"
 version = "2.5.1"
 authors = ["LaunchDarkly"]
 edition = "2021"
-rust-version = "1.81.0"  # MSRV
+rust-version = "1.81.0" # MSRV
 license = "Apache-2.0"
 homepage = "https://docs.launchdarkly.com/sdk/server-side/rust"
 repository = "https://github.com/launchdarkly/rust-server-sdk"
-keywords = ["launchdarkly", "launchdarkly-sdk", "feature-flags", "feature-toggles"]
-exclude = [
-    "coverage.sh"
+keywords = [
+    "launchdarkly",
+    "launchdarkly-sdk",
+    "feature-flags",
+    "feature-toggles",
 ]
+exclude = ["coverage.sh"]
 
 [package.metadata.docs.rs]
 features = ["event-compression"]
@@ -34,16 +37,18 @@ tokio = { version = "1.17.0", features = ["rt-multi-thread"] }
 parking_lot = "0.12.0"
 tokio-stream = { version = "0.1.8", features = ["sync"] }
 moka = { version = "0.12.1", features = ["sync"] }
-uuid = {version = "1.2.2", features = ["v4"] }
-hyper = { version = "0.14.19", features = ["client", "http1", "http2", "tcp"] }
-hyper-rustls = { version = "0.24.1" , optional = true}
+uuid = { version = "1.2.2", features = ["v4"] }
+hyper = { version = "1.6.0", features = ["client", "http1", "http2", "tcp"] }
+hyper-rustls = { version = "0.27.6", optional = true }
 rand = "0.9"
 flate2 = { version = "1.0.35", optional = true }
 
 [dev-dependencies]
 maplit = "1.0.1"
 env_logger = "0.10.0"
-serde_json = { version = "1.0.73", features = ["preserve_order"] } # for deterministic JSON testing
+serde_json = { version = "1.0.73", features = [
+    "preserve_order",
+] } # for deterministic JSON testing
 tokio = { version = "1.17.0", features = ["macros", "time"] }
 test-case = "3.2.1"
 mockito = "1.2.0"
@@ -54,7 +59,11 @@ testing_logger = "0.1.1"
 
 [features]
 default = ["rustls"]
-rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "eventsource-client/rustls"]
+rustls = [
+    "hyper-rustls/http1",
+    "hyper-rustls/http2",
+    "eventsource-client/rustls",
+]
 event-compression = ["flate2"]
 
 [[example]]
