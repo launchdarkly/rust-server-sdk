@@ -112,6 +112,22 @@ pub struct MigrationOpEvent {
     pub(crate) latency: HashMap<Origin, Duration>,
 }
 
+impl MigrationOpEvent {
+    pub(crate) fn into_inline_with_anonymous_redaction(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<Reference>,
+    ) -> Self {
+        Self {
+            base: self.base.into_inline_with_anonymous_redaction(
+                all_attribute_private,
+                global_private_attributes,
+            ),
+            ..self
+        }
+    }
+}
+
 impl Serialize for MigrationOpEvent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -120,7 +136,7 @@ impl Serialize for MigrationOpEvent {
         let mut state = serializer.serialize_struct("MigrationOpEvent", 10)?;
         state.serialize_field("kind", "migration_op")?;
         state.serialize_field("creationDate", &self.base.creation_date)?;
-        state.serialize_field("contextKeys", &self.base.context.context_keys())?;
+        state.serialize_field("context", &self.base.context)?;
         state.serialize_field("operation", &self.operation)?;
 
         if !is_default_ratio(&self.sampling_ratio) {
@@ -369,6 +385,20 @@ pub struct CustomEvent {
 }
 
 impl CustomEvent {
+    pub(crate) fn into_inline_with_anonymous_redaction(
+        self,
+        all_attribute_private: bool,
+        global_private_attributes: HashSet<Reference>,
+    ) -> Self {
+        Self {
+            base: self.base.into_inline_with_anonymous_redaction(
+                all_attribute_private,
+                global_private_attributes,
+            ),
+            ..self
+        }
+    }
+
     pub fn to_index_event(
         &self,
         all_attribute_private: bool,
