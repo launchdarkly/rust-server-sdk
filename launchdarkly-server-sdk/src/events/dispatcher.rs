@@ -192,8 +192,12 @@ impl EventDispatcher {
                     .sampler
                     .sample(migration_op.sampling_ratio.unwrap_or(1))
                 {
-                    self.outbox
-                        .add_event(OutputEvent::MigrationOp(migration_op));
+                    self.outbox.add_event(OutputEvent::MigrationOp(
+                        migration_op.into_inline_with_anonymous_redaction(
+                            self.events_configuration.all_attributes_private,
+                            self.events_configuration.private_attributes.clone(),
+                        ),
+                    ));
                 }
             }
             InputEvent::FeatureRequest(fre) => {
@@ -266,7 +270,12 @@ impl EventDispatcher {
                 }
 
                 if self.sampler.sample(custom.sampling_ratio.unwrap_or(1)) {
-                    self.outbox.add_event(OutputEvent::Custom(custom));
+                    self.outbox.add_event(OutputEvent::Custom(
+                        custom.into_inline_with_anonymous_redaction(
+                            self.events_configuration.all_attributes_private,
+                            self.events_configuration.private_attributes.clone(),
+                        ),
+                    ));
                 }
             }
         }
