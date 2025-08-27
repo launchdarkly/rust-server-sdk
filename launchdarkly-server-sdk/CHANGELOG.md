@@ -2,6 +2,13 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.6.1](https://github.com/launchdarkly/rust-server-sdk/compare/2.6.0...2.6.1) (2025-08-27)
+
+
+### Bug Fixes
+
+* Replace ring usage with aws lc rs for FIPS compliance ([#124](https://github.com/launchdarkly/rust-server-sdk/issues/124)) ([843355e](https://github.com/launchdarkly/rust-server-sdk/commit/843355e591bdb6e70fab81b891854ce647bb0f1e))
+
 ## [2.6.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.5.1...2.6.0) (2025-07-08)
 
 
