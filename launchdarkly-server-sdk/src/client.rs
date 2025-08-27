@@ -561,8 +561,8 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/secure-mode#rust>.
     pub fn secure_mode_hash(&self, context: &Context) -> String {
-        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
-        let tag = ring::hmac::sign(&key, context.canonical_key().as_bytes());
+        let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
+        let tag = aws_lc_rs::hmac::sign(&key, context.canonical_key().as_bytes());
 
         data_encoding::HEXLOWER.encode(tag.as_ref())
     }
