@@ -38,7 +38,7 @@ hyper = { version = "0.14.19", features = ["client", "http1", "http2", "tcp"] }
 hyper-rustls = { version = "0.24.1" , optional = true}
 rand = "0.9"
 flate2 = { version = "1.0.35", optional = true }
-aws-lc-rs = "1.13.3"
+aws-lc-rs = "1.14.1"
 
 [dev-dependencies]
 maplit = "1.0.1"
