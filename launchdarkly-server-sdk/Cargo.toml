@@ -20,7 +20,8 @@ features = ["event-compression"]
 chrono = "0.4.19"
 crossbeam-channel = "0.5.1"
 data-encoding = "2.3.2"
-eventsource-client = { version = "0.16.0", default-features = false }
+# eventsource-client = { version = "0.16.0", default-features = false }
+eventsource-client = { git = "https://github.com/launchdarkly/rust-eventsource-client", branch = "mk/sdk-1726/hyper-transport" }
 futures = "0.3.12"
 lazy_static = "1.4.0"
 log = "0.4.14"
