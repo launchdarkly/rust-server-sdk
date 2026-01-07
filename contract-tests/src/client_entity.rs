@@ -1,3 +1,4 @@
+use eventsource_client as es;
 use futures::future::FutureExt;
 use launchdarkly_server_sdk::{
     Context, ContextBuilder, MigratorBuilder, MultiContextBuilder, Reference,
@@ -20,6 +21,7 @@ use crate::command_params::{
     MigrationOperationResponse, MigrationVariationResponse, SecureModeHashResponse,
 };
 use crate::HttpsConnector;
+use crate::StreamingHttpsConnector;
 use crate::{
     command_params::{
         CommandParams, CommandResponse, EvaluateAllFlagsParams, EvaluateAllFlagsResponse,
@@ -36,6 +38,7 @@ impl ClientEntity {
     pub async fn new(
         create_instance_params: CreateInstanceParams,
         connector: HttpsConnector,
+        streaming_https_connector: StreamingHttpsConnector,
     ) -> Result<Self, BuildError> {
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
@@ -71,6 +74,8 @@ impl ClientEntity {
         }
 
         if let Some(streaming) = create_instance_params.configuration.streaming {
+            let transport =
+                es::HyperTransport::builder().build_with_connector(streaming_https_connector);
             if let Some(base_uri) = streaming.base_uri {
                 service_endpoints_builder.streaming_base_url(&base_uri);
             }
@@ -79,7 +84,7 @@ impl ClientEntity {
             if let Some(delay) = streaming.initial_retry_delay_ms {
                 streaming_builder.initial_reconnect_delay(Duration::from_millis(delay));
             }
-            streaming_builder.https_connector(connector.clone());
+            streaming_builder.transport(transport);
 
             config_builder = config_builder.data_source(&streaming_builder);
         } else if let Some(polling) = create_instance_params.configuration.polling {
@@ -98,8 +103,10 @@ impl ClientEntity {
             // If we didn't specify streaming or polling, we fall back to basic streaming. The only
             // customization we provide is the https connector to support testing multiple
             // connectors.
+            let transport =
+                es::HyperTransport::builder().build_with_connector(streaming_https_connector);
             let mut streaming_builder = StreamingDataSourceBuilder::new();
-            streaming_builder.https_connector(connector.clone());
+            streaming_builder.transport(transport);
             config_builder = config_builder.data_source(&streaming_builder);
         }
 

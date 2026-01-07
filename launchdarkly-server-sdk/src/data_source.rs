@@ -7,15 +7,11 @@ use crate::LAUNCHDARKLY_TAGS_HEADER;
 use es::{Client, ClientBuilder, ReconnectOptionsBuilder};
 use eventsource_client as es;
 use futures::StreamExt;
-use hyper::client::connect::Connection;
-use hyper::service::Service;
-use hyper::Uri;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use parking_lot::RwLock;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
@@ -73,19 +69,13 @@ pub struct StreamingDataSource {
 }
 
 impl StreamingDataSource {
-    pub fn new<C>(
+    pub fn new<T: es::HttpTransport>(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
         tags: &Option<String>,
-        connector: C,
-    ) -> std::result::Result<Self, es::Error>
-    where
-        C: Service<Uri> + Clone + Send + Sync + 'static,
-        C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-        C::Future: Send + 'static,
-        C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
+        transport: T,
+    ) -> std::result::Result<Self, es::Error> {
         let stream_url = format!("{}/all", base_url);
 
         let client_builder = ClientBuilder::for_url(&stream_url)?;
@@ -105,7 +95,7 @@ impl StreamingDataSource {
         }
 
         Ok(Self {
-            es_client: Box::new(client_builder.build_with_conn(connector)),
+            es_client: Box::new(client_builder.build_with_transport(transport)),
         })
     }
 }
@@ -385,6 +375,7 @@ mod tests {
     use super::{DataSource, PollingDataSource, StreamingDataSource};
     use crate::feature_requester_builders::HyperFeatureRequesterBuilder;
     use crate::{stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER};
+    use eventsource_client as es;
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
     #[test_case(None, Matcher::Missing)]
@@ -411,7 +402,7 @@ mod tests {
             "sdk-key",
             Duration::from_secs(0),
             &tag,
-            HttpConnector::new(),
+            es::HyperTransport::new(),
         )
         .unwrap();
 

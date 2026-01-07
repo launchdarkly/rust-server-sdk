@@ -54,7 +54,7 @@ testing_logger = "0.1.1"
 
 [features]
 default = ["rustls"]
-rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "eventsource-client/rustls"]
+rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "eventsource-client/hyper-rustls"]
 event-compression = ["flate2"]
 
 [[example]]
