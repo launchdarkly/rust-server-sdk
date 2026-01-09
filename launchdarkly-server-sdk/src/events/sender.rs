@@ -34,7 +34,7 @@ pub trait EventSender: Send + Sync {
         &self,
         events: Vec<OutputEvent>,
         result_tx: Sender<EventSenderResult>,
-    ) -> BoxFuture<()>;
+    ) -> BoxFuture<'_, ()>;
 }
 
 #[derive(Clone)]
@@ -99,7 +99,7 @@ where
         &self,
         events: Vec<OutputEvent>,
         result_tx: Sender<EventSenderResult>,
-    ) -> BoxFuture<()> {
+    ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let uuid = Uuid::new_v4();
 
