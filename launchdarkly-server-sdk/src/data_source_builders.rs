@@ -1,10 +1,8 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
-use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
+use crate::feature_requester_builders::{FeatureRequesterFactory, HttpFeatureRequesterBuilder};
+use crate::transport::HttpTransport;
 use eventsource_client as es;
-use http::Uri;
-#[cfg(feature = "hyper-rustls")]
-use hyper_rustls::HttpsConnectorBuilder;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -173,19 +171,17 @@ impl Default for NullDataSourceBuilder {
 ///
 /// Adjust the initial reconnect delay.
 /// ```
-/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
-/// # use hyper_rustls::HttpsConnector;
-/// # use hyper_util::client::legacy::connect::HttpConnector;
+/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder, HyperTransport};
 /// # use std::time::Duration;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new()
+///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HyperTransport>::new()
 ///         .poll_interval(Duration::from_secs(60)));
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct PollingDataSourceBuilder<C> {
+pub struct PollingDataSourceBuilder<T: HttpTransport = crate::HyperTransport> {
     poll_interval: Duration,
-    connector: Option<C>,
+    transport: Option<T>,
 }
 
 /// Contains methods for configuring the polling data source.
@@ -203,21 +199,19 @@ pub struct PollingDataSourceBuilder<C> {
 ///
 /// Adjust the poll interval.
 /// ```
-/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
+/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder, HyperTransport};
 /// # use std::time::Duration;
-/// # use hyper_rustls::HttpsConnector;
-/// # use hyper_util::client::legacy::connect::HttpConnector;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new()
+///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HyperTransport>::new()
 ///         .poll_interval(Duration::from_secs(60)));
 /// # }
 /// ```
-impl<C> PollingDataSourceBuilder<C> {
+impl<T: HttpTransport> PollingDataSourceBuilder<T> {
     /// Create a new instance of the [PollingDataSourceBuilder] with default values.
     pub fn new() -> Self {
         Self {
             poll_interval: MINIMUM_POLL_INTERVAL,
-            connector: None,
+            transport: None,
         }
     }
 
@@ -230,27 +224,17 @@ impl<C> PollingDataSourceBuilder<C> {
         self
     }
 
-    /// Sets the connector for the polling client to use. This allows for re-use of a connector
+    /// Sets the transport for the polling client to use. This allows for re-use of a transport
     /// between multiple client instances. This is especially useful for the `sdk-test-harness`
     /// where many client instances are created throughout the test and reading the native
     /// certificates is a substantial portion of the runtime.
-    pub fn https_connector(&mut self, connector: C) -> &mut Self {
-        self.connector = Some(connector);
+    pub fn transport(&mut self, transport: T) -> &mut Self {
+        self.transport = Some(transport);
         self
     }
 }
 
-impl<C> DataSourceFactory for PollingDataSourceBuilder<C>
-where
-    C: tower::Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection
-        + hyper::rt::Read
-        + hyper::rt::Write
-        + Send
-        + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
@@ -258,34 +242,25 @@ where
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let feature_requester_builder: Result<Box<dyn FeatureRequesterFactory>, BuildError> =
-            match &self.connector {
+            match &self.transport {
                 #[cfg(feature = "hyper-rustls")]
                 None => {
-                    let connector = HttpsConnectorBuilder::new()
-                        .with_native_roots()
-                        .unwrap_or_else(|_| {
-                            log::debug!("Falling back to webpki roots for polling HTTPS connector");
-                            HttpsConnectorBuilder::new().with_webpki_roots()
-                        })
-                        .https_or_http()
-                        .enable_http1()
-                        .enable_http2()
-                        .build();
+                    let transport = crate::HyperTransport::new_https();
 
-                    Ok(Box::new(HyperFeatureRequesterBuilder::new(
+                    Ok(Box::new(HttpFeatureRequesterBuilder::new(
                         endpoints.polling_base_url(),
                         sdk_key,
-                        connector,
+                        transport,
                     )))
                 }
                 #[cfg(not(feature = "hyper-rustls"))]
                 None => Err(BuildError::InvalidConfig(
-                    "https connector required when rustls is disabled".into(),
+                    "transport is required when hyper-rustls feature is disabled".into(),
                 )),
-                Some(connector) => Ok(Box::new(HyperFeatureRequesterBuilder::new(
+                Some(transport) => Ok(Box::new(HttpFeatureRequesterBuilder::new(
                     endpoints.polling_base_url(),
                     sdk_key,
-                    connector.clone(),
+                    transport.clone(),
                 ))),
             };
 
@@ -302,7 +277,7 @@ where
     }
 }
 
-impl<C> Default for PollingDataSourceBuilder<C> {
+impl<T: HttpTransport> Default for PollingDataSourceBuilder<T> {
     fn default() -> Self {
         PollingDataSourceBuilder::new()
     }
@@ -349,7 +324,6 @@ impl DataSourceFactory for MockDataSourceBuilder {
 #[cfg(test)]
 mod tests {
     use eventsource_client::{HyperTransport, ResponseFuture};
-    use hyper_util::client::legacy::connect::HttpConnector;
 
     use super::*;
 
@@ -392,7 +366,7 @@ mod tests {
 
     #[test]
     fn default_polling_builder_has_correct_defaults() {
-        let builder = PollingDataSourceBuilder::<HttpConnector>::new();
+        let builder = PollingDataSourceBuilder::<crate::HyperTransport>::new();
         assert_eq!(builder.poll_interval, MINIMUM_POLL_INTERVAL,);
     }
 
