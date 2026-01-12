@@ -357,7 +357,7 @@ impl ClientEntity {
                     )),
                 }
             }
-            command => Err(format!("Invalid command requested: {}", command)),
+            command => Err(format!("Invalid command requested: {command}")),
         }
     }
 

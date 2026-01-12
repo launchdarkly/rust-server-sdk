@@ -1,6 +1,8 @@
 use crate::reqwest::is_http_error_recoverable;
+use bytes::Bytes;
 use futures::future::BoxFuture;
-use hyper::Body;
+use http_body_util::{BodyExt, Empty};
+use hyper_util::client::legacy::Client as HyperClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -21,8 +23,8 @@ pub trait FeatureRequester: Send {
 }
 
 pub struct HyperFeatureRequester<C> {
-    http: Arc<hyper::Client<C>>,
-    url: hyper::Uri,
+    http: Arc<HyperClient<C, http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>>>,
+    url: http::Uri,
     sdk_key: String,
     cache: Option<CachedEntry>,
     default_headers: HashMap<&'static str, String>,
@@ -30,8 +32,8 @@ pub struct HyperFeatureRequester<C> {
 
 impl<C> HyperFeatureRequester<C> {
     pub fn new(
-        http: hyper::Client<C>,
-        url: hyper::Uri,
+        http: HyperClient<C, http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>>,
+        url: http::Uri,
         sdk_key: String,
         default_headers: HashMap<&'static str, String>,
     ) -> Self {
@@ -47,7 +49,7 @@ impl<C> HyperFeatureRequester<C> {
 
 impl<C> FeatureRequester for HyperFeatureRequester<C>
 where
-    C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
+    C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
 {
     fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>> {
         Box::pin(async {
@@ -73,8 +75,14 @@ where
                 request_builder = request_builder.header("If-None-Match", cache.1.clone());
             }
 
+            // Create empty body for GET request
+            let empty_body: http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>> =
+                Empty::<Bytes>::new()
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                    .boxed();
+
             let result = http
-                .request(request_builder.body(Body::empty()).unwrap())
+                .request(request_builder.body(empty_body).unwrap())
                 .await;
 
             let response = match result {
@@ -82,7 +90,7 @@ where
                 Err(e) => {
                     // It appears this type of error will not be an HTTP error.
                     // It will be a closed connection, aborted write, timeout, etc.
-                    error!("An error occurred while retrieving flag information {}", e,);
+                    error!("An error occurred while retrieving flag information {e}",);
                     return Err(FeatureRequesterError::Temporary);
                 }
             };
@@ -101,27 +109,26 @@ where
                 .map_or_else(|_| "".into(), |s| s.into());
 
             if response.status().is_success() {
-                let bytes = hyper::body::to_bytes(response.into_body())
-                    .await
+                let body_bytes = response.into_body().collect().await
                     .map_err(|e| {
                         error!(
-                            "An error occurred while reading the polling response body: {}",
-                            e
+                            "An error occurred while reading the polling response body: {e}"
                         );
                         FeatureRequesterError::Temporary
-                    })?;
-                let json = serde_json::from_slice::<AllData<Flag, Segment>>(bytes.as_ref());
+                    })?
+                    .to_bytes();
+                let json = serde_json::from_slice::<AllData<Flag, Segment>>(body_bytes.as_ref());
 
                 return match json {
                     Ok(all_data) => {
                         if !etag.is_empty() {
-                            debug!("Caching data for future use with etag: {}", etag);
+                            debug!("Caching data for future use with etag: {etag}");
                             self.cache = Some(CachedEntry(all_data.clone(), etag));
                         }
                         Ok(all_data)
                     }
                     Err(e) => {
-                        error!("An error occurred while parsing the json response: {}", e);
+                        error!("An error occurred while parsing the json response: {e}");
                         Err(FeatureRequesterError::Temporary)
                     }
                 };
@@ -246,9 +253,11 @@ mod tests {
         }
     }
 
-    fn build_feature_requester(url: String) -> HyperFeatureRequester<hyper::client::HttpConnector> {
-        let http = hyper::Client::builder().build(hyper::client::HttpConnector::new());
-        let url = hyper::Uri::from_str(&url).expect("Failed parsing the mock server url");
+    fn build_feature_requester(url: String) -> HyperFeatureRequester<hyper_util::client::legacy::connect::HttpConnector> {
+        use hyper_util::rt::TokioExecutor;
+        let connector = hyper_util::client::legacy::connect::HttpConnector::new();
+        let http = HyperClient::builder(TokioExecutor::new()).build(connector);
+        let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
         HyperFeatureRequester::new(
             http,

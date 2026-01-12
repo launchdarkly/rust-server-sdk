@@ -7,7 +7,7 @@ use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Resu
 use async_mutex::Mutex;
 use client_entity::ClientEntity;
 use futures::executor;
-use hyper::client::HttpConnector;
+use hyper_util::client::legacy::connect::HttpConnector;
 use launchdarkly_server_sdk::Reference;
 use serde::{self, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -137,7 +137,7 @@ async fn create_client(
     .await
     {
         Ok(ce) => ce,
-        Err(e) => return HttpResponse::InternalServerError().body(format!("{}", e)),
+        Err(e) => return HttpResponse::InternalServerError().body(format!("{e}")),
     };
 
     let mut counter = app_state.counter.lock().await;
@@ -218,8 +218,7 @@ type StreamingHttpsConnector = hyper_util::client::legacy::connect::HttpConnecto
 #[cfg(feature = "tls")]
 type HttpsConnector = hyper_tls::HttpsConnector<HttpConnector>;
 #[cfg(feature = "tls")]
-type StreamingHttpsConnector =
-    hyper1_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+type StreamingHttpsConnector = hyper_tls::HttpsConnector<HttpConnector>;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -241,13 +240,14 @@ async fn main() -> std::io::Result<()> {
     #[cfg(feature = "rustls")]
     let connector = hyper_rustls::HttpsConnectorBuilder::new()
         .with_native_roots()
+        .expect("Failed to load native root certificates")
         .https_or_http()
         .enable_http1()
         .enable_http2()
         .build();
 
     #[cfg(feature = "tls")]
-    let streaming_https_connector = hyper1_tls::HttpsConnector::new();
+    let streaming_https_connector = hyper_tls::HttpsConnector::new();
     #[cfg(feature = "tls")]
     let connector = hyper_tls::HttpsConnector::new();
 
@@ -255,7 +255,7 @@ async fn main() -> std::io::Result<()> {
         counter: Mutex::new(0),
         client_entities: Mutex::new(HashMap::new()),
         https_connector: connector,
-        streaming_https_connector: streaming_https_connector,
+        streaming_https_connector,
     });
 
     let server = HttpServer::new(move || {

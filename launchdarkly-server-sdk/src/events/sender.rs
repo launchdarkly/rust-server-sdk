@@ -13,12 +13,11 @@ use flate2::Compression;
 #[cfg(feature = "event-compression")]
 use std::io::Write;
 
+use bytes::Bytes;
 use futures::future::BoxFuture;
-use hyper::{client::connect::Connection, service::Service, Uri};
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    time::{sleep, Duration},
-};
+use http_body_util::{BodyExt, Full};
+use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 use super::event::OutputEvent;
@@ -39,9 +38,9 @@ pub trait EventSender: Send + Sync {
 
 #[derive(Clone)]
 pub struct HyperEventSender<C> {
-    url: hyper::Uri,
+    url: http::Uri,
     sdk_key: String,
-    http: hyper::Client<C>,
+    http: HyperClient<C, http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>>,
     default_headers: HashMap<&'static str, String>,
 
     // used with event-compression feature
@@ -51,14 +50,14 @@ pub struct HyperEventSender<C> {
 
 impl<C> HyperEventSender<C>
 where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C: tower::Service<http::Uri> + Clone + Send + Sync + 'static,
+    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     pub fn new(
         connector: C,
-        url: hyper::Uri,
+        url: http::Uri,
         sdk_key: &str,
         default_headers: HashMap<&'static str, String>,
         compress_events: bool,
@@ -66,13 +65,13 @@ where
         Self {
             url,
             sdk_key: sdk_key.to_owned(),
-            http: hyper::Client::builder().build(connector),
+            http: HyperClient::builder(TokioExecutor::new()).build(connector),
             default_headers,
             compress_events,
         }
     }
 
-    fn get_server_time_from_response<Body>(&self, response: &hyper::Response<Body>) -> u128 {
+    fn get_server_time_from_response<Body>(&self, response: &http::Response<Body>) -> u128 {
         let date_value = response
             .headers()
             .get("date")
@@ -90,8 +89,8 @@ where
 
 impl<C> EventSender for HyperEventSender<C>
 where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C: tower::Service<http::Uri> + Clone + Send + Sync + 'static,
+    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -115,8 +114,7 @@ where
                 Ok(json) => json,
                 Err(e) => {
                     error!(
-                        "Failed to serialize event payload. Some events were dropped: {:?}",
-                        e
+                        "Failed to serialize event payload. Some events were dropped: {e:?}"
                     );
                     return;
                 }
@@ -158,7 +156,14 @@ where
                     request_builder =
                         request_builder.header(*default_header.0, default_header.1.as_str());
                 }
-                let request = request_builder.body(hyper::Body::from(payload.clone()));
+
+                // Convert Vec<u8> to BoxBody for hyper 1.0
+                let body_bytes = Bytes::from(payload.clone());
+                let boxed_body: http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>> =
+                    Full::new(body_bytes)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                        .boxed();
+                let request = request_builder.body(boxed_body);
 
                 let result = self.http.request(request.unwrap()).await;
 
@@ -168,7 +173,7 @@ where
                     Err(e) => {
                         // It appears this type of error will not be an HTTP error.
                         // It will be a closed connection, aborted write, timeout, etc.
-                        error!("Failed to send events. Some events were dropped: {:?}", e);
+                        error!("Failed to send events. Some events were dropped: {e:?}");
                         result_tx
                             .send(EventSenderResult {
                                 success: false,
@@ -355,12 +360,12 @@ mod tests {
         assert_eq!(sender_result.time_from_server, 1234567890000);
     }
 
-    fn build_event_sender(url: String) -> HyperEventSender<hyper::client::HttpConnector> {
+    fn build_event_sender(url: String) -> HyperEventSender<hyper_util::client::legacy::connect::HttpConnector> {
         let url = format!("{}/bulk", &url);
-        let url = hyper::Uri::from_str(&url).expect("Failed parsing the mock server url");
+        let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
         HyperEventSender::new(
-            hyper::client::HttpConnector::new(),
+            hyper_util::client::legacy::connect::HttpConnector::new(),
             url,
             "sdk-key",
             HashMap::<&str, String>::new(),

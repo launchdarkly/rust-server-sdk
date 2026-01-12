@@ -16,15 +16,13 @@ launchdarkly-server-sdk = { path = "../launchdarkly-server-sdk/", default-featur
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = "1.0.73"
 futures = "0.3.12"
-hyper = { version = "0.14.19", features = ["client"] }
-hyper-rustls = { version = "0.24.1" , optional = true, features = ["http2"]}
-hyper-tls = { version = "0.5.0", optional = true }
-hyper1-tls = { package = "hyper-tls", version = "0.6.0", optional = true }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"], optional = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "webpki-roots"], optional = true }
+hyper-tls = { version = "0.6.0", optional = true }
 reqwest = { version = "0.12.4", features = ["default", "blocking", "json"] }
 async-mutex = "1.4.0"
 
 [features]
 default = ["rustls"]
-rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "launchdarkly-server-sdk/rustls", "hyper-util"]
-tls = ["hyper-tls", "hyper1-tls", "hyper-util"]
+rustls = ["hyper-rustls", "launchdarkly-server-sdk/rustls"]
+tls = ["hyper-tls"]

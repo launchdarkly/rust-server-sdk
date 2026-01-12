@@ -2,13 +2,12 @@ use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
 use eventsource_client as es;
-use hyper::{client::connect::Connection, service::Service, Uri};
+use http::Uri;
 #[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(test)]
 use super::data_source;
@@ -115,7 +114,7 @@ impl<T: es::HttpTransport> DataSourceFactory for StreamingDataSourceBuilder<T> {
             )),
         };
         let data_source = data_source_result?
-            .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
+            .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {e:?}")))?;
         Ok(Arc::new(data_source))
     }
 
@@ -176,7 +175,7 @@ impl Default for NullDataSourceBuilder {
 /// ```
 /// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
 /// # use hyper_rustls::HttpsConnector;
-/// # use hyper::client::HttpConnector;
+/// # use hyper_util::client::legacy::connect::HttpConnector;
 /// # use std::time::Duration;
 /// # fn main() {
 ///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new()
@@ -207,7 +206,7 @@ pub struct PollingDataSourceBuilder<C> {
 /// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
 /// # use std::time::Duration;
 /// # use hyper_rustls::HttpsConnector;
-/// # use hyper::client::HttpConnector;
+/// # use hyper_util::client::legacy::connect::HttpConnector;
 /// # fn main() {
 ///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HttpsConnector<HttpConnector>>::new()
 ///         .poll_interval(Duration::from_secs(60)));
@@ -243,8 +242,8 @@ impl<C> PollingDataSourceBuilder<C> {
 
 impl<C> DataSourceFactory for PollingDataSourceBuilder<C>
 where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C: tower::Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -259,7 +258,7 @@ where
                 #[cfg(feature = "rustls")]
                 None => {
                     let connector = HttpsConnectorBuilder::new()
-                        .with_native_roots()
+                        .with_webpki_roots()
                         .https_or_http()
                         .enable_http1()
                         .enable_http2()
@@ -342,7 +341,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
 #[cfg(test)]
 mod tests {
     use eventsource_client::{HyperTransport, ResponseFuture};
-    use hyper::client::HttpConnector;
+    use hyper_util::client::legacy::connect::HttpConnector;
 
     use super::*;
 

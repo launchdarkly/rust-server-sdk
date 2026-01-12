@@ -145,14 +145,14 @@ impl Store for PersistentDataStoreWrapper {
                         item.into()
                     }
                     Err(e) => {
-                        warn!("failed to convert serialized item into flag: {}", e);
+                        warn!("failed to convert serialized item into flag: {e}");
                         None
                     }
                 }
             }
             Ok(None) => None,
             Err(e) => {
-                warn!("persistent store failed to retrieve flag: {}", e);
+                warn!("persistent store failed to retrieve flag: {e}");
                 None
             }
         }
@@ -173,14 +173,14 @@ impl Store for PersistentDataStoreWrapper {
                         item.into()
                     }
                     Err(e) => {
-                        warn!("failed to convert serialized item into segment: {}", e);
+                        warn!("failed to convert serialized item into segment: {e}");
                         None
                     }
                 }
             }
             Ok(None) => None,
             Err(e) => {
-                warn!("persistent store failed to retrieve segment: {}", e);
+                warn!("persistent store failed to retrieve segment: {e}");
                 None
             }
         }
@@ -196,8 +196,7 @@ impl DataStore for PersistentDataStoreWrapper {
 
         match serialized_data {
             Err(e) => warn!(
-                "failed to deserialize payload; cannot initialize store {}",
-                e
+                "failed to deserialize payload; cannot initialize store {e}"
             ),
             Ok(data) => {
                 let result = self.store.init(data);
@@ -208,7 +207,7 @@ impl DataStore for PersistentDataStoreWrapper {
                         self.cache_items(all_data.into());
                     }
                     Err(e) => {
-                        error!("failed to init store: {}", e);
+                        error!("failed to init store: {e}");
                         if self.flags.cache_is_infinite() {
                             debug!("updating non-expiring cache");
                             self.cache_items(all_data.into())
@@ -249,13 +248,13 @@ impl DataStore for PersistentDataStoreWrapper {
                         HashMap::from_iter(flag_iter)
                     }
                     Err(e) => {
-                        warn!("failed to convert serialized items into flags: {}", e);
+                        warn!("failed to convert serialized items into flags: {e}");
                         HashMap::new()
                     }
                 }
             }
             Err(e) => {
-                warn!("persistent store failed to retrieve all flags: {}", e);
+                warn!("persistent store failed to retrieve all flags: {e}");
                 HashMap::new()
             }
         }
@@ -267,7 +266,7 @@ impl DataStore for PersistentDataStoreWrapper {
             PatchTarget::Segment(item) => self.upsert_segment(key, item),
             PatchTarget::Other(v) => Err(UpdateError::InvalidTarget(
                 "flag or segment".to_string(),
-                format!("{:?}", v),
+                format!("{v:?}"),
             )),
         }
     }

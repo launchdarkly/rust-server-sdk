@@ -1,12 +1,10 @@
 use crate::feature_requester::{FeatureRequester, HyperFeatureRequester};
 use crate::LAUNCHDARKLY_TAGS_HEADER;
-use hyper::client::connect::Connection;
-use hyper::service::Service;
-use hyper::Uri;
+use http::Uri;
+use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
 use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Error type used to represent failures when building a [FeatureRequesterFactory] instance.
 #[non_exhaustive]
@@ -29,19 +27,19 @@ pub trait FeatureRequesterFactory: Send {
 pub struct HyperFeatureRequesterBuilder<C> {
     url: String,
     sdk_key: String,
-    http: hyper::Client<C>,
+    http: HyperClient<C, http_body_util::combinators::BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>>,
 }
 
 impl<C> HyperFeatureRequesterBuilder<C>
 where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C: tower::Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     pub fn new(url: &str, sdk_key: &str, connector: C) -> Self {
         Self {
-            http: hyper::Client::builder().build(connector),
+            http: HyperClient::builder(TokioExecutor::new()).build(connector),
             url: url.into(),
             sdk_key: sdk_key.into(),
         }
@@ -50,8 +48,8 @@ where
 
 impl<C> FeatureRequesterFactory for HyperFeatureRequesterBuilder<C>
 where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C: tower::Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -64,7 +62,7 @@ where
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
 
-        let url = hyper::Uri::from_str(url.as_str())
+        let url = Uri::from_str(url.as_str())
             .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
 
         Ok(Box::new(HyperFeatureRequester::new(
@@ -78,7 +76,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use hyper::client::HttpConnector;
+    use hyper_util::client::legacy::connect::HttpConnector;
 
     use super::*;
 
