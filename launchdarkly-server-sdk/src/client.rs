@@ -828,7 +828,6 @@ mod tests {
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
     use futures::FutureExt;
-    use hyper_util::client::legacy::connect::HttpConnector;
     use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
     use maplit::hashmap;
     use std::collections::HashMap;
@@ -2600,7 +2599,8 @@ mod tests {
             .daemon_mode(daemon_mode)
             .data_source(MockDataSourceBuilder::new().data_source(updates))
             .event_processor(
-                EventProcessorBuilder::<HttpConnector>::new().event_sender(Arc::new(event_sender)),
+                EventProcessorBuilder::<crate::HyperTransport>::new()
+                    .event_sender(Arc::new(event_sender)),
             )
             .build()
             .expect("config should build");

@@ -302,12 +302,15 @@ impl ConfigBuilder {
                 }
                 Some(builder) => Ok(builder),
                 #[cfg(feature = "hyper-rustls")]
-                None => Ok(Box::new(
-                    StreamingDataSourceBuilder::<es::HyperTransport>::new(),
-                )),
+                None => {
+                    let transport = es::HyperTransport::new_https();
+                    let mut builder = StreamingDataSourceBuilder::new();
+                    builder.transport(transport);
+                    Ok(Box::new(builder))
+                }
                 #[cfg(not(feature = "hyper-rustls"))]
                 None => Err(BuildError::InvalidConfig(
-                    "data source builder required when rustls is disabled".into(),
+                    "data source builder required when hyper-rustls feature is disabled".into(),
                 )),
             };
         let data_source_builder = data_source_builder_result?;
@@ -321,14 +324,15 @@ impl ConfigBuilder {
                 }
                 Some(builder) => Ok(builder),
                 #[cfg(feature = "hyper-rustls")]
-                None => Ok(Box::new(EventProcessorBuilder::<
-                    hyper_rustls::HttpsConnector<
-                        hyper_util::client::legacy::connect::HttpConnector,
-                    >,
-                >::new())),
+                None => {
+                    let transport = crate::HyperTransport::new_https();
+                    let mut builder = EventProcessorBuilder::new();
+                    builder.transport(transport);
+                    Ok(Box::new(builder))
+                }
                 #[cfg(not(feature = "hyper-rustls"))]
                 None => Err(BuildError::InvalidConfig(
-                    "event processor factory required when rustls is disabled".into(),
+                    "event processor factory required when hyper-rustls feature is disabled".into(),
                 )),
             };
         let event_processor_builder = event_processor_builder_result?;

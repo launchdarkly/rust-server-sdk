@@ -5,12 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http::Uri;
-#[cfg(feature = "hyper-rustls")]
-use hyper_rustls::HttpsConnectorBuilder;
 use launchdarkly_server_sdk_evaluation::Reference;
 use thiserror::Error;
 
-use crate::events::sender::HyperEventSender;
+use crate::events::sender::HttpEventSender;
+use crate::transport::HttpTransport;
 use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
 
 use super::processor::{
@@ -61,17 +60,15 @@ pub trait EventProcessorFactory {
 ///
 /// Adjust the flush interval
 /// ```
-/// # use launchdarkly_server_sdk::{EventProcessorBuilder, ConfigBuilder};
-/// # use hyper_rustls::HttpsConnector;
-/// # use hyper_util::client::legacy::connect::HttpConnector;
+/// # use launchdarkly_server_sdk::{EventProcessorBuilder, ConfigBuilder, HyperTransport};
 /// # use std::time::Duration;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").event_processor(EventProcessorBuilder::<HttpsConnector<HttpConnector>>::new()
+///     ConfigBuilder::new("sdk-key").event_processor(EventProcessorBuilder::<HyperTransport>::new()
 ///         .flush_interval(Duration::from_secs(10)));
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct EventProcessorBuilder<C> {
+pub struct EventProcessorBuilder<T: HttpTransport = crate::HyperTransport> {
     capacity: usize,
     flush_interval: Duration,
     context_keys_capacity: NonZeroUsize,
@@ -79,23 +76,13 @@ pub struct EventProcessorBuilder<C> {
     event_sender: Option<Arc<dyn EventSender>>,
     all_attributes_private: bool,
     private_attributes: HashSet<Reference>,
-    connector: Option<C>,
+    transport: Option<T>,
     omit_anonymous_contexts: bool,
     compress_events: bool,
     // diagnostic_recording_interval: Duration
 }
 
-impl<C> EventProcessorFactory for EventProcessorBuilder<C>
-where
-    C: tower::Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection
-        + hyper::rt::Read
-        + hyper::rt::Write
-        + Send
-        + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
@@ -114,10 +101,10 @@ where
             // NOTE: This would only be possible under unit testing conditions.
             if let Some(event_sender) = &self.event_sender {
                 Ok(event_sender.clone())
-            } else if let Some(connector) = &self.connector {
-                Ok(Arc::new(HyperEventSender::new(
-                    connector.clone(),
-                    hyper::Uri::from_str(url_string.as_str()).unwrap(),
+            } else if let Some(transport) = &self.transport {
+                Ok(Arc::new(HttpEventSender::new(
+                    transport.clone(),
+                    Uri::from_str(url_string.as_str()).unwrap(),
                     sdk_key,
                     default_headers,
                     self.compress_events,
@@ -125,19 +112,9 @@ where
             } else {
                 #[cfg(feature = "hyper-rustls")]
                 {
-                    let connector = HttpsConnectorBuilder::new()
-                        .with_native_roots()
-                        .unwrap_or_else(|_| {
-                            log::debug!("Falling back to webpki roots for event HTTPS connector");
-                            HttpsConnectorBuilder::new().with_webpki_roots()
-                        })
-                        .https_or_http()
-                        .enable_http1()
-                        .enable_http2()
-                        .build();
-
-                    Ok(Arc::new(HyperEventSender::new(
-                        connector,
+                    let transport = crate::HyperTransport::new_https();
+                    Ok(Arc::new(HttpEventSender::new(
+                        transport,
                         Uri::from_str(url_string.as_str()).unwrap(),
                         sdk_key,
                         default_headers,
@@ -146,7 +123,7 @@ where
                 }
                 #[cfg(not(feature = "hyper-rustls"))]
                 Err(BuildError::InvalidConfig(
-                    "https connector is required when rustls is disabled".into(),
+                    "transport is required when hyper-rustls feature is disabled".into(),
                 ))
             };
         let event_sender = event_sender_result?;
@@ -173,7 +150,7 @@ where
     }
 }
 
-impl<C> EventProcessorBuilder<C> {
+impl<T: HttpTransport> EventProcessorBuilder<T> {
     /// Create a new [EventProcessorBuilder] with all default values.
     pub fn new() -> Self {
         Self {
@@ -186,7 +163,7 @@ impl<C> EventProcessorBuilder<C> {
             all_attributes_private: false,
             private_attributes: HashSet::new(),
             omit_anonymous_contexts: false,
-            connector: None,
+            transport: None,
             compress_events: false,
         }
     }
@@ -250,12 +227,12 @@ impl<C> EventProcessorBuilder<C> {
         self
     }
 
-    /// Sets the connector for the event sender to use. This allows for re-use of a connector
+    /// Sets the transport for the event sender to use. This allows for re-use of a transport
     /// between multiple client instances. This is especially useful for the `sdk-test-harness`
     /// where many client instances are created throughout the test and reading the native
     /// certificates is a substantial portion of the runtime.
-    pub fn https_connector(&mut self, connector: C) -> &mut Self {
-        self.connector = Some(connector);
+    pub fn transport(&mut self, transport: T) -> &mut Self {
+        self.transport = Some(transport);
         self
     }
 
@@ -288,7 +265,7 @@ impl<C> EventProcessorBuilder<C> {
     }
 }
 
-impl<C> Default for EventProcessorBuilder<C> {
+impl<T: HttpTransport> Default for EventProcessorBuilder<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -329,7 +306,6 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
-    use hyper_util::client::legacy::connect::HttpConnector;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use maplit::hashset;
     use mockito::Matcher;
@@ -341,28 +317,28 @@ mod tests {
 
     #[test]
     fn default_builder_has_correct_defaults() {
-        let builder = EventProcessorBuilder::<HttpConnector>::new();
+        let builder = EventProcessorBuilder::<crate::HyperTransport>::new();
         assert_eq!(builder.capacity, DEFAULT_EVENT_CAPACITY);
         assert_eq!(builder.flush_interval, DEFAULT_FLUSH_POLL_INTERVAL);
     }
 
     #[test]
     fn capacity_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
+        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
         builder.capacity(1234);
         assert_eq!(builder.capacity, 1234);
     }
 
     #[test]
     fn flush_interval_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
+        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
         builder.flush_interval(Duration::from_secs(1234));
         assert_eq!(builder.flush_interval, Duration::from_secs(1234));
     }
 
     #[test]
     fn context_keys_capacity_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
+        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
         let cap = NonZeroUsize::new(1234).expect("1234 > 0");
         builder.context_keys_capacity(cap);
         assert_eq!(builder.context_keys_capacity, cap);
@@ -370,7 +346,7 @@ mod tests {
 
     #[test]
     fn context_keys_flush_interval_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
+        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
         builder.context_keys_flush_interval(Duration::from_secs(1000));
         assert_eq!(
             builder.context_keys_flush_interval,
@@ -380,7 +356,7 @@ mod tests {
 
     #[test]
     fn all_attribute_private_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
+        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
 
         assert!(!builder.all_attributes_private);
         builder.all_attributes_private(true);
@@ -389,7 +365,7 @@ mod tests {
 
     #[test]
     fn attribte_names_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<HttpConnector>::new();
+        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
 
         assert!(builder.private_attributes.is_empty());
         builder.private_attributes(hashset!["name"]);
@@ -414,7 +390,7 @@ mod tests {
             .build()
             .expect("Service endpoints failed to be created");
 
-        let builder = EventProcessorBuilder::<HttpConnector>::new();
+        let builder = EventProcessorBuilder::<crate::HyperTransport>::new();
         let processor = builder
             .build(&service_endpoints, "sdk-key", tag)
             .expect("Processor failed to build");

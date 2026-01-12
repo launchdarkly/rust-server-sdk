@@ -1,5 +1,5 @@
 use crate::{
-    reqwest::is_http_error_recoverable, LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
+    reqwest::is_http_error_recoverable, transport::HttpTransport, LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
     LAUNCHDARKLY_PAYLOAD_ID_HEADER,
 };
 use chrono::DateTime;
@@ -15,8 +15,6 @@ use std::io::Write;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use http_body_util::{BodyExt, Full};
-use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -37,13 +35,10 @@ pub trait EventSender: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct HyperEventSender<C> {
+pub struct HttpEventSender<T: HttpTransport> {
     url: http::Uri,
     sdk_key: String,
-    http: HyperClient<
-        C,
-        http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>,
-    >,
+    transport: T,
     default_headers: HashMap<&'static str, String>,
 
     // used with event-compression feature
@@ -51,19 +46,9 @@ pub struct HyperEventSender<C> {
     compress_events: bool,
 }
 
-impl<C> HyperEventSender<C>
-where
-    C: tower::Service<http::Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection
-        + hyper::rt::Read
-        + hyper::rt::Write
-        + Send
-        + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: HttpTransport> HttpEventSender<T> {
     pub fn new(
-        connector: C,
+        transport: T,
         url: http::Uri,
         sdk_key: &str,
         default_headers: HashMap<&'static str, String>,
@@ -72,7 +57,7 @@ where
         Self {
             url,
             sdk_key: sdk_key.to_owned(),
-            http: HyperClient::builder(TokioExecutor::new()).build(connector),
+            transport,
             default_headers,
             compress_events,
         }
@@ -94,17 +79,7 @@ where
     }
 }
 
-impl<C> EventSender for HyperEventSender<C>
-where
-    C: tower::Service<http::Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection
-        + hyper::rt::Read
-        + hyper::rt::Write
-        + Send
-        + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: HttpTransport> EventSender for HttpEventSender<T> {
     fn send_event_data(
         &self,
         events: Vec<OutputEvent>,
@@ -149,7 +124,7 @@ where
                     sleep(Duration::from_secs(1)).await;
                 }
 
-                let mut request_builder = hyper::Request::builder()
+                let mut request_builder = http::Request::builder()
                     .uri(self.url.clone())
                     .method("POST")
                     .header("Content-Type", "application/json")
@@ -166,17 +141,11 @@ where
                         request_builder.header(*default_header.0, default_header.1.as_str());
                 }
 
-                // Convert Vec<u8> to BoxBody for hyper 1.0
+                // Create request with Bytes body for transport
                 let body_bytes = Bytes::from(payload.clone());
-                let boxed_body: http_body_util::combinators::BoxBody<
-                    Bytes,
-                    Box<dyn std::error::Error + Send + Sync>,
-                > = Full::new(body_bytes)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-                    .boxed();
-                let request = request_builder.body(boxed_body);
+                let request = request_builder.body(body_bytes).unwrap();
 
-                let result = self.http.request(request.unwrap()).await;
+                let result = self.transport.request(request).await;
 
                 let response = match result {
                     Ok(response) => response,
@@ -371,14 +340,13 @@ mod tests {
         assert_eq!(sender_result.time_from_server, 1234567890000);
     }
 
-    fn build_event_sender(
-        url: String,
-    ) -> HyperEventSender<hyper_util::client::legacy::connect::HttpConnector> {
+    fn build_event_sender(url: String) -> HttpEventSender<crate::HyperTransport> {
         let url = format!("{}/bulk", &url);
         let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
-        HyperEventSender::new(
-            hyper_util::client::legacy::connect::HttpConnector::new(),
+        let transport = crate::HyperTransport::new();
+        HttpEventSender::new(
+            transport,
             url,
             "sdk-key",
             HashMap::<&str, String>::new(),
