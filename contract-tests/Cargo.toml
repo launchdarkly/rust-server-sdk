@@ -2,13 +2,15 @@
 name = "contract-tests"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.83.0"  # MSRV
+rust-version = "1.85.0"  # MSRV
 license = "Apache-2.0"
 
 [dependencies]
 actix = "0.13.0"
 actix-web = "4.2.1"
 env_logger = "0.10.0"
+# eventsource-client = { version = "0.16.0", default-features = false }
+eventsource-client = { git = "https://github.com/launchdarkly/rust-eventsource-client", branch = "feat/hyper-as-feature" }
 log = "0.4.14"
 launchdarkly-server-sdk = { path = "../launchdarkly-server-sdk/", default-features = false, features = ["event-compression"]}
 serde = { version = "1.0.132", features = ["derive"] }
@@ -17,10 +19,12 @@ futures = "0.3.12"
 hyper = { version = "0.14.19", features = ["client"] }
 hyper-rustls = { version = "0.24.1" , optional = true, features = ["http2"]}
 hyper-tls = { version = "0.5.0", optional = true }
+hyper1-tls = { package = "hyper-tls", version = "0.6.0", optional = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"], optional = true }
 reqwest = { version = "0.12.4", features = ["default", "blocking", "json"] }
 async-mutex = "1.4.0"
 
 [features]
 default = ["rustls"]
-rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "launchdarkly-server-sdk/rustls"]
-tls = ["hyper-tls"]
+rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "launchdarkly-server-sdk/rustls", "hyper-util"]
+tls = ["hyper-tls", "hyper1-tls", "hyper-util"]

@@ -1,6 +1,7 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
+use eventsource_client as es;
 use hyper::{client::connect::Connection, service::Service, Uri};
 #[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
@@ -47,26 +48,25 @@ pub trait DataSourceFactory {
 /// Adjust the initial reconnect delay.
 /// ```
 /// # use launchdarkly_server_sdk::{StreamingDataSourceBuilder, ConfigBuilder};
-/// # use hyper_rustls::HttpsConnector;
-/// # use hyper::client::HttpConnector;
+/// # use eventsource_client as es;
 /// # use std::time::Duration;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").data_source(StreamingDataSourceBuilder::<hyper_rustls::HttpsConnector<HttpConnector>>::new()
+///     ConfigBuilder::new("sdk-key").data_source(StreamingDataSourceBuilder::<es::HyperTransport>::new()
 ///         .initial_reconnect_delay(Duration::from_secs(10)));
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct StreamingDataSourceBuilder<C> {
+pub struct StreamingDataSourceBuilder<T: es::HttpTransport> {
     initial_reconnect_delay: Duration,
-    connector: Option<C>,
+    transport: Option<T>,
 }
 
-impl<C> StreamingDataSourceBuilder<C> {
+impl<T: es::HttpTransport> StreamingDataSourceBuilder<T> {
     /// Create a new instance of the [StreamingDataSourceBuilder] with default values.
     pub fn new() -> Self {
         Self {
             initial_reconnect_delay: DEFAULT_INITIAL_RECONNECT_DELAY,
-            connector: None,
+            transport: None,
         }
     }
 
@@ -76,56 +76,42 @@ impl<C> StreamingDataSourceBuilder<C> {
         self
     }
 
-    /// Sets the connector for the event source client to use. This allows for re-use of a
-    /// connector between multiple client instances. This is especially useful for the
+    /// Sets the transport for the event source client to use. This allows for re-use of a
+    /// transport between multiple client instances. This is especially useful for the
     /// `sdk-test-harness` where many client instances are created throughout the test and reading
     /// the native certificates is a substantial portion of the runtime.
-    pub fn https_connector(&mut self, connector: C) -> &mut Self {
-        self.connector = Some(connector);
+    pub fn transport(&mut self, transport: T) -> &mut Self {
+        self.transport = Some(transport);
         self
     }
 }
 
-impl<C> DataSourceFactory for StreamingDataSourceBuilder<C>
-where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-    C::Future: Send + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: es::HttpTransport> DataSourceFactory for StreamingDataSourceBuilder<T> {
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
-        let data_source_result = match &self.connector {
+        let data_source_result = match &self.transport {
             #[cfg(feature = "rustls")]
-            None => {
-                let connector = HttpsConnectorBuilder::new()
-                    .with_native_roots()
-                    .https_or_http()
-                    .enable_http1()
-                    .enable_http2()
-                    .build();
-                Ok(StreamingDataSource::new(
-                    endpoints.streaming_base_url(),
-                    sdk_key,
-                    self.initial_reconnect_delay,
-                    &tags,
-                    connector,
-                ))
-            }
-            #[cfg(not(feature = "rustls"))]
-            None => Err(BuildError::InvalidConfig(
-                "https connector required when rustls is disabled".into(),
-            )),
-            Some(connector) => Ok(StreamingDataSource::new(
+            None => Ok(StreamingDataSource::new(
                 endpoints.streaming_base_url(),
                 sdk_key,
                 self.initial_reconnect_delay,
                 &tags,
-                connector.clone(),
+                es::HyperTransport::new_https(),
+            )),
+            #[cfg(not(feature = "rustls"))]
+            None => Err(BuildError::InvalidConfig(
+                "https connector required when rustls is disabled".into(),
+            )),
+            Some(transport) => Ok(StreamingDataSource::new(
+                endpoints.streaming_base_url(),
+                sdk_key,
+                self.initial_reconnect_delay,
+                &tags,
+                transport.clone(),
             )),
         };
         let data_source = data_source_result?
@@ -138,7 +124,7 @@ where
     }
 }
 
-impl<C> Default for StreamingDataSourceBuilder<C> {
+impl<T: es::HttpTransport> Default for StreamingDataSourceBuilder<T> {
     fn default() -> Self {
         StreamingDataSourceBuilder::new()
     }
@@ -355,13 +341,15 @@ impl DataSourceFactory for MockDataSourceBuilder {
 
 #[cfg(test)]
 mod tests {
+    use eventsource_client::{HyperTransport, ResponseFuture};
     use hyper::client::HttpConnector;
 
     use super::*;
 
     #[test]
     fn default_stream_builder_has_correct_defaults() {
-        let builder: StreamingDataSourceBuilder<HttpConnector> = StreamingDataSourceBuilder::new();
+        let builder: StreamingDataSourceBuilder<es::HyperTransport> =
+            StreamingDataSourceBuilder::new();
 
         assert_eq!(
             builder.initial_reconnect_delay,
@@ -370,29 +358,22 @@ mod tests {
     }
 
     #[test]
-    fn stream_builder_can_use_custom_connector() {
+    fn stream_builder_can_use_custom_transport() {
         #[derive(Debug, Clone)]
-        struct TestConnector;
-        impl hyper::service::Service<hyper::Uri> for TestConnector {
-            type Response = tokio::net::TcpStream;
-            type Error = std::io::Error;
-            type Future = futures::future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
+        struct TestTransport;
 
-            fn poll_ready(
-                &mut self,
-                _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Result<(), Self::Error>> {
-                std::task::Poll::Ready(Ok(()))
-            }
-
-            fn call(&mut self, _req: hyper::Uri) -> Self::Future {
+        impl es::HttpTransport for TestTransport {
+            fn request(
+                &self,
+                _request: eventsource_client::Request<Option<String>>,
+            ) -> ResponseFuture {
                 // this won't be called during the test
                 unreachable!();
             }
         }
 
         let mut builder = StreamingDataSourceBuilder::new();
-        builder.https_connector(TestConnector);
+        builder.transport(TestTransport);
         assert!(builder
             .build(
                 &crate::ServiceEndpointsBuilder::new().build().unwrap(),
@@ -410,7 +391,7 @@ mod tests {
 
     #[test]
     fn initial_reconnect_delay_for_streaming_can_be_adjusted() {
-        let mut builder = StreamingDataSourceBuilder::<()>::new();
+        let mut builder = StreamingDataSourceBuilder::<HyperTransport>::new();
         builder.initial_reconnect_delay(Duration::from_secs(1234));
         assert_eq!(builder.initial_reconnect_delay, Duration::from_secs(1234));
     }

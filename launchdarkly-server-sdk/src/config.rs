@@ -6,6 +6,7 @@ use crate::events::processor_builders::{
 };
 use crate::stores::store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
 use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};
+use eventsource_client as es;
 
 use std::borrow::Borrow;
 
@@ -301,9 +302,9 @@ impl ConfigBuilder {
                 }
                 Some(builder) => Ok(builder),
                 #[cfg(feature = "rustls")]
-                None => Ok(Box::new(StreamingDataSourceBuilder::<
-                    hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
-                >::new())),
+                None => Ok(Box::new(
+                    StreamingDataSourceBuilder::<es::HyperTransport>::new(),
+                )),
                 #[cfg(not(feature = "rustls"))]
                 None => Err(BuildError::InvalidConfig(
                     "data source builder required when rustls is disabled".into(),

@@ -132,6 +132,7 @@ async fn create_client(
     let client_entity = match ClientEntity::new(
         create_instance_params.into_inner(),
         app_state.https_connector.clone(),
+        app_state.streaming_https_connector.clone(),
     )
     .await
     {
@@ -206,12 +207,19 @@ struct AppState {
     counter: Mutex<u32>,
     client_entities: Mutex<HashMap<u32, ClientEntity>>,
     https_connector: HttpsConnector,
+    streaming_https_connector: StreamingHttpsConnector,
 }
 
 #[cfg(feature = "rustls")]
 type HttpsConnector = hyper_rustls::HttpsConnector<HttpConnector>;
+#[cfg(feature = "rustls")]
+type StreamingHttpsConnector = hyper_util::client::legacy::connect::HttpConnector;
+
 #[cfg(feature = "tls")]
 type HttpsConnector = hyper_tls::HttpsConnector<HttpConnector>;
+#[cfg(feature = "tls")]
+type StreamingHttpsConnector =
+    hyper1_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -229,6 +237,8 @@ async fn main() -> std::io::Result<()> {
     let (tx, rx) = mpsc::channel::<()>();
 
     #[cfg(feature = "rustls")]
+    let streaming_https_connector = hyper_util::client::legacy::connect::HttpConnector::new();
+    #[cfg(feature = "rustls")]
     let connector = hyper_rustls::HttpsConnectorBuilder::new()
         .with_native_roots()
         .https_or_http()
@@ -237,12 +247,15 @@ async fn main() -> std::io::Result<()> {
         .build();
 
     #[cfg(feature = "tls")]
+    let streaming_https_connector = hyper1_tls::HttpsConnector::new();
+    #[cfg(feature = "tls")]
     let connector = hyper_tls::HttpsConnector::new();
 
     let state = web::Data::new(AppState {
         counter: Mutex::new(0),
         client_entities: Mutex::new(HashMap::new()),
         https_connector: connector,
+        streaming_https_connector: streaming_https_connector,
     });
 
     let server = HttpServer::new(move || {
