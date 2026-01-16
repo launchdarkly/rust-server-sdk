@@ -16,13 +16,13 @@ pub use http::{Request, Response};
 /// A pinned, boxed stream of bytes returned by HTTP transports.
 ///
 /// This represents the streaming response body from an HTTP request.
-pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, TransportError>> + Send>>;
+pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, TransportError>> + Send + Sync>>;
 
 /// A pinned, boxed future for an HTTP response.
 ///
 /// This represents the future returned by [`HttpTransport::request`].
 pub type ResponseFuture =
-    Pin<Box<dyn Future<Output = Result<Response<ByteStream>, TransportError>> + Send>>;
+    Pin<Box<dyn Future<Output = Result<Response<ByteStream>, TransportError>> + Send + Sync>>;
 
 /// Error type for HTTP transport operations.
 ///
