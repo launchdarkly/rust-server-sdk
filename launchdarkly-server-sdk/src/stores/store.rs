@@ -106,7 +106,7 @@ impl DataStore for InMemoryDataStore {
             }
             PatchTarget::Other(v) => Err(UpdateError::InvalidTarget(
                 "flag or segment".to_string(),
-                format!("{:?}", v),
+                format!("{v:?}"),
             )),
         }
     }

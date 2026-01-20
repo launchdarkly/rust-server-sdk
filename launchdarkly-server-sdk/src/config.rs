@@ -86,7 +86,7 @@ impl ApplicationInfo {
         match tag.is_valid() {
             Ok(_) => self.tags.push(tag),
             Err(e) => {
-                warn!("{}", e)
+                warn!("{e}")
             }
         }
 
@@ -322,7 +322,9 @@ impl ConfigBuilder {
                 Some(builder) => Ok(builder),
                 #[cfg(feature = "rustls")]
                 None => Ok(Box::new(EventProcessorBuilder::<
-                    hyper_rustls::HttpsConnector<hyper::client::HttpConnector>,
+                    hyper_rustls::HttpsConnector<
+                        hyper_util::client::legacy::connect::HttpConnector,
+                    >,
                 >::new())),
                 #[cfg(not(feature = "rustls"))]
                 None => Err(BuildError::InvalidConfig(

@@ -294,10 +294,7 @@ impl Client {
         }
 
         let initialized = tokio::time::timeout(timeout, self.initialized_async_internal()).await;
-        match initialized {
-            Ok(result) => Some(result),
-            Err(_) => None,
-        }
+        initialized.ok()
     }
 
     async fn initialized_async_internal(&self) -> bool {
@@ -335,7 +332,7 @@ impl Client {
         // broadcast channel, so sending on it would always result in an error.
         if !self.offline && !self.daemon_mode {
             if let Err(e) = self.shutdown_broadcast.send(()) {
-                error!("Failed to shutdown client appropriately: {}", e);
+                error!("Failed to shutdown client appropriately: {e}");
             }
         }
 
@@ -379,10 +376,7 @@ impl Client {
         if let Some(b) = val.as_bool() {
             b
         } else {
-            warn!(
-                "bool_variation called for a non-bool flag {:?} (got {:?})",
-                flag_key, val
-            );
+            warn!("bool_variation called for a non-bool flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -399,10 +393,7 @@ impl Client {
         if let Some(s) = val.as_string() {
             s
         } else {
-            warn!(
-                "str_variation called for a non-string flag {:?} (got {:?})",
-                flag_key, val
-            );
+            warn!("str_variation called for a non-string flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -419,10 +410,7 @@ impl Client {
         if let Some(f) = val.as_float() {
             f
         } else {
-            warn!(
-                "float_variation called for a non-float flag {:?} (got {:?})",
-                flag_key, val
-            );
+            warn!("float_variation called for a non-float flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -439,10 +427,7 @@ impl Client {
         if let Some(f) = val.as_int() {
             f
         } else {
-            warn!(
-                "int_variation called for a non-int flag {:?} (got {:?})",
-                flag_key, val
-            );
+            warn!("int_variation called for a non-int flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -760,16 +745,10 @@ impl Client {
                             self.events_default.event_factory.new_migration_op(event),
                         );
                     }
-                    Err(e) => error!(
-                        "Failed to build migration event, no event will be sent: {}",
-                        e
-                    ),
+                    Err(e) => error!("Failed to build migration event, no event will be sent: {e}"),
                 }
             }
-            Err(e) => error!(
-                "Failed to lock migration tracker, no event will be sent: {}",
-                e
-            ),
+            Err(e) => error!("Failed to lock migration tracker, no event will be sent: {e}"),
         }
     }
 
@@ -849,7 +828,7 @@ mod tests {
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
     use futures::FutureExt;
-    use hyper::client::HttpConnector;
+    use hyper_util::client::legacy::connect::HttpConnector;
     use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
     use maplit::hashmap;
     use std::collections::HashMap;

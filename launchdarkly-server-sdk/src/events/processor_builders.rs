@@ -4,14 +4,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyper::client::connect::Connection;
-use hyper::service::Service;
-use hyper::Uri;
+use http::Uri;
 #[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
 use launchdarkly_server_sdk_evaluation::Reference;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::events::sender::HyperEventSender;
 use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
@@ -66,7 +63,7 @@ pub trait EventProcessorFactory {
 /// ```
 /// # use launchdarkly_server_sdk::{EventProcessorBuilder, ConfigBuilder};
 /// # use hyper_rustls::HttpsConnector;
-/// # use hyper::client::HttpConnector;
+/// # use hyper_util::client::legacy::connect::HttpConnector;
 /// # use std::time::Duration;
 /// # fn main() {
 ///     ConfigBuilder::new("sdk-key").event_processor(EventProcessorBuilder::<HttpsConnector<HttpConnector>>::new()
@@ -90,8 +87,12 @@ pub struct EventProcessorBuilder<C> {
 
 impl<C> EventProcessorFactory for EventProcessorBuilder<C>
 where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
+    C: tower::Service<Uri> + Clone + Send + Sync + 'static,
+    C::Response: hyper_util::client::legacy::connect::Connection
+        + hyper::rt::Read
+        + hyper::rt::Write
+        + Send
+        + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -126,6 +127,10 @@ where
                 {
                     let connector = HttpsConnectorBuilder::new()
                         .with_native_roots()
+                        .unwrap_or_else(|_| {
+                            log::debug!("Falling back to webpki roots for event HTTPS connector");
+                            HttpsConnectorBuilder::new().with_webpki_roots()
+                        })
                         .https_or_http()
                         .enable_http1()
                         .enable_http2()
@@ -133,7 +138,7 @@ where
 
                     Ok(Arc::new(HyperEventSender::new(
                         connector,
-                        hyper::Uri::from_str(url_string.as_str()).unwrap(),
+                        Uri::from_str(url_string.as_str()).unwrap(),
                         sdk_key,
                         default_headers,
                         self.compress_events,
@@ -324,7 +329,7 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
-    use hyper::client::HttpConnector;
+    use hyper_util::client::legacy::connect::HttpConnector;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use maplit::hashset;
     use mockito::Matcher;

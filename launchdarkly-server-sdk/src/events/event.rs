@@ -476,8 +476,8 @@ impl InputEvent {
 impl Display for InputEvent {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let json = serde_json::to_string_pretty(self)
-            .unwrap_or_else(|e| format!("JSON serialization failed ({}): {:?}", e, self));
-        write!(f, "{}", json)
+            .unwrap_or_else(|e| format!("JSON serialization failed ({e}): {self:?}"));
+        write!(f, "{json}")
     }
 }
 
@@ -1600,7 +1600,7 @@ mod tests {
             variation_index: Some(1),
             reason: Reason::RuleMatch {
                 rule_index,
-                rule_id: format!("rule-{}", rule_index),
+                rule_id: format!("rule-{rule_index}"),
                 in_experiment: rule_in_experiment,
             },
         };

@@ -27,7 +27,7 @@ async fn main() {
         } else if let ["str", name] = bits {
             str_flags.push(name.to_string());
         } else if let [flag_type, _] = bits {
-            error!("Unsupported flag type {} in {}", flag_type, flag);
+            error!("Unsupported flag type {flag_type} in {flag}");
             exit(2);
         } else if let [name] = bits {
             bool_flags.push(name.to_string());
