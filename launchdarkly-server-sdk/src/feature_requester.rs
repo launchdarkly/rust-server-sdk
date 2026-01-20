@@ -22,13 +22,11 @@ pub trait FeatureRequester: Send {
     fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>>;
 }
 
+type BoxedBody =
+    http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
+
 pub struct HyperFeatureRequester<C> {
-    http: Arc<
-        HyperClient<
-            C,
-            http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>,
-        >,
-    >,
+    http: Arc<HyperClient<C, BoxedBody>>,
     url: http::Uri,
     sdk_key: String,
     cache: Option<CachedEntry>,
