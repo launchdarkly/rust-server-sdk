@@ -25,4 +25,4 @@ async-mutex = "1.4.0"
 [features]
 default = ["hyper-rustls"]
 hyper-rustls = ["dep:hyper-rustls", "launchdarkly-server-sdk/hyper-rustls"]
-tls = ["hyper-tls"]
+tls = ["hyper-tls", "launchdarkly-server-sdk/hyper"]
