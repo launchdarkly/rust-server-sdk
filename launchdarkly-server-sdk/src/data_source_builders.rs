@@ -243,7 +243,11 @@ impl<C> PollingDataSourceBuilder<C> {
 impl<C> DataSourceFactory for PollingDataSourceBuilder<C>
 where
     C: tower::Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
+    C::Response: hyper_util::client::legacy::connect::Connection
+        + hyper::rt::Read
+        + hyper::rt::Write
+        + Send
+        + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -258,7 +262,11 @@ where
                 #[cfg(feature = "rustls")]
                 None => {
                     let connector = HttpsConnectorBuilder::new()
-                        .with_webpki_roots()
+                        .with_native_roots()
+                        .unwrap_or_else(|_| {
+                            log::debug!("Falling back to webpki roots for polling HTTPS connector");
+                            HttpsConnectorBuilder::new().with_webpki_roots()
+                        })
                         .https_or_http()
                         .enable_http1()
                         .enable_http2()
