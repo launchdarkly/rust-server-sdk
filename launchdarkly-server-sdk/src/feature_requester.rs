@@ -1,10 +1,9 @@
 use crate::reqwest::is_http_error_recoverable;
+use crate::transport::HttpTransport;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use http_body_util::{BodyExt, Empty};
-use hyper_util::client::legacy::Client as HyperClient;
+use futures::stream::StreamExt;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::stores::store_types::AllData;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
@@ -22,29 +21,23 @@ pub trait FeatureRequester: Send {
     fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>>;
 }
 
-type BoxedBody =
-    http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
-
-pub struct HyperFeatureRequester<C> {
-    http: Arc<HyperClient<C, BoxedBody>>,
+pub struct HttpFeatureRequester<T: HttpTransport> {
+    transport: T,
     url: http::Uri,
     sdk_key: String,
     cache: Option<CachedEntry>,
     default_headers: HashMap<&'static str, String>,
 }
 
-impl<C> HyperFeatureRequester<C> {
+impl<T: HttpTransport> HttpFeatureRequester<T> {
     pub fn new(
-        http: HyperClient<
-            C,
-            http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>,
-        >,
+        transport: T,
         url: http::Uri,
         sdk_key: String,
         default_headers: HashMap<&'static str, String>,
     ) -> Self {
         Self {
-            http: Arc::new(http),
+            transport,
             url,
             sdk_key,
             cache: None,
@@ -53,19 +46,16 @@ impl<C> HyperFeatureRequester<C> {
     }
 }
 
-impl<C> FeatureRequester for HyperFeatureRequester<C>
-where
-    C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
-{
+impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
     fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>> {
         Box::pin(async {
             let uri = self.url.clone();
             let key = self.sdk_key.clone();
 
-            let http = self.http.clone();
+            let transport = self.transport.clone();
             let cache = self.cache.clone();
 
-            let mut request_builder = hyper::http::Request::builder()
+            let mut request_builder = http::Request::builder()
                 .uri(uri)
                 .method("GET")
                 .header("Content-Type", "application/json")
@@ -82,16 +72,9 @@ where
             }
 
             // Create empty body for GET request
-            let empty_body: http_body_util::combinators::BoxBody<
-                Bytes,
-                Box<dyn std::error::Error + Send + Sync>,
-            > = Empty::<Bytes>::new()
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-                .boxed();
+            let request = request_builder.body(Bytes::new()).unwrap();
 
-            let result = http
-                .request(request_builder.body(empty_body).unwrap())
-                .await;
+            let result = transport.request(request).await;
 
             let response = match result {
                 Ok(response) => response,
@@ -117,16 +100,17 @@ where
                 .map_or_else(|_| "".into(), |s| s.into());
 
             if response.status().is_success() {
-                let body_bytes = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| {
+                // Collect streaming body
+                let mut body_bytes = Vec::new();
+                let mut stream = response.into_body();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|e| {
                         error!("An error occurred while reading the polling response body: {e}");
                         FeatureRequesterError::Temporary
-                    })?
-                    .to_bytes();
-                let json = serde_json::from_slice::<AllData<Flag, Segment>>(body_bytes.as_ref());
+                    })?;
+                    body_bytes.extend_from_slice(&chunk);
+                }
+                let json = serde_json::from_slice::<AllData<Flag, Segment>>(&body_bytes);
 
                 return match json {
                     Ok(all_data) => {
@@ -262,16 +246,12 @@ mod tests {
         }
     }
 
-    fn build_feature_requester(
-        url: String,
-    ) -> HyperFeatureRequester<hyper_util::client::legacy::connect::HttpConnector> {
-        use hyper_util::rt::TokioExecutor;
-        let connector = hyper_util::client::legacy::connect::HttpConnector::new();
-        let http = HyperClient::builder(TokioExecutor::new()).build(connector);
+    fn build_feature_requester(url: String) -> HttpFeatureRequester<crate::HyperTransport> {
         let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
+        let transport = crate::HyperTransport::new();
 
-        HyperFeatureRequester::new(
-            http,
+        HttpFeatureRequester::new(
+            transport,
             url,
             "sdk-key".to_string(),
             HashMap::<&str, String>::new(),

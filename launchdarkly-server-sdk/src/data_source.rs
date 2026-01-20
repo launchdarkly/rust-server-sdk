@@ -366,14 +366,13 @@ mod tests {
         time::Duration,
     };
 
-    use hyper_util::client::legacy::connect::HttpConnector;
     use mockito::Matcher;
     use parking_lot::RwLock;
     use test_case::test_case;
     use tokio::sync::broadcast;
 
     use super::{DataSource, PollingDataSource, StreamingDataSource};
-    use crate::feature_requester_builders::HyperFeatureRequesterBuilder;
+    use crate::feature_requester_builders::HttpFeatureRequesterBuilder;
     use crate::{stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER};
     use eventsource_client as es;
 
@@ -453,8 +452,8 @@ mod tests {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let hyper_builder =
-            HyperFeatureRequesterBuilder::new(&server.url(), "sdk-key", HttpConnector::new());
+        let transport = crate::HyperTransport::new();
+        let hyper_builder = HttpFeatureRequesterBuilder::new(&server.url(), "sdk-key", transport);
 
         let polling = PollingDataSource::new(
             Arc::new(Mutex::new(Box::new(hyper_builder))),

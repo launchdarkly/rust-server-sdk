@@ -96,7 +96,9 @@ impl ClientEntity {
             if let Some(delay) = polling.poll_interval_ms {
                 polling_builder.poll_interval(Duration::from_millis(delay));
             }
-            polling_builder.https_connector(connector.clone());
+            let transport =
+                launchdarkly_server_sdk::HyperTransport::new_with_connector(connector.clone());
+            polling_builder.transport(transport);
 
             config_builder = config_builder.data_source(&polling_builder);
         } else {
