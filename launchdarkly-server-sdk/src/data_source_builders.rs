@@ -3,7 +3,7 @@ use crate::data_source::{DataSource, NullDataSource, PollingDataSource, Streamin
 use crate::feature_requester_builders::{FeatureRequesterFactory, HyperFeatureRequesterBuilder};
 use eventsource_client as es;
 use http::Uri;
-#[cfg(feature = "rustls")]
+#[cfg(feature = "hyper-rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -93,7 +93,7 @@ impl<T: es::HttpTransport> DataSourceFactory for StreamingDataSourceBuilder<T> {
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let data_source_result = match &self.transport {
-            #[cfg(feature = "rustls")]
+            #[cfg(feature = "hyper-rustls")]
             None => Ok(StreamingDataSource::new(
                 endpoints.streaming_base_url(),
                 sdk_key,
@@ -101,7 +101,7 @@ impl<T: es::HttpTransport> DataSourceFactory for StreamingDataSourceBuilder<T> {
                 &tags,
                 es::HyperTransport::new_https(),
             )),
-            #[cfg(not(feature = "rustls"))]
+            #[cfg(not(feature = "hyper-rustls"))]
             None => Err(BuildError::InvalidConfig(
                 "https connector required when rustls is disabled".into(),
             )),
@@ -259,7 +259,7 @@ where
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let feature_requester_builder: Result<Box<dyn FeatureRequesterFactory>, BuildError> =
             match &self.connector {
-                #[cfg(feature = "rustls")]
+                #[cfg(feature = "hyper-rustls")]
                 None => {
                     let connector = HttpsConnectorBuilder::new()
                         .with_native_roots()
@@ -278,7 +278,7 @@ where
                         connector,
                     )))
                 }
-                #[cfg(not(feature = "rustls"))]
+                #[cfg(not(feature = "hyper-rustls"))]
                 None => Err(BuildError::InvalidConfig(
                     "https connector required when rustls is disabled".into(),
                 )),

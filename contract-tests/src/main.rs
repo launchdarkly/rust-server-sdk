@@ -210,9 +210,9 @@ struct AppState {
     streaming_https_connector: StreamingHttpsConnector,
 }
 
-#[cfg(feature = "rustls")]
+#[cfg(feature = "hyper-rustls")]
 type HttpsConnector = hyper_rustls::HttpsConnector<HttpConnector>;
-#[cfg(feature = "rustls")]
+#[cfg(feature = "hyper-rustls")]
 type StreamingHttpsConnector = hyper_util::client::legacy::connect::HttpConnector;
 
 #[cfg(feature = "tls")]
@@ -224,20 +224,22 @@ type StreamingHttpsConnector = hyper_tls::HttpsConnector<HttpConnector>;
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    #[cfg(not(any(feature = "tls", feature = "rustls")))]
+    #[cfg(not(any(feature = "tls", feature = "hyper-rustls")))]
     {
-        compile_error!("one of the { \"tls\", \"rustls\" } features must be enabled");
+        compile_error!("one of the { \"tls\", \"hyper-rustls\" } features must be enabled");
     }
-    #[cfg(all(feature = "tls", feature = "rustls"))]
+    #[cfg(all(feature = "tls", feature = "hyper-rustls"))]
     {
-        compile_error!("only one of the { \"tls\", \"rustls\" } features can be enabled at a time");
+        compile_error!(
+            "only one of the { \"tls\", \"hyper-rustls\" } features can be enabled at a time"
+        );
     }
 
     let (tx, rx) = mpsc::channel::<()>();
 
-    #[cfg(feature = "rustls")]
+    #[cfg(feature = "hyper-rustls")]
     let streaming_https_connector = hyper_util::client::legacy::connect::HttpConnector::new();
-    #[cfg(feature = "rustls")]
+    #[cfg(feature = "hyper-rustls")]
     let connector = hyper_rustls::HttpsConnectorBuilder::new()
         .with_native_roots()
         .expect("Failed to load native root certificates")

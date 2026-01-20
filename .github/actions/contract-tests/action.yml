@@ -17,7 +17,7 @@ runs:
 
     - name: Start contract test service
       shell: bash
-      run: make start-contract-test-service-bg
+      run: TLS_FEATURE="${{ inputs.tls_feature }}" make start-contract-test-service-bg
 
     - uses: launchdarkly/gh-actions/actions/contract-tests@contract-tests-v1.0.2
       with:

@@ -301,11 +301,11 @@ impl ConfigBuilder {
                     Ok(Box::new(NullDataSourceBuilder::new()))
                 }
                 Some(builder) => Ok(builder),
-                #[cfg(feature = "rustls")]
+                #[cfg(feature = "hyper-rustls")]
                 None => Ok(Box::new(
                     StreamingDataSourceBuilder::<es::HyperTransport>::new(),
                 )),
-                #[cfg(not(feature = "rustls"))]
+                #[cfg(not(feature = "hyper-rustls"))]
                 None => Err(BuildError::InvalidConfig(
                     "data source builder required when rustls is disabled".into(),
                 )),
@@ -320,13 +320,13 @@ impl ConfigBuilder {
                     Ok(Box::new(NullEventProcessorBuilder::new()))
                 }
                 Some(builder) => Ok(builder),
-                #[cfg(feature = "rustls")]
+                #[cfg(feature = "hyper-rustls")]
                 None => Ok(Box::new(EventProcessorBuilder::<
                     hyper_rustls::HttpsConnector<
                         hyper_util::client::legacy::connect::HttpConnector,
                     >,
                 >::new())),
-                #[cfg(not(feature = "rustls"))]
+                #[cfg(not(feature = "hyper-rustls"))]
                 None => Err(BuildError::InvalidConfig(
                     "event processor factory required when rustls is disabled".into(),
                 )),

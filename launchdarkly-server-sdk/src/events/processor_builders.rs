@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http::Uri;
-#[cfg(feature = "rustls")]
+#[cfg(feature = "hyper-rustls")]
 use hyper_rustls::HttpsConnectorBuilder;
 use launchdarkly_server_sdk_evaluation::Reference;
 use thiserror::Error;
@@ -123,7 +123,7 @@ where
                     self.compress_events,
                 )))
             } else {
-                #[cfg(feature = "rustls")]
+                #[cfg(feature = "hyper-rustls")]
                 {
                     let connector = HttpsConnectorBuilder::new()
                         .with_native_roots()
@@ -144,7 +144,7 @@ where
                         self.compress_events,
                     )))
                 }
-                #[cfg(not(feature = "rustls"))]
+                #[cfg(not(feature = "hyper-rustls"))]
                 Err(BuildError::InvalidConfig(
                     "https connector is required when rustls is disabled".into(),
                 ))
