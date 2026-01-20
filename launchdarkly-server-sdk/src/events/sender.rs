@@ -40,7 +40,10 @@ pub trait EventSender: Send + Sync {
 pub struct HyperEventSender<C> {
     url: http::Uri,
     sdk_key: String,
-    http: HyperClient<C, http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>>,
+    http: HyperClient<
+        C,
+        http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>,
+    >,
     default_headers: HashMap<&'static str, String>,
 
     // used with event-compression feature
@@ -51,7 +54,11 @@ pub struct HyperEventSender<C> {
 impl<C> HyperEventSender<C>
 where
     C: tower::Service<http::Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
+    C::Response: hyper_util::client::legacy::connect::Connection
+        + hyper::rt::Read
+        + hyper::rt::Write
+        + Send
+        + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -90,7 +97,11 @@ where
 impl<C> EventSender for HyperEventSender<C>
 where
     C: tower::Service<http::Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
+    C::Response: hyper_util::client::legacy::connect::Connection
+        + hyper::rt::Read
+        + hyper::rt::Write
+        + Send
+        + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -113,9 +124,7 @@ where
             let mut payload = match serde_json::to_vec(&events) {
                 Ok(json) => json,
                 Err(e) => {
-                    error!(
-                        "Failed to serialize event payload. Some events were dropped: {e:?}"
-                    );
+                    error!("Failed to serialize event payload. Some events were dropped: {e:?}");
                     return;
                 }
             };
@@ -159,10 +168,12 @@ where
 
                 // Convert Vec<u8> to BoxBody for hyper 1.0
                 let body_bytes = Bytes::from(payload.clone());
-                let boxed_body: http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>> =
-                    Full::new(body_bytes)
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-                        .boxed();
+                let boxed_body: http_body_util::combinators::BoxBody<
+                    Bytes,
+                    Box<dyn std::error::Error + Send + Sync>,
+                > = Full::new(body_bytes)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                    .boxed();
                 let request = request_builder.body(boxed_body);
 
                 let result = self.http.request(request.unwrap()).await;
@@ -360,7 +371,9 @@ mod tests {
         assert_eq!(sender_result.time_from_server, 1234567890000);
     }
 
-    fn build_event_sender(url: String) -> HyperEventSender<hyper_util::client::legacy::connect::HttpConnector> {
+    fn build_event_sender(
+        url: String,
+    ) -> HyperEventSender<hyper_util::client::legacy::connect::HttpConnector> {
         let url = format!("{}/bulk", &url);
         let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
 

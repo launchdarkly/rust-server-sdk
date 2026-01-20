@@ -376,9 +376,7 @@ impl Client {
         if let Some(b) = val.as_bool() {
             b
         } else {
-            warn!(
-                "bool_variation called for a non-bool flag {flag_key:?} (got {val:?})"
-            );
+            warn!("bool_variation called for a non-bool flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -395,9 +393,7 @@ impl Client {
         if let Some(s) = val.as_string() {
             s
         } else {
-            warn!(
-                "str_variation called for a non-string flag {flag_key:?} (got {val:?})"
-            );
+            warn!("str_variation called for a non-string flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -414,9 +410,7 @@ impl Client {
         if let Some(f) = val.as_float() {
             f
         } else {
-            warn!(
-                "float_variation called for a non-float flag {flag_key:?} (got {val:?})"
-            );
+            warn!("float_variation called for a non-float flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -433,9 +427,7 @@ impl Client {
         if let Some(f) = val.as_int() {
             f
         } else {
-            warn!(
-                "int_variation called for a non-int flag {flag_key:?} (got {val:?})"
-            );
+            warn!("int_variation called for a non-int flag {flag_key:?} (got {val:?})");
             default
         }
     }
@@ -753,14 +745,10 @@ impl Client {
                             self.events_default.event_factory.new_migration_op(event),
                         );
                     }
-                    Err(e) => error!(
-                        "Failed to build migration event, no event will be sent: {e}"
-                    ),
+                    Err(e) => error!("Failed to build migration event, no event will be sent: {e}"),
                 }
             }
-            Err(e) => error!(
-                "Failed to lock migration tracker, no event will be sent: {e}"
-            ),
+            Err(e) => error!("Failed to lock migration tracker, no event will be sent: {e}"),
         }
     }
 

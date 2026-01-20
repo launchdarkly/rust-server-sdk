@@ -195,9 +195,7 @@ impl DataStore for PersistentDataStoreWrapper {
         let serialized_data = AllData::<SerializedItem, SerializedItem>::try_from(all_data.clone());
 
         match serialized_data {
-            Err(e) => warn!(
-                "failed to deserialize payload; cannot initialize store {e}"
-            ),
+            Err(e) => warn!("failed to deserialize payload; cannot initialize store {e}"),
             Ok(data) => {
                 let result = self.store.init(data);
 

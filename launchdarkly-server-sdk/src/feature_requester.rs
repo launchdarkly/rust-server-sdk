@@ -23,7 +23,12 @@ pub trait FeatureRequester: Send {
 }
 
 pub struct HyperFeatureRequester<C> {
-    http: Arc<HyperClient<C, http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>>>,
+    http: Arc<
+        HyperClient<
+            C,
+            http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>,
+        >,
+    >,
     url: http::Uri,
     sdk_key: String,
     cache: Option<CachedEntry>,
@@ -32,7 +37,10 @@ pub struct HyperFeatureRequester<C> {
 
 impl<C> HyperFeatureRequester<C> {
     pub fn new(
-        http: HyperClient<C, http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>>,
+        http: HyperClient<
+            C,
+            http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>,
+        >,
         url: http::Uri,
         sdk_key: String,
         default_headers: HashMap<&'static str, String>,
@@ -76,10 +84,12 @@ where
             }
 
             // Create empty body for GET request
-            let empty_body: http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>> =
-                Empty::<Bytes>::new()
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-                    .boxed();
+            let empty_body: http_body_util::combinators::BoxBody<
+                Bytes,
+                Box<dyn std::error::Error + Send + Sync>,
+            > = Empty::<Bytes>::new()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed();
 
             let result = http
                 .request(request_builder.body(empty_body).unwrap())
@@ -109,11 +119,12 @@ where
                 .map_or_else(|_| "".into(), |s| s.into());
 
             if response.status().is_success() {
-                let body_bytes = response.into_body().collect().await
+                let body_bytes = response
+                    .into_body()
+                    .collect()
+                    .await
                     .map_err(|e| {
-                        error!(
-                            "An error occurred while reading the polling response body: {e}"
-                        );
+                        error!("An error occurred while reading the polling response body: {e}");
                         FeatureRequesterError::Temporary
                     })?
                     .to_bytes();
@@ -253,7 +264,9 @@ mod tests {
         }
     }
 
-    fn build_feature_requester(url: String) -> HyperFeatureRequester<hyper_util::client::legacy::connect::HttpConnector> {
+    fn build_feature_requester(
+        url: String,
+    ) -> HyperFeatureRequester<hyper_util::client::legacy::connect::HttpConnector> {
         use hyper_util::rt::TokioExecutor;
         let connector = hyper_util::client::legacy::connect::HttpConnector::new();
         let http = HyperClient::builder(TokioExecutor::new()).build(connector);

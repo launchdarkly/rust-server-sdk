@@ -27,13 +27,23 @@ pub trait FeatureRequesterFactory: Send {
 pub struct HyperFeatureRequesterBuilder<C> {
     url: String,
     sdk_key: String,
-    http: HyperClient<C, http_body_util::combinators::BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>>,
+    http: HyperClient<
+        C,
+        http_body_util::combinators::BoxBody<
+            bytes::Bytes,
+            Box<dyn std::error::Error + Send + Sync>,
+        >,
+    >,
 }
 
 impl<C> HyperFeatureRequesterBuilder<C>
 where
     C: tower::Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
+    C::Response: hyper_util::client::legacy::connect::Connection
+        + hyper::rt::Read
+        + hyper::rt::Write
+        + Send
+        + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -49,7 +59,11 @@ where
 impl<C> FeatureRequesterFactory for HyperFeatureRequesterBuilder<C>
 where
     C: tower::Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send + Unpin,
+    C::Response: hyper_util::client::legacy::connect::Connection
+        + hyper::rt::Read
+        + hyper::rt::Write
+        + Send
+        + Unpin,
     C::Future: Send + Unpin + 'static,
     C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
