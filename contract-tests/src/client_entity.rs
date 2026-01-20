@@ -131,7 +131,9 @@ impl ClientEntity {
             if let Some(attributes) = events.global_private_attributes {
                 processor_builder.private_attributes(attributes);
             }
-            processor_builder.https_connector(connector.clone());
+            let transport =
+                launchdarkly_server_sdk::HyperTransport::new_with_connector(connector.clone());
+            processor_builder.transport(transport);
             processor_builder.omit_anonymous_contexts(events.omit_anonymous_contexts);
 
             config_builder.event_processor(&processor_builder)
