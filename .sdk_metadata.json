@@ -7,7 +7,60 @@
       "languages": [
         "Rust"
       ],
-      "userAgents": ["RustServerClient"]
+      "userAgents": ["RustServerClient"],
+      "features": {
+        "allFlags": {
+          "introduced": "1.0"
+        },
+        "appMetadata": {
+          "introduced": "1.0"
+        },
+        "contexts": {
+          "introduced": "1.0"
+        },
+        "eventCompression": {
+          "introduced": "2.4"
+        },
+        "experimentation": {
+          "introduced": "1.0"
+        },
+        "inlineContextCustomEvents": {
+          "introduced": "2.6"
+        },
+        "inlineContextEvaluationEvents": {
+          "introduced": "2.1"
+        },
+        "migrations": {
+          "introduced": "2.2"
+        },
+        "offlineMode": {
+          "introduced": "1.0"
+        },
+        "omitAnonContexts": {
+          "introduced": "2.2"
+        },
+        "privateAttrs": {
+          "introduced": "1.0"
+        },
+        "relayProxyDaemon": {
+          "introduced": "2.5"
+        },
+        "relayProxyProxy": {
+          "introduced": "1.0"
+        },
+        "secureMode": {
+          "introduced": "1.0"
+        },
+        "storingData": {
+          "introduced": "1.0"
+        },
+        "track": {
+          "introduced": "1.0"
+        },
+        "variationDetail": {
+          "introduced": "1.0"
+        }
+      }
     }
   }
 }
