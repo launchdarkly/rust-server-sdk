@@ -825,6 +825,7 @@ mod tests {
 
     use crate::data_source::MockDataSource;
     use crate::data_source_builders::MockDataSourceBuilder;
+    use crate::evaluation::FlagFilter;
     use crate::events::create_event_sender;
     use crate::events::event::{OutputEvent, VariationKey};
     use crate::events::processor_builders::EventProcessorBuilder;
@@ -1051,6 +1052,7 @@ mod tests {
                     "toplevel",
                     &["prereq1", "prereq2"],
                     false,
+                    false,
                 ))),
             )
             .expect("patch should apply");
@@ -1099,7 +1101,7 @@ mod tests {
             .upsert(
                 "prereq1",
                 PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
-                    "prereq1", false,
+                    "prereq1", false, false,
                 ))),
             )
             .expect("patch should apply");
@@ -1109,7 +1111,7 @@ mod tests {
             .upsert(
                 "prereq2",
                 PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
-                    "prereq2", false,
+                    "prereq2", false, false,
                 ))),
             )
             .expect("patch should apply");
@@ -1123,6 +1125,7 @@ mod tests {
                     "toplevel",
                     &["prereq1", "prereq2"],
                     true,
+                    false,
                 ))),
             )
             .expect("patch should apply");
@@ -1132,7 +1135,7 @@ mod tests {
             .expect("Failed to create context");
 
         let mut config = FlagDetailConfig::new();
-        config.client_side_only();
+        config.flag_filter(FlagFilter::CLIENT);
 
         let all_flags = client.all_flags_detail(&context, config);
 

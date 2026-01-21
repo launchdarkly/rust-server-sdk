@@ -1,4 +1,5 @@
 use super::stores::store::DataStore;
+use bitflags::bitflags;
 use serde::Serialize;
 use std::cell::RefCell;
 
@@ -8,22 +9,61 @@ use launchdarkly_server_sdk_evaluation::{
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+bitflags! {
+    /// Controls which flags are included based on their client-side availability settings.
+    ///
+    /// Use this with [FlagDetailConfig] to filter flags returned by [crate::Client::all_flags_detail].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use launchdarkly_server_sdk::{FlagDetailConfig, FlagFilter};
+    /// // Include only web/JavaScript client flags
+    /// let mut config = FlagDetailConfig::new();
+    /// config.flag_filter(FlagFilter::CLIENT);
+    ///
+    /// // Include both web and mobile client flags
+    /// let mut config = FlagDetailConfig::new();
+    /// config.flag_filter(FlagFilter::CLIENT | FlagFilter::MOBILE);
+    ///
+    /// // Include all flags (default)
+    /// let config = FlagDetailConfig::new(); // empty filter = no filtering
+    /// ```
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct FlagFilter: u8 {
+        /// Include flags available to JavaScript/web client-side SDKs.
+        /// Filters to flags where `using_environment_id()` returns true.
+        const CLIENT = 0b01;
+
+        /// Include flags available to mobile/desktop client-side SDKs.
+        /// Filters to flags where `using_mobile_key()` returns true.
+        const MOBILE = 0b10;
+    }
+}
+
+impl Default for FlagFilter {
+    fn default() -> Self {
+        // Empty filter = include all flags (no filtering)
+        Self::empty()
+    }
+}
+
 /// Configuration struct to control the type of data returned from the [crate::Client::all_flags_detail]
 /// method. By default, each of the options default to false. However, you can selectively enable
 /// them by calling the appropriate functions.
 ///
 /// ```
-/// # use launchdarkly_server_sdk::FlagDetailConfig;
+/// # use launchdarkly_server_sdk::{FlagDetailConfig, FlagFilter};
 /// # fn main() {
 ///     let mut config = FlagDetailConfig::new();
-///     config.client_side_only()
+///     config.flag_filter(FlagFilter::CLIENT)
 ///         .with_reasons()
 ///         .details_only_for_tracked_flags();
 /// # }
 /// ```
 #[derive(Clone, Copy, Default)]
 pub struct FlagDetailConfig {
-    client_side_only: bool,
+    flag_filter: FlagFilter,
     with_reasons: bool,
     details_only_for_tracked_flags: bool,
 }
@@ -34,16 +74,18 @@ impl FlagDetailConfig {
     /// By default, this config will include al flags and will not include reasons.
     pub fn new() -> Self {
         Self {
-            client_side_only: false,
+            flag_filter: FlagFilter::default(),
             with_reasons: false,
             details_only_for_tracked_flags: false,
         }
     }
 
-    /// Limit to only flags that are marked for use with the client-side SDK (by
-    /// default, all flags are included)
-    pub fn client_side_only(&mut self) -> &mut Self {
-        self.client_side_only = true;
+    /// Set the flag filter to control which flags are included.
+    ///
+    /// Pass an empty filter (default) to include all flags.
+    /// Use `FlagFilter::CLIENT`, `FlagFilter::MOBILE`, or combine them.
+    pub fn flag_filter(&mut self, filter: FlagFilter) -> &mut Self {
+        self.flag_filter = filter;
         self
     }
 
@@ -148,8 +190,14 @@ impl FlagDetail {
         let mut flag_state = HashMap::new();
 
         for (key, flag) in store.all_flags() {
-            if config.client_side_only && !flag.using_environment_id() {
-                continue;
+            if !config.flag_filter.is_empty() {
+                let matches_filter = (config.flag_filter.contains(FlagFilter::CLIENT)
+                    && flag.using_environment_id())
+                    || (config.flag_filter.contains(FlagFilter::MOBILE) && flag.using_mobile_key());
+
+                if !matches_filter {
+                    continue;
+                }
             }
 
             let event_recorder = DirectPrerequisiteRecorder::new(key.clone());
@@ -219,7 +267,7 @@ impl FlagDetail {
 
 #[cfg(test)]
 mod tests {
-    use crate::evaluation::FlagDetail;
+    use crate::evaluation::{FlagDetail, FlagFilter};
     use crate::stores::store::DataStore;
     use crate::stores::store::InMemoryDataStore;
     use crate::stores::store_types::{PatchTarget, StorageItem};
@@ -230,6 +278,7 @@ mod tests {
     use crate::FlagDetailConfig;
     use assert_json_diff::assert_json_eq;
     use launchdarkly_server_sdk_evaluation::ContextBuilder;
+    use test_case::test_case;
 
     #[test]
     fn flag_detail_handles_default_configuration() {
@@ -461,8 +510,12 @@ mod tests {
 
         let prereq1 = basic_flag("prereq1");
         let prereq2 = basic_flag("prereq2");
-        let toplevel =
-            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], false);
+        let toplevel = basic_flag_with_prereqs_and_visibility(
+            "toplevel",
+            &["prereq1", "prereq2"],
+            false,
+            false,
+        );
 
         store
             .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
@@ -512,12 +565,16 @@ mod tests {
         let mut store = InMemoryDataStore::new();
 
         // These two prerequisites won't be visible to clients (environment ID) SDKs.
-        let prereq1 = basic_flag_with_visibility("prereq1", false);
-        let prereq2 = basic_flag_with_visibility("prereq2", false);
+        let prereq1 = basic_flag_with_visibility("prereq1", false, false);
+        let prereq2 = basic_flag_with_visibility("prereq2", false, false);
 
         // But, the top-level flag will.
-        let toplevel =
-            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+        let toplevel = basic_flag_with_prereqs_and_visibility(
+            "toplevel",
+            &["prereq1", "prereq2"],
+            true,
+            false,
+        );
 
         store
             .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
@@ -534,7 +591,7 @@ mod tests {
         let mut flag_detail = FlagDetail::new(true);
 
         let mut config = FlagDetailConfig::new();
-        config.client_side_only();
+        config.flag_filter(FlagFilter::CLIENT);
 
         flag_detail.populate(&store, &context, config);
 
@@ -567,8 +624,12 @@ mod tests {
         let prereq1 = basic_off_flag("prereq1");
         let prereq2 = basic_flag("prereq2");
 
-        let toplevel =
-            basic_flag_with_prereqs_and_visibility("toplevel", &["prereq1", "prereq2"], true);
+        let toplevel = basic_flag_with_prereqs_and_visibility(
+            "toplevel",
+            &["prereq1", "prereq2"],
+            true,
+            false,
+        );
 
         store
             .upsert("prereq1", PatchTarget::Flag(StorageItem::Item(prereq1)))
@@ -609,5 +670,85 @@ mod tests {
         });
 
         assert_json_eq!(expected, flag_detail);
+    }
+
+    #[test_case(FlagFilter::empty(), &["server-flag", "client-flag", "mobile-flag", "both-flag"] ; "empty filter includes all flags")]
+    #[test_case(FlagFilter::CLIENT, &["client-flag", "both-flag"] ; "client filter includes only client flags")]
+    #[test_case(FlagFilter::MOBILE, &["mobile-flag", "both-flag"] ; "mobile filter includes only mobile flags")]
+    #[test_case(FlagFilter::CLIENT | FlagFilter::MOBILE, &["client-flag", "mobile-flag", "both-flag"] ; "combined filter includes client or mobile flags")]
+    fn flag_filter_includes_correct_flags(filter: FlagFilter, expected_flags: &[&str]) {
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let mut store = InMemoryDataStore::new();
+
+        // Add different types of flags
+        store
+            .upsert(
+                "server-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "server-flag",
+                    false,
+                    false,
+                ))),
+            )
+            .expect("patch should apply");
+
+        store
+            .upsert(
+                "client-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "client-flag",
+                    true,
+                    false,
+                ))),
+            )
+            .expect("patch should apply");
+
+        store
+            .upsert(
+                "mobile-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "mobile-flag",
+                    false,
+                    true,
+                ))),
+            )
+            .expect("patch should apply");
+
+        store
+            .upsert(
+                "both-flag",
+                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
+                    "both-flag",
+                    true,
+                    true,
+                ))),
+            )
+            .expect("patch should apply");
+
+        let mut flag_detail = FlagDetail::new(true);
+        let mut config = FlagDetailConfig::new();
+        if !filter.is_empty() {
+            config.flag_filter(filter);
+        }
+        flag_detail.populate(&store, &context, config);
+
+        // Assert expected flags are present
+        for expected_flag in expected_flags {
+            assert!(
+                flag_detail.evaluations.contains_key(*expected_flag),
+                "Expected flag '{expected_flag}' to be present"
+            );
+        }
+
+        // Assert count matches
+        assert_eq!(
+            flag_detail.evaluations.len(),
+            expected_flags.len(),
+            "Expected {} flags, got {}",
+            expected_flags.len(),
+            flag_detail.evaluations.len()
+        );
     }
 }
