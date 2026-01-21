@@ -54,9 +54,6 @@
         "storingData": {
           "introduced": "1.0"
         },
-        "storingDataRedis": {
-          "introduced": "1.0"
-        },
         "track": {
           "introduced": "1.0"
         },
