@@ -273,16 +273,6 @@ impl Client {
         Ok(true)
     }
 
-    /// This is an async method that will resolve once initialization is complete.
-    /// Initialization being complete does not mean that initialization was a success.
-    /// The return value from the method indicates if the client successfully initialized.
-    #[deprecated(
-        note = "blocking without a timeout is discouraged, use wait_for_initialization instead"
-    )]
-    pub async fn initialized_async(&self) -> bool {
-        self.initialized_async_internal().await
-    }
-
     /// This is an async method that will resolve once initialization is complete or the specified
     /// timeout has occurred.
     ///
@@ -858,19 +848,6 @@ mod tests {
     #[test]
     fn ensure_client_is_send_and_sync() {
         is_send_and_sync::<Client>()
-    }
-
-    #[tokio::test]
-    async fn client_asynchronously_initializes() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, false);
-        client.start_with_default_executor();
-
-        let now = Instant::now();
-        let initialized = client.initialized_async().await;
-        let elapsed_time = now.elapsed();
-        assert!(initialized);
-        // Give ourself a good margin for thread scheduling.
-        assert!(elapsed_time.as_millis() > 500)
     }
 
     #[tokio::test]
