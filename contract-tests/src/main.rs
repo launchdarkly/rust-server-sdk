@@ -212,8 +212,7 @@ type HttpsConnector =
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
 #[cfg(feature = "tls")]
-type HttpsConnector =
-    hyper_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+type HttpsConnector = hyper_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
