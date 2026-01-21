@@ -1,4 +1,3 @@
-use eventsource_client as es;
 use futures::future::FutureExt;
 use launchdarkly_server_sdk::{
     Context, ContextBuilder, MigratorBuilder, MultiContextBuilder, Reference,
@@ -21,7 +20,6 @@ use crate::command_params::{
     MigrationOperationResponse, MigrationVariationResponse, SecureModeHashResponse,
 };
 use crate::HttpsConnector;
-use crate::StreamingHttpsConnector;
 use crate::{
     command_params::{
         CommandParams, CommandResponse, EvaluateAllFlagsParams, EvaluateAllFlagsResponse,
@@ -38,8 +36,12 @@ impl ClientEntity {
     pub async fn new(
         create_instance_params: CreateInstanceParams,
         connector: HttpsConnector,
-        streaming_https_connector: StreamingHttpsConnector,
     ) -> Result<Self, BuildError> {
+        // Create fresh transports for this client to avoid shared connection pool issues
+        let transport =
+            launchdarkly_server_sdk::HyperTransport::new_with_connector(connector.clone());
+        let streaming_https_transport =
+            eventsource_client::HyperTransport::builder().build_with_connector(connector.clone());
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
 
@@ -74,8 +76,6 @@ impl ClientEntity {
         }
 
         if let Some(streaming) = create_instance_params.configuration.streaming {
-            let transport =
-                es::HyperTransport::builder().build_with_connector(streaming_https_connector);
             if let Some(base_uri) = streaming.base_uri {
                 service_endpoints_builder.streaming_base_url(&base_uri);
             }
@@ -84,7 +84,7 @@ impl ClientEntity {
             if let Some(delay) = streaming.initial_retry_delay_ms {
                 streaming_builder.initial_reconnect_delay(Duration::from_millis(delay));
             }
-            streaming_builder.transport(transport);
+            streaming_builder.transport(streaming_https_transport.clone());
 
             config_builder = config_builder.data_source(&streaming_builder);
         } else if let Some(polling) = create_instance_params.configuration.polling {
@@ -96,19 +96,15 @@ impl ClientEntity {
             if let Some(delay) = polling.poll_interval_ms {
                 polling_builder.poll_interval(Duration::from_millis(delay));
             }
-            let transport =
-                launchdarkly_server_sdk::HyperTransport::new_with_connector(connector.clone());
-            polling_builder.transport(transport);
+            polling_builder.transport(transport.clone());
 
             config_builder = config_builder.data_source(&polling_builder);
         } else {
             // If we didn't specify streaming or polling, we fall back to basic streaming. The only
-            // customization we provide is the https connector to support testing multiple
-            // connectors.
-            let transport =
-                es::HyperTransport::builder().build_with_connector(streaming_https_connector);
+            // customization we provide is the transport to support testing multiple
+            // transport implementations.
             let mut streaming_builder = StreamingDataSourceBuilder::new();
-            streaming_builder.transport(transport);
+            streaming_builder.transport(streaming_https_transport);
             config_builder = config_builder.data_source(&streaming_builder);
         }
 
@@ -133,8 +129,6 @@ impl ClientEntity {
             if let Some(attributes) = events.global_private_attributes {
                 processor_builder.private_attributes(attributes);
             }
-            let transport =
-                launchdarkly_server_sdk::HyperTransport::new_with_connector(connector.clone());
             processor_builder.transport(transport);
             processor_builder.omit_anonymous_contexts(events.omit_anonymous_contexts);
 
