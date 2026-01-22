@@ -143,17 +143,17 @@ impl Config {
     }
 
     /// Returns the DataStoreFactory
-    pub fn data_store_builder(&self) -> &(dyn DataStoreFactory) {
+    pub fn data_store_builder(&self) -> &dyn DataStoreFactory {
         self.data_store_builder.borrow()
     }
 
     /// Returns the DataSourceFactory
-    pub fn data_source_builder(&self) -> &(dyn DataSourceFactory) {
+    pub fn data_source_builder(&self) -> &dyn DataSourceFactory {
         self.data_source_builder.borrow()
     }
 
     /// Returns the EventProcessorFactory
-    pub fn event_processor_builder(&self) -> &(dyn EventProcessorFactory) {
+    pub fn event_processor_builder(&self) -> &dyn EventProcessorFactory {
         self.event_processor_builder.borrow()
     }
 

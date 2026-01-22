@@ -18,7 +18,7 @@ pub enum FeatureRequesterError {
 struct CachedEntry(AllData<Flag, Segment>, String);
 
 pub trait FeatureRequester: Send {
-    fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>>;
+    fn get_all(&mut self) -> BoxFuture<'_, Result<AllData<Flag, Segment>, FeatureRequesterError>>;
 }
 
 pub struct HttpFeatureRequester<T: HttpTransport> {
@@ -47,7 +47,7 @@ impl<T: HttpTransport> HttpFeatureRequester<T> {
 }
 
 impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
-    fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>> {
+    fn get_all(&mut self) -> BoxFuture<'_, Result<AllData<Flag, Segment>, FeatureRequesterError>> {
         Box::pin(async {
             let uri = self.url.clone();
             let key = self.sdk_key.clone();

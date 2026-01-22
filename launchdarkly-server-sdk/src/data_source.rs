@@ -69,6 +69,7 @@ pub struct StreamingDataSource {
 }
 
 impl StreamingDataSource {
+    #[allow(clippy::result_large_err)]
     pub fn new<T: es::HttpTransport>(
         base_url: &str,
         sdk_key: &str,
