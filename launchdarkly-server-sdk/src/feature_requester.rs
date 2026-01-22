@@ -17,7 +17,7 @@ pub enum FeatureRequesterError {
 struct CachedEntry(AllData<Flag, Segment>, String);
 
 pub trait FeatureRequester: Send {
-    fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>>;
+    fn get_all(&mut self) -> BoxFuture<'_, Result<AllData<Flag, Segment>, FeatureRequesterError>>;
 }
 
 pub struct HyperFeatureRequester<C> {
@@ -49,7 +49,7 @@ impl<C> FeatureRequester for HyperFeatureRequester<C>
 where
     C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
 {
-    fn get_all(&mut self) -> BoxFuture<Result<AllData<Flag, Segment>, FeatureRequesterError>> {
+    fn get_all(&mut self) -> BoxFuture<'_, Result<AllData<Flag, Segment>, FeatureRequesterError>> {
         Box::pin(async {
             let uri = self.url.clone();
             let key = self.sdk_key.clone();

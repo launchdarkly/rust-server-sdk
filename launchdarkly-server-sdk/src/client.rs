@@ -294,10 +294,7 @@ impl Client {
         }
 
         let initialized = tokio::time::timeout(timeout, self.initialized_async_internal()).await;
-        match initialized {
-            Ok(result) => Some(result),
-            Err(_) => None,
-        }
+        initialized.ok()
     }
 
     async fn initialized_async_internal(&self) -> bool {
