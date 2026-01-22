@@ -342,6 +342,60 @@ impl Client {
         self.event_processor.flush();
     }
 
+    /// Flush tells the client that all pending analytics events should be delivered as
+    /// soon as possible, and blocks until delivery is complete or the timeout expires.
+    ///
+    /// This method is particularly useful in short-lived execution environments like AWS Lambda
+    /// where you need to ensure events are sent before the function terminates.
+    ///
+    /// This method triggers a flush of events currently buffered and waits for that specific
+    /// flush to complete. Note that if periodic flushes or other flush operations are in-flight
+    /// when this is called, those may still be completing after this method returns.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Maximum time to wait for flush to complete. Use `Duration::ZERO` to wait indefinitely.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if flush completed successfully, `false` if timeout occurred.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use launchdarkly_server_sdk::{Client, ConfigBuilder};
+    /// # use std::time::Duration;
+    /// # async fn example() {
+    /// # let client = Client::build(ConfigBuilder::new("sdk-key").build().unwrap()).unwrap();
+    /// // Wait up to 5 seconds for flush to complete
+    /// let success = client.flush_blocking(Duration::from_secs(5)).await;
+    /// if !success {
+    ///     eprintln!("Warning: flush timed out");
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/flush#rust>.
+    pub async fn flush_blocking(&self, timeout: Duration) -> bool {
+        let event_processor = self.event_processor.clone();
+
+        let flush_future =
+            tokio::task::spawn_blocking(move || event_processor.flush_blocking(timeout));
+
+        if timeout == Duration::ZERO {
+            // Wait indefinitely
+            flush_future.await.unwrap_or(false)
+        } else {
+            // Apply timeout at async level too
+            match tokio::time::timeout(timeout, flush_future).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => false, // spawn_blocking panicked
+                Err(_) => false,     // Timeout
+            }
+        }
+    }
+
     /// Identify reports details about a context.
     ///
     /// For more information, see the Reference Guide:
@@ -2561,6 +2615,95 @@ mod tests {
             }
             _ => panic!("Expected migration event"),
         }
+    }
+
+    #[tokio::test]
+    async fn client_flush_blocking_completes_successfully() {
+        let (client, event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let context = ContextBuilder::new("user-key")
+            .build()
+            .expect("Failed to create context");
+
+        client.identify(context);
+
+        let result = client.flush_blocking(Duration::from_secs(5)).await;
+        assert!(result, "flush_blocking should complete successfully");
+
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert!(!events.is_empty(), "Should have received identify event");
+    }
+
+    #[tokio::test]
+    async fn client_flush_blocking_with_zero_timeout() {
+        let (client, event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let context = ContextBuilder::new("user-key")
+            .build()
+            .expect("Failed to create context");
+
+        client.identify(context);
+
+        let result = client.flush_blocking(Duration::ZERO).await;
+        assert!(
+            result,
+            "flush_blocking with zero timeout should complete successfully"
+        );
+
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert!(!events.is_empty(), "Should have received identify event");
+    }
+
+    #[tokio::test]
+    async fn client_flush_blocking_with_no_events() {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let result = client.flush_blocking(Duration::from_secs(1)).await;
+        assert!(
+            result,
+            "flush_blocking with no events should complete immediately"
+        );
+
+        client.close();
+    }
+
+    #[tokio::test]
+    async fn client_flush_blocking_multiple_concurrent_calls() {
+        let (client, event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let context = ContextBuilder::new("user-key")
+            .build()
+            .expect("Failed to create context");
+
+        client.identify(context);
+
+        // Make multiple concurrent flush_blocking calls
+        let (result1, result2, result3) = tokio::join!(
+            client.flush_blocking(Duration::from_secs(5)),
+            client.flush_blocking(Duration::from_secs(5)),
+            client.flush_blocking(Duration::from_secs(5)),
+        );
+
+        assert!(result1, "First flush_blocking should succeed");
+        assert!(result2, "Second flush_blocking should succeed");
+        assert!(result3, "Third flush_blocking should succeed");
+
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert!(!events.is_empty(), "Should have received identify event");
     }
 
     fn make_mocked_client_with_delay(

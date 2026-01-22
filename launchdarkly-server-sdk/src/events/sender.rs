@@ -24,6 +24,7 @@ pub struct EventSenderResult {
     pub(super) time_from_server: u128,
     pub(super) success: bool,
     pub(super) must_shutdown: bool,
+    pub(super) flush_signal: Option<Sender<()>>,
 }
 
 pub trait EventSender: Send + Sync {
@@ -31,6 +32,7 @@ pub trait EventSender: Send + Sync {
         &self,
         events: Vec<OutputEvent>,
         result_tx: Sender<EventSenderResult>,
+        flush_signal: Option<Sender<()>>,
     ) -> BoxFuture<'_, ()>;
 }
 
@@ -84,6 +86,7 @@ impl<T: HttpTransport> EventSender for HttpEventSender<T> {
         &self,
         events: Vec<OutputEvent>,
         result_tx: Sender<EventSenderResult>,
+        flush_signal: Option<Sender<()>>,
     ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let uuid = Uuid::new_v4();
@@ -159,6 +162,7 @@ impl<T: HttpTransport> EventSender for HttpEventSender<T> {
                                 success: false,
                                 time_from_server: 0,
                                 must_shutdown: false,
+                                flush_signal,
                             })
                             .unwrap();
                         return;
@@ -170,6 +174,7 @@ impl<T: HttpTransport> EventSender for HttpEventSender<T> {
                         success: true,
                         time_from_server: self.get_server_time_from_response(&response),
                         must_shutdown: false,
+                        flush_signal,
                     });
                     return;
                 }
@@ -180,6 +185,7 @@ impl<T: HttpTransport> EventSender for HttpEventSender<T> {
                             success: false,
                             time_from_server: 0,
                             must_shutdown: true,
+                            flush_signal,
                         })
                         .unwrap();
                     return;
@@ -191,6 +197,7 @@ impl<T: HttpTransport> EventSender for HttpEventSender<T> {
                     success: false,
                     time_from_server: 0,
                     must_shutdown: false,
+                    flush_signal,
                 })
                 .unwrap();
         })
@@ -215,6 +222,7 @@ impl EventSender for InMemoryEventSender {
         &self,
         events: Vec<OutputEvent>,
         sender: Sender<EventSenderResult>,
+        flush_signal: Option<Sender<()>>,
     ) -> BoxFuture<()> {
         Box::pin(async move {
             for event in events {
@@ -226,6 +234,7 @@ impl EventSender for InMemoryEventSender {
                     time_from_server: 0,
                     success: true,
                     must_shutdown: true,
+                    flush_signal,
                 })
                 .unwrap();
         })
@@ -266,7 +275,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().unwrap();
         assert!(sender_result.success);
@@ -286,7 +295,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().expect("Failed to receive sender_result");
         assert!(!sender_result.success);
@@ -306,7 +315,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().expect("Failed to receive sender_result");
         assert!(!sender_result.success);
@@ -332,7 +341,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().expect("Failed to receive sender_result");
         assert!(sender_result.success);

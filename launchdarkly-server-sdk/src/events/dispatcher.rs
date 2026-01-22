@@ -114,6 +114,7 @@ impl EventDispatcher {
         };
 
         let (send, recv) = bounded::<()>(1);
+        let mut flush_signal: Option<Sender<()>> = None;
 
         loop {
             debug!("waiting for a batch to send");
@@ -121,12 +122,15 @@ impl EventDispatcher {
             loop {
                 select! {
                     recv(event_result_rx) -> result => match result {
-                        Ok(result) if result.success => self.last_known_time = std::cmp::max(result.time_from_server, self.last_known_time),
-                        Ok(result) if result.must_shutdown => {
-                            self.disabled = true;
-                            self.outbox.reset();
-                        },
-                        Ok(_) => continue,
+                        Ok(result) => {
+                            if result.success {
+                                self.last_known_time = std::cmp::max(result.time_from_server, self.last_known_time);
+                            } else if result.must_shutdown {
+                                self.disabled = true;
+                                self.outbox.reset();
+                            }
+                            result.flush_signal.map(|s| s.send(()));
+                        }
                         Err(e) => {
                             error!("event_result_rx is disconnected. Shutting down dispatcher: {e}");
                             return;
@@ -136,6 +140,10 @@ impl EventDispatcher {
                     recv(flush_ticker) -> _ => break,
                     recv(inbox_rx) -> result => match result {
                         Ok(EventDispatcherMessage::Flush) => break,
+                        Ok(EventDispatcherMessage::FlushWithReply(reply_sender)) => {
+                            flush_signal = Some(reply_sender);
+                            break;
+                        }
                         Ok(EventDispatcherMessage::EventMessage(event)) => {
                             if !self.disabled {
                                 self.process_event(event);
@@ -166,6 +174,7 @@ impl EventDispatcher {
             }
 
             if self.disabled {
+                flush_signal.take().map(|s| s.send(()));
                 continue;
             }
 
@@ -177,10 +186,14 @@ impl EventDispatcher {
                 let sender = self.events_configuration.event_sender.clone();
                 let results = event_result_tx.clone();
                 let send = send.clone();
+                let fs = flush_signal.take();
                 rt.spawn(async move {
-                    sender.send_event_data(payload, results).await;
+                    sender.send_event_data(payload, results, fs).await;
                     drop(send);
                 });
+            } else {
+                // No events to send, reply immediately to any waiting flush_blocking calls
+                flush_signal.take().map(|s| s.send(()));
             }
         }
     }
@@ -317,6 +330,7 @@ pub(super) enum EventDispatcherMessage {
     EventMessage(InputEvent),
     Flush,
     Close(Sender<()>),
+    FlushWithReply(Sender<()>),
 }
 
 #[cfg(test)]
@@ -826,6 +840,146 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         assert_eq!(event_rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn flush_blocking_returns_immediately_when_outbox_empty() {
+        let (event_sender, event_rx) = create_event_sender();
+        let events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        let (inbox_tx, inbox_rx) = bounded(events_configuration.capacity);
+
+        let dispatcher_handle = thread::Builder::new()
+            .spawn(move || {
+                let mut dispatcher = create_dispatcher(events_configuration);
+                dispatcher.start(inbox_rx)
+            })
+            .unwrap();
+
+        // Send FlushWithReply without any events
+        let (tx, rx) = bounded(1);
+        inbox_tx
+            .send(EventDispatcherMessage::FlushWithReply(tx))
+            .expect("flush with reply failed");
+
+        // Should receive signal immediately since outbox is empty
+        rx.recv_timeout(Duration::from_millis(500))
+            .expect("should receive flush signal immediately when outbox is empty");
+
+        let (close_tx, close_rx) = bounded(1);
+        inbox_tx
+            .send(EventDispatcherMessage::Close(close_tx))
+            .expect("failed to close");
+        close_rx.recv().expect("failed to notify on close");
+        dispatcher_handle.join().unwrap();
+
+        assert_eq!(event_rx.try_iter().count(), 0);
+    }
+
+    #[test]
+    fn flush_blocking_signals_after_send_completes() {
+        let (event_sender, event_rx) = create_event_sender();
+        let events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        let (inbox_tx, inbox_rx) = bounded(events_configuration.capacity);
+
+        let dispatcher_handle = thread::Builder::new()
+            .spawn(move || {
+                let mut dispatcher = create_dispatcher(events_configuration);
+                dispatcher.start(inbox_rx)
+            })
+            .unwrap();
+
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
+        let event_factory = EventFactory::new(true);
+
+        // Send an event
+        inbox_tx
+            .send(EventDispatcherMessage::EventMessage(
+                event_factory.new_identify(context),
+            ))
+            .expect("event send failed");
+
+        // Send FlushWithReply
+        let (tx, rx) = bounded(1);
+        inbox_tx
+            .send(EventDispatcherMessage::FlushWithReply(tx))
+            .expect("flush with reply failed");
+
+        // Should receive signal after send completes
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("should receive flush signal after send completes");
+
+        let (close_tx, close_rx) = bounded(1);
+        inbox_tx
+            .send(EventDispatcherMessage::Close(close_tx))
+            .expect("failed to close");
+        close_rx.recv().expect("failed to notify on close");
+        dispatcher_handle.join().unwrap();
+
+        assert_eq!(event_rx.iter().count(), 1);
+    }
+
+    #[test]
+    fn flush_blocking_with_multiple_concurrent_requests() {
+        let (event_sender, event_rx) = create_event_sender();
+        let events_configuration =
+            create_events_configuration(event_sender, Duration::from_secs(100));
+        let (inbox_tx, inbox_rx) = bounded(events_configuration.capacity);
+
+        let dispatcher_handle = thread::Builder::new()
+            .spawn(move || {
+                let mut dispatcher = create_dispatcher(events_configuration);
+                dispatcher.start(inbox_rx)
+            })
+            .unwrap();
+
+        let context = ContextBuilder::new("context")
+            .build()
+            .expect("Failed to create context");
+        let event_factory = EventFactory::new(true);
+
+        // Send an event
+        inbox_tx
+            .send(EventDispatcherMessage::EventMessage(
+                event_factory.new_identify(context),
+            ))
+            .expect("event send failed");
+
+        // Send multiple FlushWithReply requests
+        let (tx1, rx1) = bounded(1);
+        let (tx2, rx2) = bounded(1);
+        let (tx3, rx3) = bounded(1);
+
+        inbox_tx
+            .send(EventDispatcherMessage::FlushWithReply(tx1))
+            .expect("flush1 failed");
+        inbox_tx
+            .send(EventDispatcherMessage::FlushWithReply(tx2))
+            .expect("flush2 failed");
+        inbox_tx
+            .send(EventDispatcherMessage::FlushWithReply(tx3))
+            .expect("flush3 failed");
+
+        // All should complete (though only first triggers actual send)
+        rx1.recv_timeout(Duration::from_secs(5))
+            .expect("rx1 should complete");
+        rx2.recv_timeout(Duration::from_secs(5))
+            .expect("rx2 should complete");
+        rx3.recv_timeout(Duration::from_secs(5))
+            .expect("rx3 should complete");
+
+        let (close_tx, close_rx) = bounded(1);
+        inbox_tx
+            .send(EventDispatcherMessage::Close(close_tx))
+            .expect("failed to close");
+        close_rx.recv().expect("failed to notify on close");
+        dispatcher_handle.join().unwrap();
+
+        // Should have one event from first flush (others had empty outbox)
+        assert_eq!(event_rx.iter().count(), 1);
     }
 
     fn create_dispatcher(events_configuration: EventsConfiguration) -> EventDispatcher {
