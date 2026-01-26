@@ -129,7 +129,7 @@ where
             )),
         };
         let data_source = data_source_result?
-            .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {:?}", e)))?;
+            .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {e:?}")))?;
         Ok(Arc::new(data_source))
     }
 

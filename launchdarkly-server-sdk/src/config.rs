@@ -85,7 +85,7 @@ impl ApplicationInfo {
         match tag.is_valid() {
             Ok(_) => self.tags.push(tag),
             Err(e) => {
-                warn!("{}", e)
+                warn!("{e}")
             }
         }
 

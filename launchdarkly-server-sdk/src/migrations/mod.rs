@@ -79,7 +79,7 @@ impl TryFrom<FlagValue> for Stage {
                 "live" => Ok(Stage::Live),
                 "rampdown" => Ok(Stage::Rampdown),
                 "complete" => Ok(Stage::Complete),
-                _ => Err(format!("Invalid stage: {}", value)),
+                _ => Err(format!("Invalid stage: {value}")),
             }
         } else {
             Err("Cannot convert non-string value to Stage".to_string())
