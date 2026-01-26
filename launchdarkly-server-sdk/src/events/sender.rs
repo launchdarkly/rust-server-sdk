@@ -114,10 +114,7 @@ where
             let mut payload = match serde_json::to_vec(&events) {
                 Ok(json) => json,
                 Err(e) => {
-                    error!(
-                        "Failed to serialize event payload. Some events were dropped: {:?}",
-                        e
-                    );
+                    error!("Failed to serialize event payload. Some events were dropped: {e:?}");
                     return;
                 }
             };
@@ -168,7 +165,7 @@ where
                     Err(e) => {
                         // It appears this type of error will not be an HTTP error.
                         // It will be a closed connection, aborted write, timeout, etc.
-                        error!("Failed to send events. Some events were dropped: {:?}", e);
+                        error!("Failed to send events. Some events were dropped: {e:?}");
                         result_tx
                             .send(EventSenderResult {
                                 success: false,

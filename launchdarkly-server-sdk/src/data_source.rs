@@ -87,7 +87,7 @@ impl StreamingDataSource {
         C::Future: Send + 'static,
         C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let stream_url = format!("{}/all", base_url);
+        let stream_url = format!("{base_url}/all");
 
         let client_builder = ClientBuilder::for_url(&stream_url)?;
         let mut client_builder = client_builder
@@ -137,7 +137,7 @@ impl DataSource for StreamingDataSource {
                                     continue;
                                 },
                                 es::SSE::Comment(str)=> {
-                                    debug!("data source got a comment: {}", str);
+                                    debug!("data source got a comment: {str}");
                                     continue;
                                 },
                                 es::SSE::Event(ev) => ev,
@@ -158,7 +158,7 @@ impl DataSource for StreamingDataSource {
                                         continue;
                                     }
                                     _ => {
-                                        error!("unhandled error on event stream: {:?}", e);
+                                        error!("unhandled error on event stream: {e:?}");
                                         break;
                                     }
                                 }
@@ -182,7 +182,7 @@ impl DataSource for StreamingDataSource {
                         };
                         if let Err(e) = stored {
                             init_success = false;
-                            error!("error processing update: {:?}", e);
+                            error!("error processing update: {e:?}");
                         }
 
                         notify_init.call_once(|| (init_complete)(init_success));
@@ -224,12 +224,12 @@ impl DataSource for PollingDataSource {
             Ok(factory) => match factory.build(self.tags.clone()) {
                 Ok(requester) => requester,
                 Err(e) => {
-                    error!("{:?}", e);
+                    error!("{e:?}");
                     return;
                 }
             },
             Err(e) => {
-                error!("{:?}", e);
+                error!("{e:?}");
                 return;
             }
         };
