@@ -140,15 +140,13 @@ impl MigrationOpTracker {
 
             if self.errors.contains(origin) {
                 return Err(format!(
-                    "provided error for origin {:?} without recording invocation",
-                    origin
+                    "provided error for origin {origin:?} without recording invocation"
                 ));
             }
 
             if self.latencies.contains_key(origin) {
                 return Err(format!(
-                    "provided latency for origin {:?} without recording invocation",
-                    origin
+                    "provided latency for origin {origin:?} without recording invocation"
                 ));
             }
         }

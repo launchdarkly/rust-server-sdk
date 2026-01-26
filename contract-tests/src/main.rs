@@ -136,7 +136,7 @@ async fn create_client(
     .await
     {
         Ok(ce) => ce,
-        Err(e) => return HttpResponse::InternalServerError().body(format!("{}", e)),
+        Err(e) => return HttpResponse::InternalServerError().body(format!("{e}")),
     };
 
     let mut counter = app_state.counter.lock().await;

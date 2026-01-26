@@ -108,7 +108,7 @@ impl EventDispatcher {
         let rt = match rt {
             Ok(rt) => rt,
             Err(e) => {
-                error!("Could not start runtime for event sending: {}", e);
+                error!("Could not start runtime for event sending: {e}");
                 return;
             }
         };
@@ -128,7 +128,7 @@ impl EventDispatcher {
                         },
                         Ok(_) => continue,
                         Err(e) => {
-                            error!("event_result_rx is disconnected. Shutting down dispatcher: {}", e);
+                            error!("event_result_rx is disconnected. Shutting down dispatcher: {e}");
                             return;
                         }
                     },
@@ -158,7 +158,7 @@ impl EventDispatcher {
                             return;
                         }
                         Err(e) => {
-                            error!("inbox_rx is disconnected. Shutting down dispatcher: {}", e);
+                            error!("inbox_rx is disconnected. Shutting down dispatcher: {e}");
                             return;
                         }
                     }
@@ -302,11 +302,11 @@ impl EventDispatcher {
         let key = context.canonical_key();
 
         if self.context_keys.get(key).is_none() {
-            trace!("noticing new context {:?}", key);
+            trace!("noticing new context {key:?}");
             self.context_keys.put(key.to_owned(), ());
             true
         } else {
-            trace!("ignoring already-seen context {:?}", key);
+            trace!("ignoring already-seen context {key:?}");
             false
         }
     }
