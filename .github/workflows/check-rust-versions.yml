@@ -56,6 +56,10 @@ jobs:
           sed -i -e "s#rust-version = \"[^\"]*\"#rust-version = \"${{ env.officialTargetVersion }}.0\"#g" \
                   ./launchdarkly-server-sdk/Cargo.toml
 
+          # Update contract-tests Cargo.toml rust-version field
+          sed -i -e "s#rust-version = \"[^\"]*\"#rust-version = \"${{ env.officialTargetVersion }}.0\"#g" \
+                  ./contract-tests/Cargo.toml
+
       - name: Create pull request
         if: steps.update-rust-versions.outcome == 'success'
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0
@@ -64,6 +68,7 @@ jobs:
           add-paths: |
             .github/variables/rust-versions.env
             launchdarkly-server-sdk/Cargo.toml
+            contract-tests/Cargo.toml
           branch: "launchdarklyreleasebot/update-to-rust${{ env.officialTargetVersion }}"
           author: "LaunchDarklyReleaseBot <LaunchDarklyReleaseBot@launchdarkly.com>"
           committer: "LaunchDarklyReleaseBot <LaunchDarklyReleaseBot@launchdarkly.com>"
