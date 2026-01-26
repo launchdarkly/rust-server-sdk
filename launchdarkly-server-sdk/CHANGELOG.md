@@ -2,6 +2,16 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [2.6.3](https://github.com/launchdarkly/rust-server-sdk/compare/2.6.2...2.6.3) (2026-01-26)
+
+
+### Bug Fixes
+
+* Bump LRU minimum from 0.13.0 to 0.16.3 ([bff3dff](https://github.com/launchdarkly/rust-server-sdk/commit/bff3dff0fb2da9e2ddf591d502e8208a368a4cc1))
+* Bump MSRV from 1.83 to 1.85 ([bff3dff](https://github.com/launchdarkly/rust-server-sdk/commit/bff3dff0fb2da9e2ddf591d502e8208a368a4cc1))
+* Bump MSRV from 1.85 to 1.88 ([#145](https://github.com/launchdarkly/rust-server-sdk/issues/145)) ([45552c9](https://github.com/launchdarkly/rust-server-sdk/commit/45552c974f6841fbab895b148e443bbd6e51de65))
+* Bump MSRV from 1.88 to 1.91 ([#147](https://github.com/launchdarkly/rust-server-sdk/issues/147)) ([e497ad8](https://github.com/launchdarkly/rust-server-sdk/commit/e497ad85129a747e788cdaa726c3c23389303bc6))
+
 ## [2.6.2](https://github.com/launchdarkly/rust-server-sdk/compare/2.6.1...2.6.2) (2025-12-18)
 
 
