@@ -21,7 +21,7 @@ pub use launchdarkly_server_sdk_evaluation::{
     AttributeValue, Context, ContextBuilder, Detail, FlagValue, Kind, MultiContextBuilder, Reason,
     Reference,
 };
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
 pub use client::Client;
 
@@ -73,14 +73,12 @@ static LAUNCHDARKLY_PAYLOAD_ID_HEADER: &str = "x-launchdarkly-payload-id";
 static LAUNCHDARKLY_TAGS_HEADER: &str = "x-launchdarkly-tags";
 static CURRENT_EVENT_SCHEMA: &str = "4";
 
-lazy_static! {
-    pub(crate) static ref USER_AGENT: String =
-        format!("RustServerClient/{}", version_string());
+static USER_AGENT: LazyLock<String> =
+    LazyLock::new(|| format!("RustServerClient/{}", version_string()));
 
-    // For cases where a statically empty header value are needed.
-    pub(crate) static ref EMPTY_HEADER: hyper::header::HeaderValue =
-        hyper::header::HeaderValue::from_static("");
-}
+// For cases where a statically empty header value are needed.
+static EMPTY_HEADER: LazyLock<hyper::header::HeaderValue> =
+    LazyLock::new(|| hyper::header::HeaderValue::from_static(""));
 
 #[cfg(test)]
 mod tests {
