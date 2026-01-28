@@ -31,7 +31,7 @@ pub use config::{ApplicationInfo, BuildError as ConfigBuildError, Config, Config
 pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
 };
-pub use evaluation::{FlagDetail, FlagDetailConfig};
+pub use evaluation::{FlagDetail, FlagDetailConfig, FlagFilter};
 pub use events::event::MigrationOpEvent;
 pub use events::processor::EventProcessor;
 pub use events::processor_builders::{

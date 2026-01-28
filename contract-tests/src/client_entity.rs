@@ -11,7 +11,7 @@ const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 use launchdarkly_server_sdk::{
     ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
-    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
+    FlagDetailConfig, FlagFilter, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
     ServiceEndpointsBuilder, StreamingDataSourceBuilder,
 };
 
@@ -556,7 +556,7 @@ impl ClientEntity {
         }
 
         if params.client_side_only {
-            config.client_side_only();
+            config.flag_filter(FlagFilter::CLIENT);
         }
 
         if params.details_only_for_tracked_flags {
