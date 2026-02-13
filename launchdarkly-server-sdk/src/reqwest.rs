@@ -1,5 +1,5 @@
 pub fn is_http_error_recoverable(status: u16) -> bool {
-    if status < 400 || status >= 500 {
+    if !(400..500).contains(&status) {
         return true;
     }
 
