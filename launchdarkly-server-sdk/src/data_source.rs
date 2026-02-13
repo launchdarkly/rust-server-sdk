@@ -70,7 +70,7 @@ pub struct StreamingDataSource {
 
 impl StreamingDataSource {
     #[allow(clippy::result_large_err)]
-    pub fn new<T: es::HttpTransport>(
+    pub fn new<T: launchdarkly_sdk_transport::HttpTransport>(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
@@ -375,7 +375,6 @@ mod tests {
     use super::{DataSource, PollingDataSource, StreamingDataSource};
     use crate::feature_requester_builders::HttpFeatureRequesterBuilder;
     use crate::{stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER};
-    use eventsource_client as es;
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
     #[test_case(None, Matcher::Missing)]
@@ -402,7 +401,8 @@ mod tests {
             "sdk-key",
             Duration::from_secs(0),
             &tag,
-            es::HyperTransport::new(),
+            launchdarkly_sdk_transport::HyperTransport::new()
+                .expect("Failed to create streaming data source"),
         )
         .unwrap();
 
@@ -453,7 +453,8 @@ mod tests {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let transport = crate::HyperTransport::new();
+        let transport = launchdarkly_sdk_transport::HyperTransport::new()
+            .expect("Failed to create transport for polling data source");
         let hyper_builder = HttpFeatureRequesterBuilder::new(&server.url(), "sdk-key", transport);
 
         let polling = PollingDataSource::new(

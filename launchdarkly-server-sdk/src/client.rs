@@ -2722,7 +2722,7 @@ mod tests {
             .daemon_mode(daemon_mode)
             .data_source(MockDataSourceBuilder::new().data_source(updates))
             .event_processor(
-                EventProcessorBuilder::<crate::HyperTransport>::new()
+                EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new()
                     .event_sender(Arc::new(event_sender)),
             )
             .build()

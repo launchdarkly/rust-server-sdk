@@ -53,11 +53,6 @@ pub use stores::persistent_store_builders::{
 pub use stores::store_types::{AllData, DataKind, SerializedItem, StorageItem};
 pub use version::version_string;
 
-// Re-export transport types
-pub use transport::{HttpTransport, ResponseFuture, TransportError};
-#[cfg(feature = "hyper")]
-pub use transport_hyper::HyperTransport;
-
 mod client;
 mod config;
 mod data_source;
@@ -72,9 +67,6 @@ mod sampler;
 mod service_endpoints;
 mod stores;
 mod test_common;
-mod transport;
-#[cfg(feature = "hyper")]
-mod transport_hyper;
 mod version;
 
 static LAUNCHDARKLY_EVENT_SCHEMA_HEADER: &str = "x-launchdarkly-event-schema";

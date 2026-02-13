@@ -38,10 +38,12 @@ impl ClientEntity {
         connector: HttpsConnector,
     ) -> Result<Self, BuildError> {
         // Create fresh transports for this client to avoid shared connection pool issues
-        let transport =
-            launchdarkly_server_sdk::HyperTransport::new_with_connector(connector.clone());
-        let streaming_https_transport =
-            eventsource_client::HyperTransport::builder().build_with_connector(connector.clone());
+        let transport = launchdarkly_sdk_transport::HyperTransport::builder()
+            .build_with_connector(connector.clone())
+            .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
+        let streaming_https_transport = launchdarkly_sdk_transport::HyperTransport::builder()
+            .build_with_connector(connector.clone())
+            .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
 

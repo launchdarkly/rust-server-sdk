@@ -1,8 +1,7 @@
 use super::service_endpoints;
 use crate::data_source::{DataSource, NullDataSource, PollingDataSource, StreamingDataSource};
 use crate::feature_requester_builders::{FeatureRequesterFactory, HttpFeatureRequesterBuilder};
-use crate::transport::HttpTransport;
-use eventsource_client as es;
+use launchdarkly_sdk_transport::HttpTransport;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -45,20 +44,20 @@ pub trait DataSourceFactory {
 /// Adjust the initial reconnect delay.
 /// ```
 /// # use launchdarkly_server_sdk::{StreamingDataSourceBuilder, ConfigBuilder};
-/// # use eventsource_client as es;
+/// # use launchdarkly_sdk_transport::HyperTransport;
 /// # use std::time::Duration;
 /// # fn main() {
-///     ConfigBuilder::new("sdk-key").data_source(StreamingDataSourceBuilder::<es::HyperTransport>::new()
+///     ConfigBuilder::new("sdk-key").data_source(StreamingDataSourceBuilder::<HyperTransport>::new()
 ///         .initial_reconnect_delay(Duration::from_secs(10)));
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct StreamingDataSourceBuilder<T: es::HttpTransport> {
+pub struct StreamingDataSourceBuilder<T: launchdarkly_sdk_transport::HttpTransport> {
     initial_reconnect_delay: Duration,
     transport: Option<T>,
 }
 
-impl<T: es::HttpTransport> StreamingDataSourceBuilder<T> {
+impl<T: launchdarkly_sdk_transport::HttpTransport> StreamingDataSourceBuilder<T> {
     /// Create a new instance of the [StreamingDataSourceBuilder] with default values.
     pub fn new() -> Self {
         Self {
@@ -83,7 +82,9 @@ impl<T: es::HttpTransport> StreamingDataSourceBuilder<T> {
     }
 }
 
-impl<T: es::HttpTransport> DataSourceFactory for StreamingDataSourceBuilder<T> {
+impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
+    for StreamingDataSourceBuilder<T>
+{
     fn build(
         &self,
         endpoints: &service_endpoints::ServiceEndpoints,
@@ -92,13 +93,21 @@ impl<T: es::HttpTransport> DataSourceFactory for StreamingDataSourceBuilder<T> {
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let data_source_result = match &self.transport {
             #[cfg(feature = "hyper-rustls")]
-            None => Ok(StreamingDataSource::new(
-                endpoints.streaming_base_url(),
-                sdk_key,
-                self.initial_reconnect_delay,
-                &tags,
-                es::HyperTransport::new_https(),
-            )),
+            None => {
+                let transport =
+                    launchdarkly_sdk_transport::HyperTransport::new_https().map_err(|e| {
+                        BuildError::InvalidConfig(format!(
+                            "failed to create default https transport: {e:?}"
+                        ))
+                    })?;
+                Ok(StreamingDataSource::new(
+                    endpoints.streaming_base_url(),
+                    sdk_key,
+                    self.initial_reconnect_delay,
+                    &tags,
+                    transport,
+                ))
+            }
             #[cfg(not(feature = "hyper-rustls"))]
             None => Err(BuildError::InvalidConfig(
                 "https connector required when rustls is disabled".into(),
@@ -121,7 +130,7 @@ impl<T: es::HttpTransport> DataSourceFactory for StreamingDataSourceBuilder<T> {
     }
 }
 
-impl<T: es::HttpTransport> Default for StreamingDataSourceBuilder<T> {
+impl<T: launchdarkly_sdk_transport::HttpTransport> Default for StreamingDataSourceBuilder<T> {
     fn default() -> Self {
         StreamingDataSourceBuilder::new()
     }
@@ -171,7 +180,8 @@ impl Default for NullDataSourceBuilder {
 ///
 /// Adjust the initial reconnect delay.
 /// ```
-/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder, HyperTransport};
+/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
+/// # use launchdarkly_sdk_transport::HyperTransport;
 /// # use std::time::Duration;
 /// # fn main() {
 ///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HyperTransport>::new()
@@ -179,7 +189,7 @@ impl Default for NullDataSourceBuilder {
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct PollingDataSourceBuilder<T: HttpTransport = crate::HyperTransport> {
+pub struct PollingDataSourceBuilder<T: HttpTransport = launchdarkly_sdk_transport::HyperTransport> {
     poll_interval: Duration,
     transport: Option<T>,
 }
@@ -199,7 +209,8 @@ pub struct PollingDataSourceBuilder<T: HttpTransport = crate::HyperTransport> {
 ///
 /// Adjust the poll interval.
 /// ```
-/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder, HyperTransport};
+/// # use launchdarkly_server_sdk::{PollingDataSourceBuilder, ConfigBuilder};
+/// # use launchdarkly_sdk_transport::HyperTransport;
 /// # use std::time::Duration;
 /// # fn main() {
 ///     ConfigBuilder::new("sdk-key").data_source(PollingDataSourceBuilder::<HyperTransport>::new()
@@ -245,7 +256,12 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
             match &self.transport {
                 #[cfg(feature = "hyper-rustls")]
                 None => {
-                    let transport = crate::HyperTransport::new_https();
+                    let transport = launchdarkly_sdk_transport::HyperTransport::new_https()
+                        .map_err(|e| {
+                            BuildError::InvalidConfig(format!(
+                                "failed to create default https transport: {e:?}"
+                            ))
+                        })?;
 
                     Ok(Box::new(HttpFeatureRequesterBuilder::new(
                         endpoints.polling_base_url(),
@@ -323,13 +339,14 @@ impl DataSourceFactory for MockDataSourceBuilder {
 
 #[cfg(test)]
 mod tests {
-    use eventsource_client::{HyperTransport, ResponseFuture};
+    use bytes::Bytes;
+    use launchdarkly_sdk_transport::{HyperTransport, Request, ResponseFuture};
 
     use super::*;
 
     #[test]
     fn default_stream_builder_has_correct_defaults() {
-        let builder: StreamingDataSourceBuilder<es::HyperTransport> =
+        let builder: StreamingDataSourceBuilder<launchdarkly_sdk_transport::HyperTransport> =
             StreamingDataSourceBuilder::new();
 
         assert_eq!(
@@ -343,11 +360,8 @@ mod tests {
         #[derive(Debug, Clone)]
         struct TestTransport;
 
-        impl es::HttpTransport for TestTransport {
-            fn request(
-                &self,
-                _request: eventsource_client::Request<Option<String>>,
-            ) -> ResponseFuture {
+        impl launchdarkly_sdk_transport::HttpTransport for TestTransport {
+            fn request(&self, _request: Request<Option<Bytes>>) -> ResponseFuture {
                 // this won't be called during the test
                 unreachable!();
             }
@@ -366,7 +380,7 @@ mod tests {
 
     #[test]
     fn default_polling_builder_has_correct_defaults() {
-        let builder = PollingDataSourceBuilder::<crate::HyperTransport>::new();
+        let builder = PollingDataSourceBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         assert_eq!(builder.poll_interval, MINIMUM_POLL_INTERVAL,);
     }
 

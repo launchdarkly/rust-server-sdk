@@ -1,6 +1,12 @@
 name: CI Workflow
 description: 'Shared CI workflow.'
 
+inputs:
+  feature-flags:
+    description: 'Cargo feature flags to pass to test and clippy commands'
+    required: false
+    default: ''
+
 runs:
   using: composite
   steps:
@@ -10,8 +16,8 @@ runs:
 
     - name: Run tests
       shell: bash
-      run: cargo test -p launchdarkly-server-sdk
+      run: cargo test ${{ inputs.feature-flags }} -p launchdarkly-server-sdk
 
     - name: Run clippy checks
       shell: bash
-      run: cargo clippy -p launchdarkly-server-sdk -- -D warnings
+      run: cargo clippy ${{ inputs.feature-flags }} -p launchdarkly-server-sdk -- -D warnings

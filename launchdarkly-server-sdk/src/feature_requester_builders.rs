@@ -1,7 +1,7 @@
 use crate::feature_requester::{FeatureRequester, HttpFeatureRequester};
-use crate::transport::HttpTransport;
 use crate::LAUNCHDARKLY_TAGS_HEADER;
 use http::Uri;
+use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
@@ -68,7 +68,8 @@ mod tests {
 
     #[test]
     fn factory_handles_url_parsing_failure() {
-        let transport = crate::HyperTransport::new();
+        let transport =
+            launchdarkly_sdk_transport::HyperTransport::new().expect("Failed to create transport");
         let builder = HttpFeatureRequesterBuilder::new(
             "This is clearly not a valid URL",
             "sdk-key",

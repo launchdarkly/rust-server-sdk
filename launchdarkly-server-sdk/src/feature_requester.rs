@@ -1,8 +1,8 @@
 use crate::reqwest::is_http_error_recoverable;
-use crate::transport::HttpTransport;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
+use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
 
 use super::stores::store_types::AllData;
@@ -72,7 +72,7 @@ impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
             }
 
             // Create empty body for GET request
-            let request = request_builder.body(Bytes::new()).unwrap();
+            let request = request_builder.body(Some(Bytes::new())).unwrap();
 
             let result = transport.request(request).await;
 
@@ -86,7 +86,8 @@ impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
                 }
             };
 
-            if response.status() == hyper::StatusCode::NOT_MODIFIED && cache.is_some() {
+            // 304 NOT MODIFIED
+            if response.status() == 304 && cache.is_some() {
                 if let Some(entry) = cache {
                     return Ok(entry.0);
                 }
@@ -246,9 +247,12 @@ mod tests {
         }
     }
 
-    fn build_feature_requester(url: String) -> HttpFeatureRequester<crate::HyperTransport> {
+    fn build_feature_requester(
+        url: String,
+    ) -> HttpFeatureRequester<launchdarkly_sdk_transport::HyperTransport> {
         let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
-        let transport = crate::HyperTransport::new();
+        let transport = launchdarkly_sdk_transport::HyperTransport::new()
+            .expect("Failed to create HyperTransport");
 
         HttpFeatureRequester::new(
             transport,

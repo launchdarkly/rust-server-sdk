@@ -6,4 +6,4 @@ runs:
   steps:
     - name: Build Documentation
       shell: bash
-      run: cargo doc --no-deps -p launchdarkly-server-sdk
+      run: cargo doc --no-deps --all-features -p launchdarkly-server-sdk
