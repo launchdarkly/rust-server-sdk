@@ -1441,7 +1441,7 @@ mod tests {
     impl PersistentDataStoreFactory for InMemoryPersistentDataStoreFactory {
         fn create_persistent_data_store(
             &self,
-        ) -> Result<Box<(dyn PersistentDataStore + 'static)>, std::io::Error> {
+        ) -> Result<Box<dyn PersistentDataStore + 'static>, std::io::Error> {
             let serialized_data =
                 AllData::<SerializedItem, SerializedItem>::try_from(self.data.clone())?;
             Ok(Box::new(InMemoryPersistentDataStore {

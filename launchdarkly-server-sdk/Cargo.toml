@@ -1,10 +1,10 @@
 [package]
 name = "launchdarkly-server-sdk"
 description = "LaunchDarkly Server-Side SDK"
-version = "2.6.2"
+version = "2.6.3"
 authors = ["LaunchDarkly"]
 edition = "2021"
-rust-version = "1.85.0"  # MSRV
+rust-version = "1.91.0"  # MSRV
 license = "Apache-2.0"
 homepage = "https://docs.launchdarkly.com/sdk/server-side/rust"
 repository = "https://github.com/launchdarkly/rust-server-sdk"
@@ -23,7 +23,6 @@ data-encoding = "2.3.2"
 # eventsource-client = { version = "0.16.0", default-features = false }
 eventsource-client = { git = "https://github.com/launchdarkly/rust-eventsource-client", default-features = false, branch = "feat/hyper-as-feature" }
 futures = "0.3.12"
-lazy_static = "1.4.0"
 log = "0.4.14"
 lru = { version = "0.16.3", default-features = false }
 launchdarkly-server-sdk-evaluation = "2.0.0"
