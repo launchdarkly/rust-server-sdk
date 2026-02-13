@@ -16,12 +16,12 @@ extern crate log;
 #[macro_use]
 extern crate serde_json;
 
+use http::HeaderValue;
 pub use launchdarkly_server_sdk_evaluation::Error as EvalError;
 pub use launchdarkly_server_sdk_evaluation::{
     AttributeValue, Context, ContextBuilder, Detail, FlagValue, Kind, MultiContextBuilder, Reason,
     Reference,
 };
-use http::HeaderValue;
 use std::sync::LazyLock;
 
 pub use client::Client;
@@ -77,8 +77,7 @@ static CURRENT_EVENT_SCHEMA: &str = "4";
 static USER_AGENT: LazyLock<String> =
     LazyLock::new(|| format!("RustServerClient/{}", version_string()));
 
-static EMPTY_HEADER: LazyLock<HeaderValue> =
-    LazyLock::new(|| HeaderValue::from_static(""));
+static EMPTY_HEADER: LazyLock<HeaderValue> = LazyLock::new(|| HeaderValue::from_static(""));
 
 #[cfg(test)]
 mod tests {
