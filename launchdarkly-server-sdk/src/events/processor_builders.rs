@@ -9,8 +9,8 @@ use launchdarkly_server_sdk_evaluation::Reference;
 use thiserror::Error;
 
 use crate::events::sender::HttpEventSender;
-use crate::transport::HttpTransport;
 use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
+use launchdarkly_sdk_transport::HttpTransport;
 
 use super::processor::{
     EventProcessor, EventProcessorError, EventProcessorImpl, NullEventProcessor,
@@ -60,7 +60,8 @@ pub trait EventProcessorFactory {
 ///
 /// Adjust the flush interval
 /// ```
-/// # use launchdarkly_server_sdk::{EventProcessorBuilder, ConfigBuilder, HyperTransport};
+/// # use launchdarkly_server_sdk::{EventProcessorBuilder, ConfigBuilder};
+/// # use launchdarkly_sdk_transport::HyperTransport;
 /// # use std::time::Duration;
 /// # fn main() {
 ///     ConfigBuilder::new("sdk-key").event_processor(EventProcessorBuilder::<HyperTransport>::new()
@@ -68,7 +69,7 @@ pub trait EventProcessorFactory {
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct EventProcessorBuilder<T: HttpTransport = crate::HyperTransport> {
+pub struct EventProcessorBuilder<T: HttpTransport = launchdarkly_sdk_transport::HyperTransport> {
     capacity: usize,
     flush_interval: Duration,
     context_keys_capacity: NonZeroUsize,
@@ -112,7 +113,12 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
             } else {
                 #[cfg(feature = "hyper-rustls")]
                 {
-                    let transport = crate::HyperTransport::new_https();
+                    let transport = launchdarkly_sdk_transport::HyperTransport::new_https().map_err(|e| {
+                        BuildError::InvalidConfig(format!(
+                            "failed to create default https transport: {}",
+                            e
+                        ))
+                    })?;
                     Ok(Arc::new(HttpEventSender::new(
                         transport,
                         Uri::from_str(url_string.as_str()).unwrap(),
@@ -317,28 +323,31 @@ mod tests {
 
     #[test]
     fn default_builder_has_correct_defaults() {
-        let builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let builder = EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         assert_eq!(builder.capacity, DEFAULT_EVENT_CAPACITY);
         assert_eq!(builder.flush_interval, DEFAULT_FLUSH_POLL_INTERVAL);
     }
 
     #[test]
     fn capacity_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let mut builder =
+            EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         builder.capacity(1234);
         assert_eq!(builder.capacity, 1234);
     }
 
     #[test]
     fn flush_interval_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let mut builder =
+            EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         builder.flush_interval(Duration::from_secs(1234));
         assert_eq!(builder.flush_interval, Duration::from_secs(1234));
     }
 
     #[test]
     fn context_keys_capacity_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let mut builder =
+            EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         let cap = NonZeroUsize::new(1234).expect("1234 > 0");
         builder.context_keys_capacity(cap);
         assert_eq!(builder.context_keys_capacity, cap);
@@ -346,7 +355,8 @@ mod tests {
 
     #[test]
     fn context_keys_flush_interval_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let mut builder =
+            EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         builder.context_keys_flush_interval(Duration::from_secs(1000));
         assert_eq!(
             builder.context_keys_flush_interval,
@@ -356,7 +366,8 @@ mod tests {
 
     #[test]
     fn all_attribute_private_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let mut builder =
+            EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
 
         assert!(!builder.all_attributes_private);
         builder.all_attributes_private(true);
@@ -365,7 +376,8 @@ mod tests {
 
     #[test]
     fn attribte_names_can_be_adjusted() {
-        let mut builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let mut builder =
+            EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
 
         assert!(builder.private_attributes.is_empty());
         builder.private_attributes(hashset!["name"]);
@@ -390,7 +402,7 @@ mod tests {
             .build()
             .expect("Service endpoints failed to be created");
 
-        let builder = EventProcessorBuilder::<crate::HyperTransport>::new();
+        let builder = EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         let processor = builder
             .build(&service_endpoints, "sdk-key", tag)
             .expect("Processor failed to build");

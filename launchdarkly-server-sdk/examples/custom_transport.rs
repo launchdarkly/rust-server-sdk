@@ -1,8 +1,7 @@
 use bytes::Bytes;
 use http::Request;
-use launchdarkly_server_sdk::{
-    ConfigBuilder, EventProcessorBuilder, HttpTransport, ResponseFuture,
-};
+use launchdarkly_sdk_transport::{HttpTransport, ResponseFuture};
+use launchdarkly_server_sdk::{ConfigBuilder, EventProcessorBuilder};
 use std::time::Instant;
 
 /// Example of a custom transport that wraps another transport and adds logging.
@@ -21,7 +20,7 @@ impl<T: HttpTransport> LoggingTransport<T> {
 }
 
 impl<T: HttpTransport> HttpTransport for LoggingTransport<T> {
-    fn request(&self, request: Request<Bytes>) -> ResponseFuture {
+    fn request(&self, request: Request<Option<Bytes>>) -> ResponseFuture {
         let method = request.method().clone();
         let uri = request.uri().clone();
         let start = Instant::now();
@@ -65,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create the base HTTPS transport
-    let base_transport = launchdarkly_server_sdk::HyperTransport::new_https();
+    let base_transport = launchdarkly_sdk_transport::HyperTransport::new_https()?;
 
     // Wrap it with logging middleware
     let logging_transport = LoggingTransport::new(base_transport);

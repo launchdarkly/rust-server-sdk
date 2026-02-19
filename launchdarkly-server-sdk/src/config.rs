@@ -6,7 +6,6 @@ use crate::events::processor_builders::{
 };
 use crate::stores::store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
 use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};
-use eventsource_client as es;
 
 use std::borrow::Borrow;
 
@@ -303,7 +302,13 @@ impl ConfigBuilder {
                 Some(builder) => Ok(builder),
                 #[cfg(feature = "hyper-rustls")]
                 None => {
-                    let transport = es::HyperTransport::new_https();
+                    let transport = launchdarkly_sdk_transport::HyperTransport::new_https()
+                        .map_err(|e| {
+                            BuildError::InvalidConfig(format!(
+                                "failed to create default transport: {}",
+                                e
+                            ))
+                        })?;
                     let mut builder = StreamingDataSourceBuilder::new();
                     builder.transport(transport);
                     Ok(Box::new(builder))
@@ -325,7 +330,13 @@ impl ConfigBuilder {
                 Some(builder) => Ok(builder),
                 #[cfg(feature = "hyper-rustls")]
                 None => {
-                    let transport = crate::HyperTransport::new_https();
+                    let transport = launchdarkly_sdk_transport::HyperTransport::new_https()
+                        .map_err(|e| {
+                            BuildError::InvalidConfig(format!(
+                                "failed to create default transport: {}",
+                                e
+                            ))
+                        })?;
                     let mut builder = EventProcessorBuilder::new();
                     builder.transport(transport);
                     Ok(Box::new(builder))

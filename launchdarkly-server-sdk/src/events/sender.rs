@@ -1,9 +1,10 @@
 use crate::{
-    reqwest::is_http_error_recoverable, transport::HttpTransport, LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
+    reqwest::is_http_error_recoverable, LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
     LAUNCHDARKLY_PAYLOAD_ID_HEADER,
 };
 use chrono::DateTime;
 use crossbeam_channel::Sender;
+use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
 
 #[cfg(feature = "event-compression")]
@@ -146,7 +147,7 @@ impl<T: HttpTransport> EventSender for HttpEventSender<T> {
 
                 // Create request with Bytes body for transport
                 let body_bytes = Bytes::from(payload.clone());
-                let request = request_builder.body(body_bytes).unwrap();
+                let request = request_builder.body(Some(body_bytes)).unwrap();
 
                 let result = self.transport.request(request).await;
 
@@ -223,7 +224,7 @@ impl EventSender for InMemoryEventSender {
         events: Vec<OutputEvent>,
         sender: Sender<EventSenderResult>,
         flush_signal: Option<Sender<()>>,
-    ) -> BoxFuture<()> {
+    ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             for event in events {
                 self.event_tx.send(event).unwrap();
@@ -248,18 +249,18 @@ mod tests {
     use std::str::FromStr;
     use test_case::test_case;
 
-    #[test_case(hyper::StatusCode::CONTINUE, true)]
-    #[test_case(hyper::StatusCode::OK, true)]
-    #[test_case(hyper::StatusCode::MULTIPLE_CHOICES, true)]
-    #[test_case(hyper::StatusCode::BAD_REQUEST, true)]
-    #[test_case(hyper::StatusCode::UNAUTHORIZED, false)]
-    #[test_case(hyper::StatusCode::REQUEST_TIMEOUT, true)]
-    #[test_case(hyper::StatusCode::CONFLICT, false)]
-    #[test_case(hyper::StatusCode::TOO_MANY_REQUESTS, true)]
-    #[test_case(hyper::StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE, false)]
-    #[test_case(hyper::StatusCode::INTERNAL_SERVER_ERROR, true)]
-    fn can_determine_recoverable_errors(status: hyper::StatusCode, is_recoverable: bool) {
-        assert_eq!(is_recoverable, is_http_error_recoverable(status.as_u16()));
+    #[test_case(100, true; "100 CONTINUE is recoverable")]
+    #[test_case(200, true; "200 OK is recoverable")]
+    #[test_case(300, true; "300 MULTIPLE_CHOICES is recoverable")]
+    #[test_case(400, true; "400 BAD_REQUEST is recoverable")]
+    #[test_case(401, false; "401 UNAUTHORIZED is not recoverable")]
+    #[test_case(408, true; "408 REQUEST_TIMEOUT is recoverable")]
+    #[test_case(409, false; "409 CONFLICT is not recoverable")]
+    #[test_case(429, true; "429 TOO_MANY_REQUESTS is recoverable")]
+    #[test_case(431, false; "431 REQUEST_HEADER_FIELDS_TOO_LARGE is not recoverable")]
+    #[test_case(500, true; "500 INTERNAL_SERVER_ERROR is recoverable")]
+    fn can_determine_recoverable_errors(status: u16, is_recoverable: bool) {
+        assert_eq!(is_recoverable, is_http_error_recoverable(status));
     }
 
     #[tokio::test]
@@ -349,11 +350,14 @@ mod tests {
         assert_eq!(sender_result.time_from_server, 1234567890000);
     }
 
-    fn build_event_sender(url: String) -> HttpEventSender<crate::HyperTransport> {
+    fn build_event_sender(
+        url: String,
+    ) -> HttpEventSender<launchdarkly_sdk_transport::HyperTransport> {
         let url = format!("{}/bulk", &url);
         let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
-        let transport = crate::HyperTransport::new();
+        let transport = launchdarkly_sdk_transport::HyperTransport::new()
+            .expect("Failed to create HyperTransport");
         HttpEventSender::new(
             transport,
             url,

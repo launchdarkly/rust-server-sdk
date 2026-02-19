@@ -20,8 +20,8 @@ features = ["event-compression"]
 chrono = "0.4.19"
 crossbeam-channel = "0.5.1"
 data-encoding = "2.3.2"
-# eventsource-client = { version = "0.16.0", default-features = false }
-eventsource-client = { git = "https://github.com/launchdarkly/rust-eventsource-client", default-features = false, branch = "feat/hyper-as-feature" }
+eventsource-client = { git = "https://github.com/launchdarkly/rust-eventsource-client.git", branch = "feat/hyper-as-feature" }
+launchdarkly-sdk-transport = { version = "0.1.0" }
 futures = "0.3.12"
 log = "0.4.14"
 lru = { version = "0.16.3", default-features = false }
@@ -37,11 +37,6 @@ uuid = {version = "1.2.2", features = ["v4"] }
 http = "1.0"
 bytes = "1.11"
 bitflags = "2.4"
-hyper = { version = "1.0", features = ["client", "http1", "http2"], optional = true }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"], optional = true }
-http-body-util = { version = "0.1", optional = true }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "webpki-roots"], optional = true}
-tower = { version = "0.4", optional = true }
 rand = "0.9"
 flate2 = { version = "1.0.35", optional = true }
 aws-lc-rs = "1.14.1"
@@ -60,8 +55,8 @@ testing_logger = "0.1.1"
 
 [features]
 default = ["hyper-rustls"]
-hyper = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower", "eventsource-client/hyper"]
-hyper-rustls = ["dep:hyper-rustls", "hyper", "eventsource-client/hyper-rustls"]
+hyper = ["launchdarkly-sdk-transport/hyper", "eventsource-client/hyper"]
+hyper-rustls = ["hyper", "launchdarkly-sdk-transport/hyper-rustls", "eventsource-client/hyper-rustls"]
 event-compression = ["flate2"]
 
 [[example]]
