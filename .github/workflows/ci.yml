@@ -22,7 +22,7 @@ jobs:
             flags: "--no-default-features --lib"
             skip_contract_tests: "true"
           - name: "hyper"
-            flags: "--no-default-features --features hyper"
+            flags: "--no-default-features --features hyper --lib"
           - name: "hyper-rustls-native-roots"
             flags: "--no-default-features --features hyper-rustls-native-roots"
           - name: "hyper-rustls-webpki-roots"
@@ -51,7 +51,7 @@ jobs:
           cargo-flags: ${{ matrix.features.flags }}
 
       - uses: ./.github/actions/contract-tests
-        if: ${{ matrix.features.skip_contract_tests == 'true' }}
+        if: ${{ matrix.features.skip_contract_tests != 'true' }}
         with:
           cargo-flags: ${{ matrix.features.flags }}
           token: ${{ secrets.GITHUB_TOKEN }}
