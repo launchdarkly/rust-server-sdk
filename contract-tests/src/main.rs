@@ -207,31 +207,31 @@ struct AppState {
     https_connector: HttpsConnector,
 }
 
-#[cfg(feature = "hyper-rustls")]
+#[cfg(any(
+    feature = "hyper-rustls-native-roots",
+    feature = "hyper-rustls-webpki-roots"
+))]
 type HttpsConnector =
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
-#[cfg(feature = "tls")]
+#[cfg(feature = "native-tls")]
 type HttpsConnector = hyper_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
+#[cfg(not(any(
+    feature = "hyper-rustls-native-roots",
+    feature = "hyper-rustls-webpki-roots",
+    feature = "native-tls"
+)))]
+type HttpsConnector = hyper_util::client::legacy::connect::HttpConnector;
+
 #[actix_web::main]
+
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    #[cfg(not(any(feature = "tls", feature = "hyper-rustls")))]
-    {
-        compile_error!("one of the { \"tls\", \"hyper-rustls\" } features must be enabled");
-    }
-    #[cfg(all(feature = "tls", feature = "hyper-rustls"))]
-    {
-        compile_error!(
-            "only one of the { \"tls\", \"hyper-rustls\" } features can be enabled at a time"
-        );
-    }
-
     let (tx, rx) = mpsc::channel::<()>();
 
-    #[cfg(feature = "hyper-rustls")]
+    #[cfg(feature = "hyper-rustls-native-roots")]
     let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
         .with_native_roots()
         .expect("Failed to load native root certificates")
@@ -240,8 +240,23 @@ async fn main() -> std::io::Result<()> {
         .enable_http2()
         .build();
 
-    #[cfg(feature = "tls")]
+    #[cfg(feature = "hyper-rustls-webpki-roots")]
+    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+
+    #[cfg(feature = "native-tls")]
     let https_connector = hyper_tls::HttpsConnector::new();
+
+    #[cfg(not(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    )))]
+    let https_connector = hyper_util::client::legacy::connect::HttpConnector::new();
 
     let state = web::Data::new(AppState {
         counter: Mutex::new(0),

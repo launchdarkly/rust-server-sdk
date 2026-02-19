@@ -111,7 +111,11 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
                     self.compress_events,
                 )))
             } else {
-                #[cfg(feature = "hyper-rustls")]
+                #[cfg(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                ))]
                 {
                     let transport = launchdarkly_sdk_transport::HyperTransport::new_https().map_err(|e| {
                         BuildError::InvalidConfig(format!(
@@ -127,9 +131,13 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
                         self.compress_events,
                     )))
                 }
-                #[cfg(not(feature = "hyper-rustls"))]
+                #[cfg(not(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                )))]
                 Err(BuildError::InvalidConfig(
-                    "transport is required when hyper-rustls feature is disabled".into(),
+                    "transport is required when hyper-rustls-native-roots, hyper-rustls-webpki-roots, or native-tls features are disabled".into(),
                 ))
             };
         let event_sender = event_sender_result?;
@@ -386,6 +394,11 @@ mod tests {
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
     #[test_case(None, Matcher::Missing)]
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
     fn processor_sends_correct_headers(tag: Option<String>, matcher: impl Into<Matcher>) {
         let mut server = mockito::Server::new();
         let mock = server

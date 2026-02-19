@@ -1,11 +1,11 @@
 name: Contract test runner
-description: 'Reusable contract runner action'
+description: "Reusable contract runner action"
 inputs:
-  tls_feature:
-    description: 'Which TLS feature do you want to enable?'
+  cargo-flags:
+    description: "Flags to pass to cargo commands."
     required: true
   token:
-    description: 'GH Token used for retrieving SDK test harness.'
+    description: "GH Token used for retrieving SDK test harness."
     required: true
 
 runs:
@@ -13,11 +13,11 @@ runs:
   steps:
     - name: Build contract tests
       shell: bash
-      run: TLS_FEATURE="${{ inputs.tls_feature }}" make build-contract-tests
+      run: CARGO_FLAGS="${{ inputs.cargo-flags }}" make build-contract-tests
 
     - name: Start contract test service
       shell: bash
-      run: TLS_FEATURE="${{ inputs.tls_feature }}" make start-contract-test-service-bg
+      run: CARGO_FLAGS="${{ inputs.cargo-flags }}" make start-contract-test-service-bg
 
     - uses: launchdarkly/gh-actions/actions/contract-tests@contract-tests-v1.0.2
       with:

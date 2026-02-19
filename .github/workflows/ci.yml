@@ -19,11 +19,16 @@ jobs:
           - name: "default"
             flags: ""
           - name: "no-features"
-            flags: "--no-default-features"
+            flags: "--no-default-features --lib"
+            skip_contract_tests: "true"
           - name: "hyper"
             flags: "--no-default-features --features hyper"
-          - name: "hyper-rustls"
-            flags: "--no-default-features --features hyper-rustls"
+          - name: "hyper-rustls-native-roots"
+            flags: "--no-default-features --features hyper-rustls-native-roots"
+          - name: "hyper-rustls-webpki-roots"
+            flags: "--no-default-features --features hyper-rustls-webpki-roots"
+          - name: "native-tls"
+            flags: "--no-default-features --features native-tls"
 
     name: CI (${{ matrix.features.name }})
 
@@ -43,35 +48,12 @@ jobs:
 
       - uses: ./.github/actions/ci
         with:
-          feature-flags: ${{ matrix.features.flags }}
+          cargo-flags: ${{ matrix.features.flags }}
 
-  contract-tests:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
+      - uses: ./.github/actions/contract-tests
+        if: ${{ matrix.features.skip_contract_tests == 'true' }}
         with:
-          fetch-depth: 0
-
-      - name: Get Rust version
-        id: rust-version
-        run: cat ./.github/variables/rust-versions.env >> $GITHUB_OUTPUT
-
-      - name: Setup rust tooling
-        run: |
-          rustup override set ${{ steps.rust-version.outputs.target }}
-          rustup component add rustfmt clippy
-
-      - name: "Run contract tests with hyper_rustls"
-        uses: ./.github/actions/contract-tests
-        with:
-          tls_feature: "hyper-rustls"
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: "Run contract tests with hyper_tls"
-        uses: ./.github/actions/contract-tests
-        with:
-          tls_feature: "tls"
+          cargo-flags: ${{ matrix.features.flags }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   build-docs:
@@ -83,15 +65,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get Rust version
-        id: rust-version
-        run: cat ./.github/variables/rust-versions.env >> $GITHUB_OUTPUT
-
       - name: Setup rust tooling
-        run: |
-          rustup override set ${{ steps.rust-version.outputs.target }}
+        run: rustup override set nightly
 
-      - uses: ./.github/actions/build-docs
+      - name: Install cargo-docs-rs
+        run: cargo install cargo-docs-rs
+
+      - name: Build documentation
+        run: cargo docs-rs
 
   musl-build:
     runs-on: ubuntu-latest

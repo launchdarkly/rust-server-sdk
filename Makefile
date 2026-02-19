@@ -1,15 +1,15 @@
 TEMP_TEST_OUTPUT=/tmp/contract-test-service.log
-TLS_FEATURE ?= hyper-rustls
+CARGO_FLAGS ?= hyper-rustls-native-roots
 
 build-contract-tests:
-	cargo build -p contract-tests --release --no-default-features --features "$(TLS_FEATURE)"
+	cargo build -p contract-tests --release "$(CARGO_FLAGS)"
 
 start-contract-test-service: build-contract-tests
 	@./target/release/contract-tests
 
 start-contract-test-service-bg:
 	@echo "Test service output will be captured in $(TEMP_TEST_OUTPUT)"
-	@make start-contract-test-service >$(TEMP_TEST_OUTPUT) 2>&1 &
+	@$(MAKE) start-contract-test-service >$(TEMP_TEST_OUTPUT) 2>&1 &
 
 run-contract-tests:
 	@curl -s https://raw.githubusercontent.com/launchdarkly/sdk-test-harness/main/downloader/run.sh \

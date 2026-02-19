@@ -300,7 +300,11 @@ impl ConfigBuilder {
                     Ok(Box::new(NullDataSourceBuilder::new()))
                 }
                 Some(builder) => Ok(builder),
-                #[cfg(feature = "hyper-rustls")]
+                #[cfg(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                ))]
                 None => {
                     let transport = launchdarkly_sdk_transport::HyperTransport::new_https()
                         .map_err(|e| {
@@ -313,9 +317,13 @@ impl ConfigBuilder {
                     builder.transport(transport);
                     Ok(Box::new(builder))
                 }
-                #[cfg(not(feature = "hyper-rustls"))]
+                #[cfg(not(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                )))]
                 None => Err(BuildError::InvalidConfig(
-                    "data source builder required when hyper-rustls feature is disabled".into(),
+                    "data source builder required when hyper-rustls-native-roots, hyper-rustls-webpki-roots, or native-tls features are disabled".into(),
                 )),
             };
         let data_source_builder = data_source_builder_result?;
@@ -328,7 +336,11 @@ impl ConfigBuilder {
                     Ok(Box::new(NullEventProcessorBuilder::new()))
                 }
                 Some(builder) => Ok(builder),
-                #[cfg(feature = "hyper-rustls")]
+                #[cfg(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                ))]
                 None => {
                     let transport = launchdarkly_sdk_transport::HyperTransport::new_https()
                         .map_err(|e| {
@@ -341,9 +353,13 @@ impl ConfigBuilder {
                     builder.transport(transport);
                     Ok(Box::new(builder))
                 }
-                #[cfg(not(feature = "hyper-rustls"))]
+                #[cfg(not(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                )))]
                 None => Err(BuildError::InvalidConfig(
-                    "event processor factory required when hyper-rustls feature is disabled".into(),
+                    "event processor factory required when hyper-rustls-native-roots, hyper-rustls-webpki-roots, or native-tls features are disabled".into(),
                 )),
             };
         let event_processor_builder = event_processor_builder_result?;
@@ -391,6 +407,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
     fn unconfigured_config_builder_handles_application_tags_correctly() {
         let builder = ConfigBuilder::new("sdk-key");
         let config = builder.build().expect("config should build");
@@ -402,6 +423,11 @@ mod tests {
     #[test_case("Invalid id", "version", Some("application-version/version".to_string()))]
     #[test_case("id", "Invalid version", Some("application-id/id".to_string()))]
     #[test_case("Invalid id", "Invalid version", None)]
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
     fn config_builder_handles_application_tags_appropriately(
         id: impl Into<String>,
         version: impl Into<String>,
