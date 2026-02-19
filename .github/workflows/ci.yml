@@ -72,7 +72,7 @@ jobs:
         run: cargo install cargo-docs-rs
 
       - name: Build documentation
-        run: cargo docs-rs
+        run: cargo docs-rs -p launchdarkly-server-sdk
 
   musl-build:
     runs-on: ubuntu-latest

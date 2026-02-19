@@ -1,11 +1,23 @@
 use thiserror::Error;
 
 use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
-use crate::events::processor_builders::{
-    EventProcessorBuilder, EventProcessorFactory, NullEventProcessorBuilder,
-};
+
+#[cfg(any(
+    feature = "hyper-rustls-native-roots",
+    feature = "hyper-rustls-webpki-roots",
+    feature = "native-tls"
+))]
+use crate::events::processor_builders::EventProcessorBuilder;
+use crate::events::processor_builders::{EventProcessorFactory, NullEventProcessorBuilder};
+
 use crate::stores::store_builders::{DataStoreFactory, InMemoryDataStoreBuilder};
-use crate::{ServiceEndpointsBuilder, StreamingDataSourceBuilder};
+use crate::ServiceEndpointsBuilder;
+#[cfg(any(
+    feature = "hyper-rustls-native-roots",
+    feature = "hyper-rustls-webpki-roots",
+    feature = "native-tls"
+))]
+use crate::StreamingDataSourceBuilder;
 
 use std::borrow::Borrow;
 
