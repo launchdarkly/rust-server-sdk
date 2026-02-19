@@ -2,7 +2,7 @@ TEMP_TEST_OUTPUT=/tmp/contract-test-service.log
 CARGO_FLAGS ?= hyper-rustls-native-roots
 
 build-contract-tests:
-	cargo build -p contract-tests --release "$(CARGO_FLAGS)"
+	cargo build -p contract-tests --release $(CARGO_FLAGS)
 
 start-contract-test-service: build-contract-tests
 	@./target/release/contract-tests
