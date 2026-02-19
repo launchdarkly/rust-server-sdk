@@ -55,11 +55,12 @@ jobs:
       - uses: ./.github/actions/ci
         with:
           cargo-flags: ${{ matrix.features.cargo-flags }}
+          cargo-test-flags: ${{ matrix.features.cargo-test-flags }}
 
       - uses: ./.github/actions/contract-tests
         if: ${{ matrix.features.skip_contract_tests != 'true' }}
         with:
-          cargo-flags: ${{ matrix.features.flags }}
+          cargo-flags: ${{ matrix.features.cargo-flags }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   build-docs:
