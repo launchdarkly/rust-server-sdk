@@ -25,6 +25,7 @@ pub struct CommandParams {
     pub identify_event: Option<IdentifyEventParams>,
     pub context_build: Option<ContextBuildParams>,
     pub context_convert: Option<ContextConvertParams>,
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     pub secure_mode_hash: Option<SecureModeHashParams>,
     pub migration_variation: Option<MigrationVariationParams>,
     pub migration_operation: Option<MigrationOperationParams>,

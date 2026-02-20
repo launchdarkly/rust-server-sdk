@@ -103,6 +103,7 @@ async fn status() -> impl Responder {
             "tags".to_string(),
             "service-endpoints".to_string(),
             "context-type".to_string(),
+            #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
             "secure-mode-hash".to_string(),
             "inline-context-all".to_string(),
             "anonymous-redaction".to_string(),

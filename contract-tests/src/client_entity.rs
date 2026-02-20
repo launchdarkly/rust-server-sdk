@@ -221,14 +221,17 @@ impl ClientEntity {
                     ContextResponse::from(Self::context_convert(params)),
                 )))
             }
+            #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
             "secureModeHash" => {
                 let params = command
                     .secure_mode_hash
                     .ok_or("secureModeHash params should be set")?;
+                let hash = self
+                    .client
+                    .secure_mode_hash(&params.context)
+                    .map_err(|e| e.to_string())?;
                 Ok(Some(CommandResponse::SecureModeHash(
-                    SecureModeHashResponse {
-                        result: self.client.secure_mode_hash(&params.context),
-                    },
+                    SecureModeHashResponse { result: hash },
                 )))
             }
             "migrationVariation" => {
