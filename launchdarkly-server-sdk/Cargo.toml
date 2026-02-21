@@ -14,7 +14,7 @@ exclude = [
 ]
 
 [package.metadata.docs.rs]
-features = ["event-compression"]
+features = []
 
 [dependencies]
 chrono = "0.4.19"
@@ -55,7 +55,11 @@ reqwest = { version = "0.12.4", features = ["json"] }
 testing_logger = "0.1.1"
 
 [features]
-default = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"]
+default = [
+    "hyper-rustls-native-roots",
+    "crypto-aws-lc-rs",
+    "event-compression"
+]
 
 crypto-aws-lc-rs = ["dep:aws-lc-rs"]
 crypto-openssl = ["dep:openssl"]

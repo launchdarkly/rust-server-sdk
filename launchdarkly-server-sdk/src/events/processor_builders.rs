@@ -178,6 +178,9 @@ impl<T: HttpTransport> EventProcessorBuilder<T> {
             private_attributes: HashSet::new(),
             omit_anonymous_contexts: false,
             transport: None,
+            #[cfg(feature = "event-compression")]
+            compress_events: true,
+            #[cfg(not(feature = "event-compression"))]
             compress_events: false,
         }
     }
@@ -261,11 +264,10 @@ impl<T: HttpTransport> EventProcessorBuilder<T> {
 
     #[cfg(feature = "event-compression")]
     /// Should the event payload sent to LaunchDarkly use gzip compression. By
-    /// default this is false to prevent backward breaking compatibility issues with
-    /// older versions of the relay proxy.
+    /// default this is true.
     //
-    /// Customers not using the relay proxy are strongly encouraged to enable this
-    /// feature to reduce egress bandwidth cost.
+    /// Customers using the relay proxy are encouraged to disable this feature to avoid unnecessary
+    /// CPU overhead, as the relay proxy will decompress & recompress the payloads.
     pub fn compress_events(&mut self, enabled: bool) -> &mut Self {
         self.compress_events = enabled;
         self
