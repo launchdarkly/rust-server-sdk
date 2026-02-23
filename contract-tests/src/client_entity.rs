@@ -15,9 +15,11 @@ use launchdarkly_server_sdk::{
     ServiceEndpointsBuilder, StreamingDataSourceBuilder,
 };
 
+#[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
+use crate::command_params::SecureModeHashResponse;
 use crate::command_params::{
     ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse,
-    MigrationOperationResponse, MigrationVariationResponse, SecureModeHashResponse,
+    MigrationOperationResponse, MigrationVariationResponse,
 };
 use crate::HttpsConnector;
 use crate::{

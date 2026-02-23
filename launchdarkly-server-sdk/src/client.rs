@@ -156,6 +156,7 @@ pub struct Client {
     started: AtomicBool,
     offline: bool,
     daemon_mode: bool,
+    #[cfg_attr(not(any(feature = "crypto-openssl", feature = "crypto-aws-lc-rs")), allow(dead_code))]
     sdk_key: String,
     shutdown_broadcast: broadcast::Sender<()>,
     runtime: RwLock<Option<Runtime>>,
@@ -2780,10 +2781,7 @@ mod tests {
 
         let client = Client::build(config).expect("client should build successfully");
 
-        assert!(
-            !client.started.load(Ordering::SeqCst),
-            "client should not be started yet"
-        );
+        assert!(!client.started.load(Ordering::SeqCst), "client should not be started yet");
         assert!(client.offline, "client should be in offline mode");
         assert_eq!(client.sdk_key, "sdk-key", "sdk_key should match");
     }

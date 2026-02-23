@@ -10,6 +10,7 @@ pub enum CommandResponse {
     EvaluateFlag(EvaluateFlagResponse),
     EvaluateAll(EvaluateAllFlagsResponse),
     ContextBuildOrConvert(ContextResponse),
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     SecureModeHash(SecureModeHashResponse),
     MigrationVariation(MigrationVariationResponse),
     MigrationOperation(MigrationOperationResponse),
@@ -127,12 +128,14 @@ pub struct ContextConvertParams {
     pub input: String,
 }
 
+#[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SecureModeHashParams {
     pub context: Context,
 }
 
+#[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SecureModeHashResponse {
