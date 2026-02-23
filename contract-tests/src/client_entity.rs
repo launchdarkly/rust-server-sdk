@@ -130,6 +130,7 @@ impl ClientEntity {
                 processor_builder.capacity(capacity);
             }
             processor_builder.all_attributes_private(events.all_attributes_private);
+            processor_builder.compress_events(false);
             if let Some(e) = events.enable_gzip {
                 processor_builder.compress_events(e);
             }
