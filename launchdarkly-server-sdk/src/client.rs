@@ -2770,4 +2770,18 @@ mod tests {
     fn make_mocked_client() -> (Client, Receiver<OutputEvent>) {
         make_mocked_client_with_delay(0, false, false)
     }
+
+    #[test]
+    fn client_builds_successfully() {
+        let config = ConfigBuilder::new("sdk-key")
+            .offline(true)
+            .build()
+            .expect("config should build");
+
+        let client = Client::build(config).expect("client should build successfully");
+
+        assert!(!client.started.load(Ordering::SeqCst), "client should not be started yet");
+        assert!(client.offline, "client should be in offline mode");
+        assert_eq!(client.sdk_key, "sdk-key", "sdk_key should match");
+    }
 }
