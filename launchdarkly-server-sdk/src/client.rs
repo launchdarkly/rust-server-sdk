@@ -2780,7 +2780,10 @@ mod tests {
 
         let client = Client::build(config).expect("client should build successfully");
 
-        assert!(!client.started.load(Ordering::SeqCst), "client should not be started yet");
+        assert!(
+            !client.started.load(Ordering::SeqCst),
+            "client should not be started yet"
+        );
         assert!(client.offline, "client should be in offline mode");
         assert_eq!(client.sdk_key, "sdk-key", "sdk_key should match");
     }
