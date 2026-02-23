@@ -156,6 +156,10 @@ pub struct Client {
     started: AtomicBool,
     offline: bool,
     daemon_mode: bool,
+    #[cfg_attr(
+        not(any(feature = "crypto-openssl", feature = "crypto-aws-lc-rs")),
+        allow(dead_code)
+    )]
     sdk_key: String,
     shutdown_broadcast: broadcast::Sender<()>,
     runtime: RwLock<Option<Runtime>>,
@@ -585,15 +589,39 @@ impl Client {
             .try_map(|val| val.as_json(), default, eval::Error::WrongType)
     }
 
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     /// Generates the secure mode hash value for a context.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/secure-mode#rust>.
-    pub fn secure_mode_hash(&self, context: &Context) -> String {
-        let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
-        let tag = aws_lc_rs::hmac::sign(&key, context.canonical_key().as_bytes());
+    pub fn secure_mode_hash(&self, context: &Context) -> Result<String, String> {
+        #[cfg(feature = "crypto-aws-lc-rs")]
+        {
+            let key =
+                aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
+            let tag = aws_lc_rs::hmac::sign(&key, context.canonical_key().as_bytes());
 
-        data_encoding::HEXLOWER.encode(tag.as_ref())
+            Ok(data_encoding::HEXLOWER.encode(tag.as_ref()))
+        }
+        #[cfg(feature = "crypto-openssl")]
+        {
+            use openssl::hash::MessageDigest;
+            use openssl::pkey::PKey;
+            use openssl::sign::Signer;
+
+            let key = PKey::hmac(self.sdk_key.as_bytes())
+                .map_err(|e| format!("Failed to create HMAC key: {e}"))?;
+            let mut signer = Signer::new(MessageDigest::sha256(), &key)
+                .map_err(|e| format!("Failed to create signer: {e}"))?;
+            signer
+                .update(context.canonical_key().as_bytes())
+                .map_err(|e| format!("Failed to update signer: {e}"))?;
+            let hmac = signer
+                .sign_to_vec()
+                .map_err(|e| format!("Failed to sign: {e}"))?;
+
+            Ok(data_encoding::HEXLOWER.encode(&hmac))
+        }
     }
 
     /// Returns an object that encapsulates the state of all feature flags for a given context. This
@@ -1830,6 +1858,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     fn secure_mode_hash() {
         let config = ConfigBuilder::new("secret")
             .offline(true)
@@ -1841,12 +1870,15 @@ mod tests {
             .expect("Failed to create context");
 
         assert_eq!(
-            client.secure_mode_hash(&context),
+            client
+                .secure_mode_hash(&context)
+                .expect("Hash should be computed"),
             "aa747c502a898200f9e4fa21bac68136f886a0e27aec70ba06daf2e2a5cb5597"
         );
     }
 
     #[test]
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     fn secure_mode_hash_with_multi_kind() {
         let config = ConfigBuilder::new("secret")
             .offline(true)
@@ -1869,7 +1901,9 @@ mod tests {
             .expect("failed to build multi-context");
 
         assert_eq!(
-            client.secure_mode_hash(&context),
+            client
+                .secure_mode_hash(&context)
+                .expect("Hash should be computed"),
             "5687e6383b920582ed50c2a96c98a115f1b6aad85a60579d761d9b8797415163"
         );
     }
@@ -2739,5 +2773,22 @@ mod tests {
 
     fn make_mocked_client() -> (Client, Receiver<OutputEvent>) {
         make_mocked_client_with_delay(0, false, false)
+    }
+
+    #[test]
+    fn client_builds_successfully() {
+        let config = ConfigBuilder::new("sdk-key")
+            .offline(true)
+            .build()
+            .expect("config should build");
+
+        let client = Client::build(config).expect("client should build successfully");
+
+        assert!(
+            !client.started.load(Ordering::SeqCst),
+            "client should not be started yet"
+        );
+        assert!(client.offline, "client should be in offline mode");
+        assert_eq!(client.sdk_key, "sdk-key", "sdk_key should match");
     }
 }

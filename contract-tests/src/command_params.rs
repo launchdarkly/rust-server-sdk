@@ -10,6 +10,7 @@ pub enum CommandResponse {
     EvaluateFlag(EvaluateFlagResponse),
     EvaluateAll(EvaluateAllFlagsResponse),
     ContextBuildOrConvert(ContextResponse),
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     SecureModeHash(SecureModeHashResponse),
     MigrationVariation(MigrationVariationResponse),
     MigrationOperation(MigrationOperationResponse),
@@ -25,6 +26,7 @@ pub struct CommandParams {
     pub identify_event: Option<IdentifyEventParams>,
     pub context_build: Option<ContextBuildParams>,
     pub context_convert: Option<ContextConvertParams>,
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     pub secure_mode_hash: Option<SecureModeHashParams>,
     pub migration_variation: Option<MigrationVariationParams>,
     pub migration_operation: Option<MigrationOperationParams>,
@@ -126,12 +128,14 @@ pub struct ContextConvertParams {
     pub input: String,
 }
 
+#[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SecureModeHashParams {
     pub context: Context,
 }
 
+#[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SecureModeHashResponse {

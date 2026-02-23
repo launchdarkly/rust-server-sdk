@@ -39,7 +39,8 @@ bytes = "1.11"
 bitflags = "2.4"
 rand = "0.9"
 flate2 = { version = "1.0.35", optional = true }
-aws-lc-rs = "1.14.1"
+aws-lc-rs = { version = "1.14.1", optional = true }
+openssl = { version = "0.10.75", optional = true }
 
 [dev-dependencies]
 maplit = "1.0.1"
@@ -54,7 +55,10 @@ reqwest = { version = "0.12.4", features = ["json"] }
 testing_logger = "0.1.1"
 
 [features]
-default = ["hyper-rustls-native-roots"]
+default = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"]
+
+crypto-aws-lc-rs = ["dep:aws-lc-rs"]
+crypto-openssl = ["dep:openssl"]
 
 hyper = [
     "launchdarkly-sdk-transport/hyper",

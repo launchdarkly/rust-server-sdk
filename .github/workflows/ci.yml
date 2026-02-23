@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         features:
-          - name: "default"
+          - name: "default (aws-lc-rs for crypto)"
 
           - name: "no-features"
             cargo-flags: "--no-default-features"
@@ -35,6 +35,9 @@ jobs:
 
           - name: "native-tls"
             cargo-flags: "--no-default-features --features native-tls"
+
+          - name: "openssl crypto"
+            cargo-flags: "--no-default-features --features hyper-rustls-native-roots,crypto-openssl"
 
     name: CI (${{ matrix.features.name }})
 
