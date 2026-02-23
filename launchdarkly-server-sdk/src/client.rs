@@ -597,7 +597,7 @@ impl Client {
                 aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
             let tag = aws_lc_rs::hmac::sign(&key, context.canonical_key().as_bytes());
 
-            return Ok(data_encoding::HEXLOWER.encode(tag.as_ref()));
+            Ok(data_encoding::HEXLOWER.encode(tag.as_ref()))
         }
         #[cfg(feature = "crypto-openssl")]
         {
@@ -616,7 +616,7 @@ impl Client {
                 .sign_to_vec()
                 .map_err(|e| format!("Failed to sign: {e}"))?;
 
-            return Ok(data_encoding::HEXLOWER.encode(&hmac));
+            Ok(data_encoding::HEXLOWER.encode(&hmac))
         }
     }
 
