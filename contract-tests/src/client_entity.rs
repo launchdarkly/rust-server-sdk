@@ -39,11 +39,19 @@ impl ClientEntity {
         create_instance_params: CreateInstanceParams,
         connector: HttpsConnector,
     ) -> Result<Self, BuildError> {
+        let proxy = create_instance_params
+            .configuration
+            .proxy
+            .unwrap_or_default()
+            .http_proxy
+            .unwrap_or_default();
+        let mut transport_builder = launchdarkly_sdk_transport::HyperTransport::builder();
+        if !proxy.is_empty() {
+            transport_builder = transport_builder.proxy_url(proxy.clone());
+        }
+
         // Create fresh transports for this client to avoid shared connection pool issues
-        let transport = launchdarkly_sdk_transport::HyperTransport::builder()
-            .build_with_connector(connector.clone())
-            .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
-        let streaming_https_transport = launchdarkly_sdk_transport::HyperTransport::builder()
+        let transport = transport_builder
             .build_with_connector(connector.clone())
             .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
         let mut config_builder =
@@ -88,7 +96,7 @@ impl ClientEntity {
             if let Some(delay) = streaming.initial_retry_delay_ms {
                 streaming_builder.initial_reconnect_delay(Duration::from_millis(delay));
             }
-            streaming_builder.transport(streaming_https_transport.clone());
+            streaming_builder.transport(transport.clone());
 
             config_builder = config_builder.data_source(&streaming_builder);
         } else if let Some(polling) = create_instance_params.configuration.polling {
@@ -108,7 +116,7 @@ impl ClientEntity {
             // customization we provide is the transport to support testing multiple
             // transport implementations.
             let mut streaming_builder = StreamingDataSourceBuilder::new();
-            streaming_builder.transport(streaming_https_transport);
+            streaming_builder.transport(transport.clone());
             config_builder = config_builder.data_source(&streaming_builder);
         }
 

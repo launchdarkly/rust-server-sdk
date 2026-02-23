@@ -18,6 +18,12 @@ struct Status {
     capabilities: Vec<String>,
 }
 
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyParameters {
+    pub http_proxy: Option<String>,
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamingParameters {
@@ -72,6 +78,8 @@ pub struct Configuration {
     #[serde(default = "bool::default")]
     pub init_can_fail: bool,
 
+    pub proxy: Option<ProxyParameters>,
+
     pub streaming: Option<StreamingParameters>,
 
     pub polling: Option<PollingParameters>,
@@ -103,6 +111,7 @@ async fn status() -> impl Responder {
             "tags".to_string(),
             "service-endpoints".to_string(),
             "context-type".to_string(),
+            "http-proxy".to_string(),
             #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
             "secure-mode-hash".to_string(),
             "inline-context-all".to_string(),
