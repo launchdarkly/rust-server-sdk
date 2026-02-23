@@ -54,15 +54,34 @@ reqwest = { version = "0.12.4", features = ["json"] }
 testing_logger = "0.1.1"
 
 [features]
-default = ["hyper-rustls"]
-hyper = ["launchdarkly-sdk-transport/hyper", "eventsource-client/hyper"]
-hyper-rustls = ["hyper", "launchdarkly-sdk-transport/hyper-rustls", "eventsource-client/hyper-rustls"]
+default = ["hyper-rustls-native-roots"]
+
+hyper = [
+    "launchdarkly-sdk-transport/hyper",
+    "eventsource-client/hyper"
+]
+hyper-rustls-native-roots = [
+    "hyper",
+    "launchdarkly-sdk-transport/hyper-rustls-native-roots",
+    "eventsource-client/hyper-rustls-native-roots"
+]
+hyper-rustls-webpki-roots = [
+    "hyper",
+    "launchdarkly-sdk-transport/hyper-rustls-webpki-roots",
+    "eventsource-client/hyper-rustls-webpki-roots"
+]
+native-tls = [
+    "hyper",
+    "launchdarkly-sdk-transport/native-tls",
+    "eventsource-client/native-tls"
+]
+
 event-compression = ["flate2"]
 
 [[example]]
 name = "print_flags"
-required-features = ["hyper-rustls"]
+required-features = ["hyper-rustls-native-roots"]
 
 [[example]]
 name = "progress"
-required-features = ["hyper-rustls"]
+required-features = ["hyper-rustls-native-roots"]

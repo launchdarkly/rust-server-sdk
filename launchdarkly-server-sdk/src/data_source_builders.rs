@@ -92,7 +92,11 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let data_source_result = match &self.transport {
-            #[cfg(feature = "hyper-rustls")]
+            #[cfg(any(
+                feature = "hyper-rustls-native-roots",
+                feature = "hyper-rustls-webpki-roots",
+                feature = "native-tls"
+            ))]
             None => {
                 let transport =
                     launchdarkly_sdk_transport::HyperTransport::new_https().map_err(|e| {
@@ -108,9 +112,13 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
                     transport,
                 ))
             }
-            #[cfg(not(feature = "hyper-rustls"))]
+            #[cfg(not(any(
+                feature = "hyper-rustls-native-roots",
+                feature = "hyper-rustls-webpki-roots",
+                feature = "native-tls"
+            )))]
             None => Err(BuildError::InvalidConfig(
-                "https connector required when rustls is disabled".into(),
+                "https connector required when hyper-rustls-native-roots, hyper-rustls-webpki-roots, or native-tls features are disabled".into(),
             )),
             Some(transport) => Ok(StreamingDataSource::new(
                 endpoints.streaming_base_url(),
@@ -254,7 +262,11 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let feature_requester_builder: Result<Box<dyn FeatureRequesterFactory>, BuildError> =
             match &self.transport {
-                #[cfg(feature = "hyper-rustls")]
+                #[cfg(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                ))]
                 None => {
                     let transport = launchdarkly_sdk_transport::HyperTransport::new_https()
                         .map_err(|e| {
@@ -269,9 +281,13 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
                         transport,
                     )))
                 }
-                #[cfg(not(feature = "hyper-rustls"))]
+                #[cfg(not(any(
+                    feature = "hyper-rustls-native-roots",
+                    feature = "hyper-rustls-webpki-roots",
+                    feature = "native-tls"
+                )))]
                 None => Err(BuildError::InvalidConfig(
-                    "transport is required when hyper-rustls feature is disabled".into(),
+                    "transport is required when hyper-rustls-native-roots, hyper-rustls-webpki-roots, or native-tls features are disabled".into(),
                 )),
                 Some(transport) => Ok(Box::new(HttpFeatureRequesterBuilder::new(
                     endpoints.polling_base_url(),
