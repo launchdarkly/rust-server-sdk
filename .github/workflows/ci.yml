@@ -37,7 +37,7 @@ jobs:
             cargo-flags: "--no-default-features --features native-tls"
 
           - name: "openssl crypto"
-            cargo-flags: "--no-default-features --features hyper-rustls-native-roots,openssl"
+            cargo-flags: "--no-default-features --features hyper-rustls-native-roots,crypto-openssl"
 
     name: CI (${{ matrix.features.name }})
 
