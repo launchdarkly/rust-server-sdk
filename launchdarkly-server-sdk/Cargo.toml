@@ -20,7 +20,7 @@ features = []
 chrono = "0.4.19"
 crossbeam-channel = "0.5.1"
 data-encoding = "2.3.2"
-eventsource-client = { git = "https://github.com/launchdarkly/rust-eventsource-client.git", branch = "feat/hyper-as-feature" }
+eventsource-client = { version = "0.17.0" }
 launchdarkly-sdk-transport = { version = "0.1.0" }
 futures = "0.3.12"
 log = "0.4.14"

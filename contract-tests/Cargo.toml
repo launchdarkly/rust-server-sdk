@@ -9,7 +9,7 @@ license = "Apache-2.0"
 actix = "0.13.0"
 actix-web = "4.2.1"
 env_logger = "0.10.0"
-eventsource-client = { git = "https://github.com/launchdarkly/rust-eventsource-client.git", branch = "feat/hyper-as-feature" }
+eventsource-client = { version = "0.17.0" }
 launchdarkly-sdk-transport = { version = "0.1.0" }
 log = "0.4.14"
 launchdarkly-server-sdk = { path = "../launchdarkly-server-sdk/", default-features = false, features = ["event-compression"]}
