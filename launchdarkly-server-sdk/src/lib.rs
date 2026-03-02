@@ -46,12 +46,12 @@ pub use migrations::{
     ExecutionOrder, MigrationOpTracker, Migrator, MigratorBuilder, Operation, Origin, Stage,
 };
 pub use service_endpoints::ServiceEndpointsBuilder;
-pub use test_data::TestData;
 pub use stores::persistent_store::{PersistentDataStore, PersistentStoreError};
 pub use stores::persistent_store_builders::{
     PersistentDataStoreBuilder, PersistentDataStoreFactory,
 };
 pub use stores::store_types::{AllData, DataKind, SerializedItem, StorageItem};
+pub use test_data::TestData;
 pub use version::version_string;
 
 mod client;

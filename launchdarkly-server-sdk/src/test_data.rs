@@ -155,9 +155,7 @@ impl TestData {
         *version += 1;
         segment.version = *version;
 
-        inner
-            .current_segments
-            .insert(key.clone(), segment.clone());
+        inner.current_segments.insert(key.clone(), segment.clone());
 
         for store in &inner.instances {
             let mut store = store.write();
