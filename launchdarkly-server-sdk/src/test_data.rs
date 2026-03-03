@@ -75,21 +75,15 @@ impl TestData {
     /// Returns a copy of the current [`FlagBuilder`](crate::FlagBuilder) for the specified flag key, or a new default
     /// builder if the flag has not been configured yet.
     ///
-    /// # Panics
-    ///
-    /// Panics if the flag was previously set via [`TestData::use_preconfigured_flag`], since
-    /// preconfigured flags cannot be modified through the builder API.
+    /// If the flag was previously set via [`TestData::use_preconfigured_flag`], this returns a new
+    /// default builder since [`FlagBuilder`](crate::FlagBuilder) cannot represent all flag fields
+    /// (e.g. prerequisites, migration settings, client visibility) and hydrating from a [`Flag`]
+    /// would silently lose that data.
     pub fn flag(&self, key: &str) -> FlagBuilder {
         let inner = self.inner.lock();
         match inner.flag_origins.get(key) {
             Some(FlagOrigin::Builder(builder)) => builder.clone(),
-            Some(FlagOrigin::Preconfigured) => {
-                panic!(
-                    "flag '{}' was set via use_preconfigured_flag and cannot be accessed as a builder",
-                    key
-                )
-            }
-            None => FlagBuilder::new(key),
+            _ => FlagBuilder::new(key),
         }
     }
 
@@ -124,7 +118,8 @@ impl TestData {
     /// Use this when you need to set a flag with a configuration that cannot be expressed through
     /// [`FlagBuilder`](crate::FlagBuilder). The flag version is automatically managed.
     ///
-    /// After calling this, you cannot use [`TestData::flag`] to get a builder for this flag key.
+    /// Note: calling [`TestData::flag`] after this will return a new default builder, not a
+    /// builder derived from the preconfigured flag.
     pub fn use_preconfigured_flag(&self, mut flag: Flag) {
         let mut inner = self.inner.lock();
 
@@ -272,12 +267,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "was set via use_preconfigured_flag")]
-    fn flag_panics_for_preconfigured_flag() {
+    fn flag_returns_default_builder_for_preconfigured_flag() {
         let td = TestData::new();
         let flag = FlagBuilder::new("preconf").build();
         td.use_preconfigured_flag(flag);
-        td.flag("preconf"); // should panic
+        let builder = td.flag("preconf");
+        assert_eq!(builder.key(), "preconf");
     }
 
     #[test]
