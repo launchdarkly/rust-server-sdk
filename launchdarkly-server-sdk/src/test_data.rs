@@ -285,6 +285,30 @@ mod tests {
         assert_eq!(flag.version, 3);
     }
 
+    #[test]
+    fn use_preconfigured_flag_increments_version_each_call() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(FlagBuilder::new("my-flag").build());
+        td.use_preconfigured_flag(FlagBuilder::new("my-flag").build());
+        td.use_preconfigured_flag(FlagBuilder::new("my-flag").build());
+
+        let inner = td.inner.lock();
+        let flag = inner.current_flags.get("my-flag").unwrap();
+        assert_eq!(flag.version, 3);
+    }
+
+    #[test]
+    fn flag_builder_increments_version_each_call() {
+        let td = TestData::new();
+        td.update(td.flag("my-flag").variation_for_all(true));
+        td.update(td.flag("my-flag").variation_for_all(false));
+        td.update(td.flag("my-flag").variation_for_all(true));
+
+        let inner = td.inner.lock();
+        let flag = inner.current_flags.get("my-flag").unwrap();
+        assert_eq!(flag.version, 3);
+    }
+
     #[tokio::test]
     async fn update_propagates_to_connected_store() {
         let td = TestData::new();
