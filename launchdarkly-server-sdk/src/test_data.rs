@@ -216,14 +216,12 @@ impl DataSource for TestDataSource {
 
         // Spawn a task to unregister the store on shutdown
         let inner_ref = self.inner.clone();
-        let store_ptr = Arc::as_ptr(&data_store) as *const () as usize;
+        let store_ref = data_store.clone();
         tokio::spawn(async move {
             let mut shutdown = shutdown_receiver;
             let _ = shutdown.recv().await;
             let mut inner = inner_ref.lock();
-            inner
-                .instances
-                .retain(|s| Arc::as_ptr(s) as *const () as usize != store_ptr);
+            inner.instances.retain(|s| !Arc::ptr_eq(s, &store_ref));
         });
     }
 }
