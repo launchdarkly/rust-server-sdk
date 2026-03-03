@@ -41,7 +41,7 @@ pub use events::processor_builders::{
 pub use feature_requester_builders::{
     BuildError as FeatureRequestBuilderError, FeatureRequesterFactory,
 };
-pub use launchdarkly_server_sdk_evaluation::{Flag, Segment, Versioned};
+pub use launchdarkly_server_sdk_evaluation::{Flag, FlagBuilder, RuleBuilder, Segment, Versioned};
 pub use migrations::{
     ExecutionOrder, MigrationOpTracker, Migrator, MigratorBuilder, Operation, Origin, Stage,
 };
@@ -51,6 +51,7 @@ pub use stores::persistent_store_builders::{
     PersistentDataStoreBuilder, PersistentDataStoreFactory,
 };
 pub use stores::store_types::{AllData, DataKind, SerializedItem, StorageItem};
+pub use test_data::TestData;
 pub use version::version_string;
 
 mod client;
@@ -67,6 +68,7 @@ mod sampler;
 mod service_endpoints;
 mod stores;
 mod test_common;
+mod test_data;
 mod version;
 
 static LAUNCHDARKLY_EVENT_SCHEMA_HEADER: &str = "x-launchdarkly-event-schema";
