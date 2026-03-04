@@ -2,6 +2,28 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.0.0](https://github.com/launchdarkly/rust-server-sdk/compare/2.6.3...3.0.0) (2026-03-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* Remove deprecated initialized_async function
+* Allow filtering all_flags_state to mobile only
+* Add native-tls feature
+* Enable event compression by default
+* Replace local hyper dependency with new launchdarkly-sdk-transport
+
+### Features
+
+* Add native-tls feature ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+* Add support for test datasource ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+* Allow filtering all_flags_state to mobile only ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+* Choose crypto library with crypto-(aws-lc-rs|openssl) features ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+* Enable event compression by default ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+* Remove deprecated initialized_async function ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+* Replace local hyper dependency with new launchdarkly-sdk-transport ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+* Support synchronous event sending with new flush_blocking method ([0ea0703](https://github.com/launchdarkly/rust-server-sdk/commit/0ea0703db22444f97f7e4fd42d74c18a43d4859d))
+
 ## [2.6.3](https://github.com/launchdarkly/rust-server-sdk/compare/2.6.2...2.6.3) (2026-01-26)
 
 
