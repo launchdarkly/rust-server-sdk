@@ -42,9 +42,6 @@ jobs:
       - uses: ./.github/actions/ci
         if: ${{ steps.release.outputs['launchdarkly-server-sdk--release_created'] == 'true' }}
 
-      - uses: ./.github/actions/build-docs
-        if: ${{ steps.release.outputs['launchdarkly-server-sdk--release_created'] == 'true' }}
-
       - uses: ./.github/actions/publish
         if: ${{ steps.release.outputs['launchdarkly-server-sdk--release_created'] == 'true' }}
         with:
