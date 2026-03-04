@@ -156,6 +156,10 @@ pub struct Client {
     started: AtomicBool,
     offline: bool,
     daemon_mode: bool,
+    #[cfg_attr(
+        not(any(feature = "crypto-openssl", feature = "crypto-aws-lc-rs")),
+        allow(dead_code)
+    )]
     sdk_key: String,
     shutdown_broadcast: broadcast::Sender<()>,
     runtime: RwLock<Option<Runtime>>,
@@ -273,16 +277,6 @@ impl Client {
         Ok(true)
     }
 
-    /// This is an async method that will resolve once initialization is complete.
-    /// Initialization being complete does not mean that initialization was a success.
-    /// The return value from the method indicates if the client successfully initialized.
-    #[deprecated(
-        note = "blocking without a timeout is discouraged, use wait_for_initialization instead"
-    )]
-    pub async fn initialized_async(&self) -> bool {
-        self.initialized_async_internal().await
-    }
-
     /// This is an async method that will resolve once initialization is complete or the specified
     /// timeout has occurred.
     ///
@@ -350,6 +344,60 @@ impl Client {
     /// <https://docs.launchdarkly.com/sdk/features/flush#rust>.
     pub fn flush(&self) {
         self.event_processor.flush();
+    }
+
+    /// Flush tells the client that all pending analytics events should be delivered as
+    /// soon as possible, and blocks until delivery is complete or the timeout expires.
+    ///
+    /// This method is particularly useful in short-lived execution environments like AWS Lambda
+    /// where you need to ensure events are sent before the function terminates.
+    ///
+    /// This method triggers a flush of events currently buffered and waits for that specific
+    /// flush to complete. Note that if periodic flushes or other flush operations are in-flight
+    /// when this is called, those may still be completing after this method returns.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Maximum time to wait for flush to complete. Use `Duration::ZERO` to wait indefinitely.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if flush completed successfully, `false` if timeout occurred.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use launchdarkly_server_sdk::{Client, ConfigBuilder};
+    /// # use std::time::Duration;
+    /// # async fn example() {
+    /// # let client = Client::build(ConfigBuilder::new("sdk-key").build().unwrap()).unwrap();
+    /// // Wait up to 5 seconds for flush to complete
+    /// let success = client.flush_blocking(Duration::from_secs(5)).await;
+    /// if !success {
+    ///     eprintln!("Warning: flush timed out");
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// For more information, see the Reference Guide:
+    /// <https://docs.launchdarkly.com/sdk/features/flush#rust>.
+    pub async fn flush_blocking(&self, timeout: Duration) -> bool {
+        let event_processor = self.event_processor.clone();
+
+        let flush_future =
+            tokio::task::spawn_blocking(move || event_processor.flush_blocking(timeout));
+
+        if timeout == Duration::ZERO {
+            // Wait indefinitely
+            flush_future.await.unwrap_or(false)
+        } else {
+            // Apply timeout at async level too
+            match tokio::time::timeout(timeout, flush_future).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => false, // spawn_blocking panicked
+                Err(_) => false,     // Timeout
+            }
+        }
     }
 
     /// Identify reports details about a context.
@@ -541,15 +589,39 @@ impl Client {
             .try_map(|val| val.as_json(), default, eval::Error::WrongType)
     }
 
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     /// Generates the secure mode hash value for a context.
     ///
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/secure-mode#rust>.
-    pub fn secure_mode_hash(&self, context: &Context) -> String {
-        let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
-        let tag = aws_lc_rs::hmac::sign(&key, context.canonical_key().as_bytes());
+    pub fn secure_mode_hash(&self, context: &Context) -> Result<String, String> {
+        #[cfg(feature = "crypto-aws-lc-rs")]
+        {
+            let key =
+                aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, self.sdk_key.as_bytes());
+            let tag = aws_lc_rs::hmac::sign(&key, context.canonical_key().as_bytes());
 
-        data_encoding::HEXLOWER.encode(tag.as_ref())
+            Ok(data_encoding::HEXLOWER.encode(tag.as_ref()))
+        }
+        #[cfg(feature = "crypto-openssl")]
+        {
+            use openssl::hash::MessageDigest;
+            use openssl::pkey::PKey;
+            use openssl::sign::Signer;
+
+            let key = PKey::hmac(self.sdk_key.as_bytes())
+                .map_err(|e| format!("Failed to create HMAC key: {e}"))?;
+            let mut signer = Signer::new(MessageDigest::sha256(), &key)
+                .map_err(|e| format!("Failed to create signer: {e}"))?;
+            signer
+                .update(context.canonical_key().as_bytes())
+                .map_err(|e| format!("Failed to update signer: {e}"))?;
+            let hmac = signer
+                .sign_to_vec()
+                .map_err(|e| format!("Failed to sign: {e}"))?;
+
+            Ok(data_encoding::HEXLOWER.encode(&hmac))
+        }
     }
 
     /// Returns an object that encapsulates the state of all feature flags for a given context. This
@@ -828,7 +900,6 @@ mod tests {
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
     use futures::FutureExt;
-    use hyper::client::HttpConnector;
     use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
     use maplit::hashmap;
     use std::collections::HashMap;
@@ -836,6 +907,7 @@ mod tests {
 
     use crate::data_source::MockDataSource;
     use crate::data_source_builders::MockDataSourceBuilder;
+    use crate::evaluation::FlagFilter;
     use crate::events::create_event_sender;
     use crate::events::event::{OutputEvent, VariationKey};
     use crate::events::processor_builders::EventProcessorBuilder;
@@ -845,6 +917,7 @@ mod tests {
         self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility,
         basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag,
     };
+    use crate::test_data::TestData;
     use crate::{
         AllData, ConfigBuilder, MigratorBuilder, NullEventProcessorBuilder, Operation, Origin,
         PersistentDataStore, PersistentDataStoreBuilder, PersistentDataStoreFactory,
@@ -859,19 +932,6 @@ mod tests {
     #[test]
     fn ensure_client_is_send_and_sync() {
         is_send_and_sync::<Client>()
-    }
-
-    #[tokio::test]
-    async fn client_asynchronously_initializes() {
-        let (client, _event_rx) = make_mocked_client_with_delay(1000, false, false);
-        client.start_with_default_executor();
-
-        let now = Instant::now();
-        let initialized = client.initialized_async().await;
-        let elapsed_time = now.elapsed();
-        assert!(initialized);
-        // Give ourself a good margin for thread scheduling.
-        assert!(elapsed_time.as_millis() > 500)
     }
 
     #[tokio::test]
@@ -997,26 +1057,14 @@ mod tests {
         assert_json_eq!(all_flags, json!({"$valid": false, "$flagsState" : {}}));
     }
 
-    #[test]
-    fn all_flags_detail_returns_flag_states() {
-        let (client, _event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn all_flags_detail_returns_flag_states() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_flag("myFlag1"));
+        td.use_preconfigured_flag(basic_flag("myFlag2"));
+        let (client, _event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "myFlag1",
-                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag1"))),
-            )
-            .expect("patch should apply");
-        client
-            .data_store
-            .write()
-            .upsert(
-                "myFlag2",
-                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag2"))),
-            )
-            .expect("patch should apply");
+
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
@@ -1032,11 +1080,11 @@ mod tests {
                 "myFlag2": true,
                 "$flagsState": {
                     "myFlag1": {
-                        "version": 42,
+                        "version": 1,
                         "variation": 1
                     },
                      "myFlag2": {
-                        "version": 42,
+                        "version": 1,
                         "variation": 1
                     },
                 },
@@ -1045,39 +1093,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn all_flags_detail_returns_prerequisite_relations() {
-        let (client, _event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn all_flags_detail_returns_prerequisite_relations() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_flag("prereq1"));
+        td.use_preconfigured_flag(basic_flag("prereq2"));
+        td.use_preconfigured_flag(basic_flag_with_prereqs_and_visibility(
+            "toplevel",
+            &["prereq1", "prereq2"],
+            false,
+            false,
+        ));
+        let (client, _event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "prereq1",
-                PatchTarget::Flag(StorageItem::Item(basic_flag("prereq1"))),
-            )
-            .expect("patch should apply");
-        client
-            .data_store
-            .write()
-            .upsert(
-                "prereq2",
-                PatchTarget::Flag(StorageItem::Item(basic_flag("prereq2"))),
-            )
-            .expect("patch should apply");
-
-        client
-            .data_store
-            .write()
-            .upsert(
-                "toplevel",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility(
-                    "toplevel",
-                    &["prereq1", "prereq2"],
-                    false,
-                ))),
-            )
-            .expect("patch should apply");
 
         let context = ContextBuilder::new("bob")
             .build()
@@ -1095,16 +1123,16 @@ mod tests {
                 "toplevel": true,
                 "$flagsState": {
                     "toplevel": {
-                        "version": 42,
+                        "version": 1,
                         "variation": 1,
                         "prerequisites": ["prereq1", "prereq2"]
                     },
                     "prereq1": {
-                        "version": 42,
+                        "version": 1,
                         "variation": 1
                     },
                      "prereq2": {
-                        "version": 42,
+                        "version": 1,
                         "variation": 1
                     },
                 },
@@ -1113,50 +1141,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn all_flags_detail_returns_prerequisite_relations_when_not_visible_to_clients() {
-        let (client, _event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn all_flags_detail_returns_prerequisite_relations_when_not_visible_to_clients() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_flag_with_visibility("prereq1", false, false));
+        td.use_preconfigured_flag(basic_flag_with_visibility("prereq2", false, false));
+        td.use_preconfigured_flag(basic_flag_with_prereqs_and_visibility(
+            "toplevel",
+            &["prereq1", "prereq2"],
+            true,
+            false,
+        ));
+        let (client, _event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "prereq1",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
-                    "prereq1", false,
-                ))),
-            )
-            .expect("patch should apply");
-        client
-            .data_store
-            .write()
-            .upsert(
-                "prereq2",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_visibility(
-                    "prereq2", false,
-                ))),
-            )
-            .expect("patch should apply");
-
-        client
-            .data_store
-            .write()
-            .upsert(
-                "toplevel",
-                PatchTarget::Flag(StorageItem::Item(basic_flag_with_prereqs_and_visibility(
-                    "toplevel",
-                    &["prereq1", "prereq2"],
-                    true,
-                ))),
-            )
-            .expect("patch should apply");
 
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
 
         let mut config = FlagDetailConfig::new();
-        config.client_side_only();
+        config.flag_filter(FlagFilter::CLIENT);
 
         let all_flags = client.all_flags_detail(&context, config);
 
@@ -1168,7 +1172,7 @@ mod tests {
                 "toplevel": true,
                 "$flagsState": {
                     "toplevel": {
-                        "version": 42,
+                        "version": 1,
                         "variation": 1,
                         "prerequisites": ["prereq1", "prereq2"]
                     },
@@ -1178,18 +1182,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn variation_tracks_events_correctly() {
-        let (client, event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn variation_tracks_events_correctly() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_flag("myFlag"));
+        let (client, event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "myFlag",
-                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
-            )
-            .expect("patch should apply");
+
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
@@ -1207,7 +1206,7 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: Some(1),
             };
             let feature = event_summary.features.get("myFlag");
@@ -1272,22 +1271,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn variation_detail_handles_debug_events_correctly() {
-        let (client, event_rx) = make_mocked_client();
-        client.start_with_default_executor();
-
+    #[tokio::test]
+    async fn variation_detail_handles_debug_events_correctly() {
+        let td = TestData::new();
         let mut flag = basic_flag("myFlag");
         flag.debug_events_until_date = Some(64_060_606_800_000); // Jan. 1st, 4000
+        td.use_preconfigured_flag(flag);
+        let (client, event_rx) = make_client_with_test_data(&td);
+        client.start_with_default_executor();
 
-        client
-            .data_store
-            .write()
-            .upsert(
-                &flag.key,
-                PatchTarget::Flag(StorageItem::Item(flag.clone())),
-            )
-            .expect("patch should apply");
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
@@ -1312,7 +1304,7 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[2].clone() {
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: Some(1),
             };
 
@@ -1326,19 +1318,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn variation_detail_tracks_events_correctly() {
-        let (client, event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn variation_detail_tracks_events_correctly() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_flag("myFlag"));
+        let (client, event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
 
-        client
-            .data_store
-            .write()
-            .upsert(
-                "myFlag",
-                PatchTarget::Flag(StorageItem::Item(basic_flag("myFlag"))),
-            )
-            .expect("patch should apply");
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
@@ -1362,7 +1348,7 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: Some(1),
             };
 
@@ -1408,7 +1394,7 @@ mod tests {
     impl PersistentDataStoreFactory for InMemoryPersistentDataStoreFactory {
         fn create_persistent_data_store(
             &self,
-        ) -> Result<Box<(dyn PersistentDataStore + 'static)>, std::io::Error> {
+        ) -> Result<Box<dyn PersistentDataStore + 'static>, std::io::Error> {
             let serialized_data =
                 AllData::<SerializedItem, SerializedItem>::try_from(self.data.clone())?;
             Ok(Box::new(InMemoryPersistentDataStore {
@@ -1505,19 +1491,13 @@ mod tests {
         });
     }
 
-    #[test]
-    fn variation_handles_off_flag_without_variation() {
-        let (client, event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn variation_handles_off_flag_without_variation() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_off_flag("myFlag"));
+        let (client, event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
 
-        client
-            .data_store
-            .write()
-            .upsert(
-                "myFlag",
-                PatchTarget::Flag(StorageItem::Item(basic_off_flag("myFlag"))),
-            )
-            .expect("patch should apply");
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
@@ -1535,7 +1515,7 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[1].clone() {
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: None,
             };
             let feature = event_summary.features.get("myFlag");
@@ -1548,30 +1528,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn variation_detail_tracks_prereq_events_correctly() {
-        let (client, event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn variation_detail_tracks_prereq_events_correctly() {
+        let td = TestData::new();
+        let mut prereq_flag = basic_flag("prereqFlag");
+        prereq_flag.track_events = true;
+        td.use_preconfigured_flag(prereq_flag);
+
+        let mut main_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
+        main_flag.track_events = true;
+        td.use_preconfigured_flag(main_flag);
+
+        let (client, event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
 
-        let mut basic_preqreq_flag = basic_flag("prereqFlag");
-        basic_preqreq_flag.track_events = true;
-
-        client
-            .data_store
-            .write()
-            .upsert(
-                "prereqFlag",
-                PatchTarget::Flag(StorageItem::Item(basic_preqreq_flag)),
-            )
-            .expect("patch should apply");
-
-        let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
-        basic_flag.track_events = true;
-        client
-            .data_store
-            .write()
-            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
-            .expect("patch should apply");
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
@@ -1597,7 +1567,7 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: Some(1),
             };
             let feature = event_summary.features.get("myFlag");
@@ -1607,7 +1577,7 @@ mod tests {
             assert!(feature.counters.contains_key(&variation_key));
 
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: Some(1),
             };
             let feature = event_summary.features.get("prereqFlag");
@@ -1618,30 +1588,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn variation_handles_failed_prereqs_correctly() {
-        let (client, event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn variation_handles_failed_prereqs_correctly() {
+        let td = TestData::new();
+        let mut prereq_flag = basic_off_flag("prereqFlag");
+        prereq_flag.track_events = true;
+        td.use_preconfigured_flag(prereq_flag);
+
+        let mut main_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
+        main_flag.track_events = true;
+        td.use_preconfigured_flag(main_flag);
+
+        let (client, event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
 
-        let mut basic_preqreq_flag = basic_off_flag("prereqFlag");
-        basic_preqreq_flag.track_events = true;
-
-        client
-            .data_store
-            .write()
-            .upsert(
-                "prereqFlag",
-                PatchTarget::Flag(StorageItem::Item(basic_preqreq_flag)),
-            )
-            .expect("patch should apply");
-
-        let mut basic_flag = basic_flag_with_prereq("myFlag", "prereqFlag");
-        basic_flag.track_events = true;
-        client
-            .data_store
-            .write()
-            .upsert("myFlag", PatchTarget::Flag(StorageItem::Item(basic_flag)))
-            .expect("patch should apply");
         let context = ContextBuilder::new("bob")
             .build()
             .expect("Failed to create context");
@@ -1661,7 +1621,7 @@ mod tests {
 
         if let OutputEvent::Summary(event_summary) = events[3].clone() {
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: Some(0),
             };
             let feature = event_summary.features.get("myFlag");
@@ -1671,7 +1631,7 @@ mod tests {
             assert!(feature.counters.contains_key(&variation_key));
 
             let variation_key = VariationKey {
-                version: Some(42),
+                version: Some(1),
                 variation: None,
             };
             let feature = event_summary.features.get("prereqFlag");
@@ -1797,6 +1757,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     fn secure_mode_hash() {
         let config = ConfigBuilder::new("secret")
             .offline(true)
@@ -1808,12 +1769,15 @@ mod tests {
             .expect("Failed to create context");
 
         assert_eq!(
-            client.secure_mode_hash(&context),
+            client
+                .secure_mode_hash(&context)
+                .expect("Hash should be computed"),
             "aa747c502a898200f9e4fa21bac68136f886a0e27aec70ba06daf2e2a5cb5597"
         );
     }
 
     #[test]
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
     fn secure_mode_hash_with_multi_kind() {
         let config = ConfigBuilder::new("secret")
             .offline(true)
@@ -1836,7 +1800,9 @@ mod tests {
             .expect("failed to build multi-context");
 
         assert_eq!(
-            client.secure_mode_hash(&context),
+            client
+                .secure_mode_hash(&context)
+                .expect("Hash should be computed"),
             "5687e6383b920582ed50c2a96c98a115f1b6aad85a60579d761d9b8797415163"
         );
     }
@@ -1927,18 +1893,12 @@ mod tests {
         assert_eq!(stage, Stage::Off);
     }
 
-    #[test]
-    fn migration_uses_non_migration_flag() {
-        let (client, _event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn migration_uses_non_migration_flag() {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_flag("boolean-flag"));
+        let (client, _event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "boolean-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_flag("boolean-flag"))),
-            )
-            .expect("patch should apply");
 
         let context = ContextBuilder::new("bob")
             .build()
@@ -1955,17 +1915,12 @@ mod tests {
     #[test_case(Stage::Live)]
     #[test_case(Stage::Rampdown)]
     #[test_case(Stage::Complete)]
-    fn migration_can_determine_correct_stage_from_flag(stage: Stage) {
-        let (client, _event_rx) = make_mocked_client();
+    #[tokio::test]
+    async fn migration_can_determine_correct_stage_from_flag(stage: Stage) {
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_migration_flag("stage-flag", stage));
+        let (client, _event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "stage-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
-            )
-            .expect("patch should apply");
 
         let context = ContextBuilder::new("bob")
             .build()
@@ -2050,17 +2005,11 @@ mod tests {
         operation: Operation,
         origins: Vec<Origin>,
     ) {
-        let (client, event_rx) = make_mocked_client();
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_migration_flag("stage-flag", stage));
+        let (client, event_rx) = make_client_with_test_data(&td);
         let client = Arc::new(client);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "stage-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
-            )
-            .expect("patch should apply");
 
         let mut migrator = MigratorBuilder::new(client.clone())
             .read(
@@ -2164,17 +2113,11 @@ mod tests {
         operation: Operation,
         origins: Vec<Origin>,
     ) {
-        let (client, event_rx) = make_mocked_client();
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_migration_flag("stage-flag", stage));
+        let (client, event_rx) = make_client_with_test_data(&td);
         let client = Arc::new(client);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "stage-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
-            )
-            .expect("patch should apply");
 
         let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
@@ -2266,17 +2209,11 @@ mod tests {
     }
 
     async fn migration_tracks_read_errors_driver(stage: Stage, origins: Vec<Origin>) {
-        let (client, event_rx) = make_mocked_client();
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_migration_flag("stage-flag", stage));
+        let (client, event_rx) = make_client_with_test_data(&td);
         let client = Arc::new(client);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "stage-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
-            )
-            .expect("patch should apply");
 
         let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
@@ -2335,17 +2272,11 @@ mod tests {
         stage: Stage,
         origins: Vec<Origin>,
     ) {
-        let (client, event_rx) = make_mocked_client();
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_migration_flag("stage-flag", stage));
+        let (client, event_rx) = make_client_with_test_data(&td);
         let client = Arc::new(client);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "stage-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
-            )
-            .expect("patch should apply");
 
         let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
@@ -2426,17 +2357,11 @@ mod tests {
         fail_new: bool,
         origins: Vec<Origin>,
     ) {
-        let (client, event_rx) = make_mocked_client();
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_migration_flag("stage-flag", stage));
+        let (client, event_rx) = make_client_with_test_data(&td);
         let client = Arc::new(client);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "stage-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
-            )
-            .expect("patch should apply");
 
         let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
@@ -2511,17 +2436,11 @@ mod tests {
         new_return: &'static str,
         expected_consistency: bool,
     ) {
-        let (client, event_rx) = make_mocked_client();
+        let td = TestData::new();
+        td.use_preconfigured_flag(basic_migration_flag("stage-flag", stage));
+        let (client, event_rx) = make_client_with_test_data(&td);
         let client = Arc::new(client);
         client.start_with_default_executor();
-        client
-            .data_store
-            .write()
-            .upsert(
-                "stage-flag",
-                PatchTarget::Flag(StorageItem::Item(basic_migration_flag("stage-flag", stage))),
-            )
-            .expect("patch should apply");
 
         let mut migrator = MigratorBuilder::new(client.clone())
             .track_latency(true)
@@ -2587,6 +2506,95 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn client_flush_blocking_completes_successfully() {
+        let (client, event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let context = ContextBuilder::new("user-key")
+            .build()
+            .expect("Failed to create context");
+
+        client.identify(context);
+
+        let result = client.flush_blocking(Duration::from_secs(5)).await;
+        assert!(result, "flush_blocking should complete successfully");
+
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert!(!events.is_empty(), "Should have received identify event");
+    }
+
+    #[tokio::test]
+    async fn client_flush_blocking_with_zero_timeout() {
+        let (client, event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let context = ContextBuilder::new("user-key")
+            .build()
+            .expect("Failed to create context");
+
+        client.identify(context);
+
+        let result = client.flush_blocking(Duration::ZERO).await;
+        assert!(
+            result,
+            "flush_blocking with zero timeout should complete successfully"
+        );
+
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert!(!events.is_empty(), "Should have received identify event");
+    }
+
+    #[tokio::test]
+    async fn client_flush_blocking_with_no_events() {
+        let (client, _event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let result = client.flush_blocking(Duration::from_secs(1)).await;
+        assert!(
+            result,
+            "flush_blocking with no events should complete immediately"
+        );
+
+        client.close();
+    }
+
+    #[tokio::test]
+    async fn client_flush_blocking_multiple_concurrent_calls() {
+        let (client, event_rx) = make_mocked_client();
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(1)).await;
+
+        let context = ContextBuilder::new("user-key")
+            .build()
+            .expect("Failed to create context");
+
+        client.identify(context);
+
+        // Make multiple concurrent flush_blocking calls
+        let (result1, result2, result3) = tokio::join!(
+            client.flush_blocking(Duration::from_secs(5)),
+            client.flush_blocking(Duration::from_secs(5)),
+            client.flush_blocking(Duration::from_secs(5)),
+        );
+
+        assert!(result1, "First flush_blocking should succeed");
+        assert!(result2, "Second flush_blocking should succeed");
+        assert!(result3, "Third flush_blocking should succeed");
+
+        client.close();
+
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        assert!(!events.is_empty(), "Should have received identify event");
+    }
+
     fn make_mocked_client_with_delay(
         delay: u64,
         offline: bool,
@@ -2600,7 +2608,8 @@ mod tests {
             .daemon_mode(daemon_mode)
             .data_source(MockDataSourceBuilder::new().data_source(updates))
             .event_processor(
-                EventProcessorBuilder::<HttpConnector>::new().event_sender(Arc::new(event_sender)),
+                EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new()
+                    .event_sender(Arc::new(event_sender)),
             )
             .build()
             .expect("config should build");
@@ -2616,5 +2625,36 @@ mod tests {
 
     fn make_mocked_client() -> (Client, Receiver<OutputEvent>) {
         make_mocked_client_with_delay(0, false, false)
+    }
+
+    fn make_client_with_test_data(td: &TestData) -> (Client, Receiver<OutputEvent>) {
+        let (event_sender, event_rx) = create_event_sender();
+        let config = ConfigBuilder::new("sdk-key")
+            .data_source(td)
+            .event_processor(
+                EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new()
+                    .event_sender(Arc::new(event_sender)),
+            )
+            .build()
+            .expect("config should build");
+        let client = Client::build(config).expect("Should be built.");
+        (client, event_rx)
+    }
+
+    #[test]
+    fn client_builds_successfully() {
+        let config = ConfigBuilder::new("sdk-key")
+            .offline(true)
+            .build()
+            .expect("config should build");
+
+        let client = Client::build(config).expect("client should build successfully");
+
+        assert!(
+            !client.started.load(Ordering::SeqCst),
+            "client should not be started yet"
+        );
+        assert!(client.offline, "client should be in offline mode");
+        assert_eq!(client.sdk_key, "sdk-key", "sdk_key should match");
     }
 }

@@ -1,12 +1,10 @@
-use crate::feature_requester::{FeatureRequester, HyperFeatureRequester};
+use crate::feature_requester::{FeatureRequester, HttpFeatureRequester};
 use crate::LAUNCHDARKLY_TAGS_HEADER;
-use hyper::client::connect::Connection;
-use hyper::service::Service;
-use hyper::Uri;
+use http::Uri;
+use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Error type used to represent failures when building a [FeatureRequesterFactory] instance.
 #[non_exhaustive]
@@ -26,35 +24,23 @@ pub trait FeatureRequesterFactory: Send {
     fn build(&self, tags: Option<String>) -> Result<Box<dyn FeatureRequester>, BuildError>;
 }
 
-pub struct HyperFeatureRequesterBuilder<C> {
+pub struct HttpFeatureRequesterBuilder<T: HttpTransport> {
     url: String,
     sdk_key: String,
-    http: hyper::Client<C>,
+    transport: T,
 }
 
-impl<C> HyperFeatureRequesterBuilder<C>
-where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
-    pub fn new(url: &str, sdk_key: &str, connector: C) -> Self {
+impl<T: HttpTransport> HttpFeatureRequesterBuilder<T> {
+    pub fn new(url: &str, sdk_key: &str, transport: T) -> Self {
         Self {
-            http: hyper::Client::builder().build(connector),
+            transport,
             url: url.into(),
             sdk_key: sdk_key.into(),
         }
     }
 }
 
-impl<C> FeatureRequesterFactory for HyperFeatureRequesterBuilder<C>
-where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: HttpTransport> FeatureRequesterFactory for HttpFeatureRequesterBuilder<T> {
     fn build(&self, tags: Option<String>) -> Result<Box<dyn FeatureRequester>, BuildError> {
         let url = format!("{}/sdk/latest-all", self.url);
 
@@ -64,11 +50,11 @@ where
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
 
-        let url = hyper::Uri::from_str(url.as_str())
+        let url = Uri::from_str(url.as_str())
             .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
 
-        Ok(Box::new(HyperFeatureRequester::new(
-            self.http.clone(),
+        Ok(Box::new(HttpFeatureRequester::new(
+            self.transport.clone(),
             url,
             self.sdk_key.clone(),
             default_headers,
@@ -78,16 +64,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use hyper::client::HttpConnector;
-
     use super::*;
 
     #[test]
     fn factory_handles_url_parsing_failure() {
-        let builder = HyperFeatureRequesterBuilder::new(
+        let transport =
+            launchdarkly_sdk_transport::HyperTransport::new().expect("Failed to create transport");
+        let builder = HttpFeatureRequesterBuilder::new(
             "This is clearly not a valid URL",
             "sdk-key",
-            HttpConnector::new(),
+            transport,
         );
         let result = builder.build(None);
 

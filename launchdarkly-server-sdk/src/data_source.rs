@@ -7,15 +7,11 @@ use crate::LAUNCHDARKLY_TAGS_HEADER;
 use es::{Client, ClientBuilder, ReconnectOptionsBuilder};
 use eventsource_client as es;
 use futures::StreamExt;
-use hyper::client::connect::Connection;
-use hyper::service::Service;
-use hyper::Uri;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 use parking_lot::RwLock;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use tokio::time;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
@@ -74,19 +70,13 @@ pub struct StreamingDataSource {
 
 impl StreamingDataSource {
     #[allow(clippy::result_large_err)]
-    pub fn new<C>(
+    pub fn new<T: launchdarkly_sdk_transport::HttpTransport>(
         base_url: &str,
         sdk_key: &str,
         initial_reconnect_delay: Duration,
         tags: &Option<String>,
-        connector: C,
-    ) -> std::result::Result<Self, es::Error>
-    where
-        C: Service<Uri> + Clone + Send + Sync + 'static,
-        C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-        C::Future: Send + 'static,
-        C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
+        transport: T,
+    ) -> std::result::Result<Self, es::Error> {
         let stream_url = format!("{base_url}/all");
 
         let client_builder = ClientBuilder::for_url(&stream_url)?;
@@ -106,7 +96,7 @@ impl StreamingDataSource {
         }
 
         Ok(Self {
-            es_client: Box::new(client_builder.build_with_conn(connector)),
+            es_client: Box::new(client_builder.build_with_transport(transport)),
         })
     }
 }
@@ -377,14 +367,13 @@ mod tests {
         time::Duration,
     };
 
-    use hyper::client::HttpConnector;
     use mockito::Matcher;
     use parking_lot::RwLock;
     use test_case::test_case;
     use tokio::sync::broadcast;
 
     use super::{DataSource, PollingDataSource, StreamingDataSource};
-    use crate::feature_requester_builders::HyperFeatureRequesterBuilder;
+    use crate::feature_requester_builders::HttpFeatureRequesterBuilder;
     use crate::{stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER};
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
@@ -412,7 +401,8 @@ mod tests {
             "sdk-key",
             Duration::from_secs(0),
             &tag,
-            HttpConnector::new(),
+            launchdarkly_sdk_transport::HyperTransport::new()
+                .expect("Failed to create streaming data source"),
         )
         .unwrap();
 
@@ -463,8 +453,9 @@ mod tests {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let initialized = Arc::new(AtomicBool::new(false));
 
-        let hyper_builder =
-            HyperFeatureRequesterBuilder::new(&server.url(), "sdk-key", HttpConnector::new());
+        let transport = launchdarkly_sdk_transport::HyperTransport::new()
+            .expect("Failed to create transport for polling data source");
+        let hyper_builder = HttpFeatureRequesterBuilder::new(&server.url(), "sdk-key", transport);
 
         let polling = PollingDataSource::new(
             Arc::new(Mutex::new(Box::new(hyper_builder))),

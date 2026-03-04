@@ -12,6 +12,34 @@ on:
 jobs:
   ci-build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - name: "default (aws-lc-rs for crypto)"
+
+          - name: "no-features"
+            cargo-flags: "--no-default-features"
+            cargo-test-flags: "--lib"
+            skip_contract_tests: "true"
+
+          - name: "hyper"
+            cargo-flags: "--no-default-features --features hyper"
+            cargo-test-flags: "--lib"
+
+          - name: "hyper-rustls-native-roots"
+            cargo-flags: "--no-default-features --features hyper-rustls-native-roots"
+
+          - name: "hyper-rustls-webpki-roots"
+            cargo-flags: "--no-default-features --features hyper-rustls-webpki-roots"
+
+          - name: "native-tls"
+            cargo-flags: "--no-default-features --features native-tls"
+
+          - name: "openssl crypto"
+            cargo-flags: "--no-default-features --features hyper-rustls-native-roots,crypto-openssl"
+
+    name: CI (${{ matrix.features.name }})
 
     steps:
       - uses: actions/checkout@v4
@@ -26,20 +54,33 @@ jobs:
           rustup component add rustfmt clippy
 
       - uses: ./.github/actions/ci
-
-      - name: "Run contract tests with hyper_rustls"
-        uses: ./.github/actions/contract-tests
         with:
-          tls_feature: "rustls"
+          cargo-flags: ${{ matrix.features.cargo-flags }}
+          cargo-test-flags: ${{ matrix.features.cargo-test-flags }}
+
+      - uses: ./.github/actions/contract-tests
+        if: ${{ matrix.features.skip_contract_tests != 'true' }}
+        with:
+          cargo-flags: ${{ matrix.features.cargo-flags }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: "Run contract tests with hyper_tls"
-        uses: ./.github/actions/contract-tests
-        with:
-          tls_feature: "tls"
-          token: ${{ secrets.GITHUB_TOKEN }}
+  build-docs:
+    runs-on: ubuntu-latest
+    name: Build Documentation (all features)
 
-      - uses: ./.github/actions/build-docs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup rust tooling
+        run: rustup override set nightly
+
+      - name: Install cargo-docs-rs
+        run: cargo install cargo-docs-rs
+
+      - name: Build documentation
+        run: cargo docs-rs -p launchdarkly-server-sdk
 
   musl-build:
     runs-on: ubuntu-latest

@@ -1,8 +1,9 @@
 use crate::reqwest::is_http_error_recoverable;
+use bytes::Bytes;
 use futures::future::BoxFuture;
-use hyper::Body;
+use futures::stream::StreamExt;
+use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::stores::store_types::AllData;
 use launchdarkly_server_sdk_evaluation::{Flag, Segment};
@@ -20,23 +21,23 @@ pub trait FeatureRequester: Send {
     fn get_all(&mut self) -> BoxFuture<'_, Result<AllData<Flag, Segment>, FeatureRequesterError>>;
 }
 
-pub struct HyperFeatureRequester<C> {
-    http: Arc<hyper::Client<C>>,
-    url: hyper::Uri,
+pub struct HttpFeatureRequester<T: HttpTransport> {
+    transport: T,
+    url: http::Uri,
     sdk_key: String,
     cache: Option<CachedEntry>,
     default_headers: HashMap<&'static str, String>,
 }
 
-impl<C> HyperFeatureRequester<C> {
+impl<T: HttpTransport> HttpFeatureRequester<T> {
     pub fn new(
-        http: hyper::Client<C>,
-        url: hyper::Uri,
+        transport: T,
+        url: http::Uri,
         sdk_key: String,
         default_headers: HashMap<&'static str, String>,
     ) -> Self {
         Self {
-            http: Arc::new(http),
+            transport,
             url,
             sdk_key,
             cache: None,
@@ -45,19 +46,16 @@ impl<C> HyperFeatureRequester<C> {
     }
 }
 
-impl<C> FeatureRequester for HyperFeatureRequester<C>
-where
-    C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
-{
+impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
     fn get_all(&mut self) -> BoxFuture<'_, Result<AllData<Flag, Segment>, FeatureRequesterError>> {
         Box::pin(async {
             let uri = self.url.clone();
             let key = self.sdk_key.clone();
 
-            let http = self.http.clone();
+            let transport = self.transport.clone();
             let cache = self.cache.clone();
 
-            let mut request_builder = hyper::http::Request::builder()
+            let mut request_builder = http::Request::builder()
                 .uri(uri)
                 .method("GET")
                 .header("Content-Type", "application/json")
@@ -73,9 +71,10 @@ where
                 request_builder = request_builder.header("If-None-Match", cache.1.clone());
             }
 
-            let result = http
-                .request(request_builder.body(Body::empty()).unwrap())
-                .await;
+            // Create empty body for GET request
+            let request = request_builder.body(Some(Bytes::new())).unwrap();
+
+            let result = transport.request(request).await;
 
             let response = match result {
                 Ok(response) => response,
@@ -87,7 +86,8 @@ where
                 }
             };
 
-            if response.status() == hyper::StatusCode::NOT_MODIFIED && cache.is_some() {
+            // 304 NOT MODIFIED
+            if response.status() == 304 && cache.is_some() {
                 if let Some(entry) = cache {
                     return Ok(entry.0);
                 }
@@ -101,13 +101,17 @@ where
                 .map_or_else(|_| "".into(), |s| s.into());
 
             if response.status().is_success() {
-                let bytes = hyper::body::to_bytes(response.into_body())
-                    .await
-                    .map_err(|e| {
+                // Collect streaming body
+                let mut body_bytes = Vec::new();
+                let mut stream = response.into_body();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|e| {
                         error!("An error occurred while reading the polling response body: {e}");
                         FeatureRequesterError::Temporary
                     })?;
-                let json = serde_json::from_slice::<AllData<Flag, Segment>>(bytes.as_ref());
+                    body_bytes.extend_from_slice(&chunk);
+                }
+                let json = serde_json::from_slice::<AllData<Flag, Segment>>(&body_bytes);
 
                 return match json {
                     Ok(all_data) => {
@@ -243,12 +247,15 @@ mod tests {
         }
     }
 
-    fn build_feature_requester(url: String) -> HyperFeatureRequester<hyper::client::HttpConnector> {
-        let http = hyper::Client::builder().build(hyper::client::HttpConnector::new());
-        let url = hyper::Uri::from_str(&url).expect("Failed parsing the mock server url");
+    fn build_feature_requester(
+        url: String,
+    ) -> HttpFeatureRequester<launchdarkly_sdk_transport::HyperTransport> {
+        let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
+        let transport = launchdarkly_sdk_transport::HyperTransport::new()
+            .expect("Failed to create HyperTransport");
 
-        HyperFeatureRequester::new(
-            http,
+        HttpFeatureRequester::new(
+            transport,
             url,
             "sdk-key".to_string(),
             HashMap::<&str, String>::new(),

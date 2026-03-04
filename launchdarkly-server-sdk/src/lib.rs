@@ -16,6 +16,7 @@ extern crate log;
 #[macro_use]
 extern crate serde_json;
 
+use http::HeaderValue;
 pub use launchdarkly_server_sdk_evaluation::Error as EvalError;
 pub use launchdarkly_server_sdk_evaluation::{
     AttributeValue, Context, ContextBuilder, Detail, FlagValue, Kind, MultiContextBuilder, Reason,
@@ -31,7 +32,7 @@ pub use config::{ApplicationInfo, BuildError as ConfigBuildError, Config, Config
 pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
 };
-pub use evaluation::{FlagDetail, FlagDetailConfig};
+pub use evaluation::{FlagDetail, FlagDetailConfig, FlagFilter};
 pub use events::event::MigrationOpEvent;
 pub use events::processor::EventProcessor;
 pub use events::processor_builders::{
@@ -40,7 +41,7 @@ pub use events::processor_builders::{
 pub use feature_requester_builders::{
     BuildError as FeatureRequestBuilderError, FeatureRequesterFactory,
 };
-pub use launchdarkly_server_sdk_evaluation::{Flag, Segment, Versioned};
+pub use launchdarkly_server_sdk_evaluation::{Flag, FlagBuilder, RuleBuilder, Segment, Versioned};
 pub use migrations::{
     ExecutionOrder, MigrationOpTracker, Migrator, MigratorBuilder, Operation, Origin, Stage,
 };
@@ -50,6 +51,7 @@ pub use stores::persistent_store_builders::{
     PersistentDataStoreBuilder, PersistentDataStoreFactory,
 };
 pub use stores::store_types::{AllData, DataKind, SerializedItem, StorageItem};
+pub use test_data::TestData;
 pub use version::version_string;
 
 mod client;
@@ -66,6 +68,7 @@ mod sampler;
 mod service_endpoints;
 mod stores;
 mod test_common;
+mod test_data;
 mod version;
 
 static LAUNCHDARKLY_EVENT_SCHEMA_HEADER: &str = "x-launchdarkly-event-schema";
@@ -76,9 +79,7 @@ static CURRENT_EVENT_SCHEMA: &str = "4";
 static USER_AGENT: LazyLock<String> =
     LazyLock::new(|| format!("RustServerClient/{}", version_string()));
 
-// For cases where a statically empty header value are needed.
-static EMPTY_HEADER: LazyLock<hyper::header::HeaderValue> =
-    LazyLock::new(|| hyper::header::HeaderValue::from_static(""));
+static EMPTY_HEADER: LazyLock<HeaderValue> = LazyLock::new(|| HeaderValue::from_static(""));
 
 #[cfg(test)]
 mod tests {

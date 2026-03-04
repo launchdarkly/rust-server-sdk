@@ -7,7 +7,6 @@ use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Resu
 use async_mutex::Mutex;
 use client_entity::ClientEntity;
 use futures::executor;
-use hyper::client::HttpConnector;
 use launchdarkly_server_sdk::Reference;
 use serde::{self, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -17,6 +16,12 @@ use std::thread;
 #[derive(Serialize)]
 struct Status {
     capabilities: Vec<String>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyParameters {
+    pub http_proxy: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -73,6 +78,8 @@ pub struct Configuration {
     #[serde(default = "bool::default")]
     pub init_can_fail: bool,
 
+    pub proxy: Option<ProxyParameters>,
+
     pub streaming: Option<StreamingParameters>,
 
     pub polling: Option<PollingParameters>,
@@ -104,6 +111,8 @@ async fn status() -> impl Responder {
             "tags".to_string(),
             "service-endpoints".to_string(),
             "context-type".to_string(),
+            "http-proxy".to_string(),
+            #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
             "secure-mode-hash".to_string(),
             "inline-context-all".to_string(),
             "anonymous-redaction".to_string(),
@@ -208,41 +217,61 @@ struct AppState {
     https_connector: HttpsConnector,
 }
 
-#[cfg(feature = "rustls")]
-type HttpsConnector = hyper_rustls::HttpsConnector<HttpConnector>;
-#[cfg(feature = "tls")]
-type HttpsConnector = hyper_tls::HttpsConnector<HttpConnector>;
+#[cfg(any(
+    feature = "hyper-rustls-native-roots",
+    feature = "hyper-rustls-webpki-roots"
+))]
+type HttpsConnector =
+    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+
+#[cfg(feature = "native-tls")]
+type HttpsConnector = hyper_tls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+
+#[cfg(not(any(
+    feature = "hyper-rustls-native-roots",
+    feature = "hyper-rustls-webpki-roots",
+    feature = "native-tls"
+)))]
+type HttpsConnector = hyper_util::client::legacy::connect::HttpConnector;
 
 #[actix_web::main]
+
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    #[cfg(not(any(feature = "tls", feature = "rustls")))]
-    {
-        compile_error!("one of the { \"tls\", \"rustls\" } features must be enabled");
-    }
-    #[cfg(all(feature = "tls", feature = "rustls"))]
-    {
-        compile_error!("only one of the { \"tls\", \"rustls\" } features can be enabled at a time");
-    }
-
     let (tx, rx) = mpsc::channel::<()>();
 
-    #[cfg(feature = "rustls")]
-    let connector = hyper_rustls::HttpsConnectorBuilder::new()
+    #[cfg(feature = "hyper-rustls-native-roots")]
+    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
         .with_native_roots()
+        .expect("Failed to load native root certificates")
         .https_or_http()
         .enable_http1()
         .enable_http2()
         .build();
 
-    #[cfg(feature = "tls")]
-    let connector = hyper_tls::HttpsConnector::new();
+    #[cfg(feature = "hyper-rustls-webpki-roots")]
+    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+
+    #[cfg(feature = "native-tls")]
+    let https_connector = hyper_tls::HttpsConnector::new();
+
+    #[cfg(not(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    )))]
+    let https_connector = hyper_util::client::legacy::connect::HttpConnector::new();
 
     let state = web::Data::new(AppState {
         counter: Mutex::new(0),
         client_entities: Mutex::new(HashMap::new()),
-        https_connector: connector,
+        https_connector,
     });
 
     let server = HttpServer::new(move || {

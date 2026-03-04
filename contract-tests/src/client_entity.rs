@@ -11,13 +11,15 @@ const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
 use launchdarkly_server_sdk::{
     ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
-    FlagDetailConfig, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
+    FlagDetailConfig, FlagFilter, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
     ServiceEndpointsBuilder, StreamingDataSourceBuilder,
 };
 
+#[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
+use crate::command_params::SecureModeHashResponse;
 use crate::command_params::{
     ContextBuildParams, ContextConvertParams, ContextParam, ContextResponse,
-    MigrationOperationResponse, MigrationVariationResponse, SecureModeHashResponse,
+    MigrationOperationResponse, MigrationVariationResponse,
 };
 use crate::HttpsConnector;
 use crate::{
@@ -37,6 +39,21 @@ impl ClientEntity {
         create_instance_params: CreateInstanceParams,
         connector: HttpsConnector,
     ) -> Result<Self, BuildError> {
+        let proxy = create_instance_params
+            .configuration
+            .proxy
+            .unwrap_or_default()
+            .http_proxy
+            .unwrap_or_default();
+        let mut transport_builder = launchdarkly_sdk_transport::HyperTransport::builder();
+        if !proxy.is_empty() {
+            transport_builder = transport_builder.proxy_url(proxy.clone());
+        }
+
+        // Create fresh transports for this client to avoid shared connection pool issues
+        let transport = transport_builder
+            .build_with_connector(connector.clone())
+            .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
 
@@ -79,7 +96,7 @@ impl ClientEntity {
             if let Some(delay) = streaming.initial_retry_delay_ms {
                 streaming_builder.initial_reconnect_delay(Duration::from_millis(delay));
             }
-            streaming_builder.https_connector(connector.clone());
+            streaming_builder.transport(transport.clone());
 
             config_builder = config_builder.data_source(&streaming_builder);
         } else if let Some(polling) = create_instance_params.configuration.polling {
@@ -91,15 +108,15 @@ impl ClientEntity {
             if let Some(delay) = polling.poll_interval_ms {
                 polling_builder.poll_interval(Duration::from_millis(delay));
             }
-            polling_builder.https_connector(connector.clone());
+            polling_builder.transport(transport.clone());
 
             config_builder = config_builder.data_source(&polling_builder);
         } else {
             // If we didn't specify streaming or polling, we fall back to basic streaming. The only
-            // customization we provide is the https connector to support testing multiple
-            // connectors.
+            // customization we provide is the transport to support testing multiple
+            // transport implementations.
             let mut streaming_builder = StreamingDataSourceBuilder::new();
-            streaming_builder.https_connector(connector.clone());
+            streaming_builder.transport(transport.clone());
             config_builder = config_builder.data_source(&streaming_builder);
         }
 
@@ -113,6 +130,7 @@ impl ClientEntity {
                 processor_builder.capacity(capacity);
             }
             processor_builder.all_attributes_private(events.all_attributes_private);
+            processor_builder.compress_events(false);
             if let Some(e) = events.enable_gzip {
                 processor_builder.compress_events(e);
             }
@@ -124,7 +142,7 @@ impl ClientEntity {
             if let Some(attributes) = events.global_private_attributes {
                 processor_builder.private_attributes(attributes);
             }
-            processor_builder.https_connector(connector.clone());
+            processor_builder.transport(transport);
             processor_builder.omit_anonymous_contexts(events.omit_anonymous_contexts);
 
             config_builder.event_processor(&processor_builder)
@@ -214,14 +232,17 @@ impl ClientEntity {
                     ContextResponse::from(Self::context_convert(params)),
                 )))
             }
+            #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
             "secureModeHash" => {
                 let params = command
                     .secure_mode_hash
                     .ok_or("secureModeHash params should be set")?;
+                let hash = self
+                    .client
+                    .secure_mode_hash(&params.context)
+                    .map_err(|e| e.to_string())?;
                 Ok(Some(CommandResponse::SecureModeHash(
-                    SecureModeHashResponse {
-                        result: self.client.secure_mode_hash(&params.context),
-                    },
+                    SecureModeHashResponse { result: hash },
                 )))
             }
             "migrationVariation" => {
@@ -551,7 +572,7 @@ impl ClientEntity {
         }
 
         if params.client_side_only {
-            config.client_side_only();
+            config.flag_filter(FlagFilter::CLIENT);
         }
 
         if params.details_only_for_tracked_flags {

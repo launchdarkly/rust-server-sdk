@@ -4,6 +4,7 @@ use crate::{
 };
 use chrono::DateTime;
 use crossbeam_channel::Sender;
+use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
 
 #[cfg(feature = "event-compression")]
@@ -13,12 +14,9 @@ use flate2::Compression;
 #[cfg(feature = "event-compression")]
 use std::io::Write;
 
+use bytes::Bytes;
 use futures::future::BoxFuture;
-use hyper::{client::connect::Connection, service::Service, Uri};
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    time::{sleep, Duration},
-};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 use super::event::OutputEvent;
@@ -27,6 +25,7 @@ pub struct EventSenderResult {
     pub(super) time_from_server: u128,
     pub(super) success: bool,
     pub(super) must_shutdown: bool,
+    pub(super) flush_signal: Option<Sender<()>>,
 }
 
 pub trait EventSender: Send + Sync {
@@ -34,14 +33,15 @@ pub trait EventSender: Send + Sync {
         &self,
         events: Vec<OutputEvent>,
         result_tx: Sender<EventSenderResult>,
+        flush_signal: Option<Sender<()>>,
     ) -> BoxFuture<'_, ()>;
 }
 
 #[derive(Clone)]
-pub struct HyperEventSender<C> {
-    url: hyper::Uri,
+pub struct HttpEventSender<T: HttpTransport> {
+    url: http::Uri,
     sdk_key: String,
-    http: hyper::Client<C>,
+    transport: T,
     default_headers: HashMap<&'static str, String>,
 
     // used with event-compression feature
@@ -49,16 +49,10 @@ pub struct HyperEventSender<C> {
     compress_events: bool,
 }
 
-impl<C> HyperEventSender<C>
-where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: HttpTransport> HttpEventSender<T> {
     pub fn new(
-        connector: C,
-        url: hyper::Uri,
+        transport: T,
+        url: http::Uri,
         sdk_key: &str,
         default_headers: HashMap<&'static str, String>,
         compress_events: bool,
@@ -66,13 +60,13 @@ where
         Self {
             url,
             sdk_key: sdk_key.to_owned(),
-            http: hyper::Client::builder().build(connector),
+            transport,
             default_headers,
             compress_events,
         }
     }
 
-    fn get_server_time_from_response<Body>(&self, response: &hyper::Response<Body>) -> u128 {
+    fn get_server_time_from_response<Body>(&self, response: &http::Response<Body>) -> u128 {
         let date_value = response
             .headers()
             .get("date")
@@ -88,17 +82,12 @@ where
     }
 }
 
-impl<C> EventSender for HyperEventSender<C>
-where
-    C: Service<Uri> + Clone + Send + Sync + 'static,
-    C::Response: Connection + AsyncRead + AsyncWrite + Send + Unpin,
-    C::Future: Send + Unpin + 'static,
-    C::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+impl<T: HttpTransport> EventSender for HttpEventSender<T> {
     fn send_event_data(
         &self,
         events: Vec<OutputEvent>,
         result_tx: Sender<EventSenderResult>,
+        flush_signal: Option<Sender<()>>,
     ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             let uuid = Uuid::new_v4();
@@ -139,7 +128,7 @@ where
                     sleep(Duration::from_secs(1)).await;
                 }
 
-                let mut request_builder = hyper::Request::builder()
+                let mut request_builder = http::Request::builder()
                     .uri(self.url.clone())
                     .method("POST")
                     .header("Content-Type", "application/json")
@@ -155,9 +144,12 @@ where
                     request_builder =
                         request_builder.header(*default_header.0, default_header.1.as_str());
                 }
-                let request = request_builder.body(hyper::Body::from(payload.clone()));
 
-                let result = self.http.request(request.unwrap()).await;
+                // Create request with Bytes body for transport
+                let body_bytes = Bytes::from(payload.clone());
+                let request = request_builder.body(Some(body_bytes)).unwrap();
+
+                let result = self.transport.request(request).await;
 
                 let response = match result {
                     Ok(response) => response,
@@ -171,6 +163,7 @@ where
                                 success: false,
                                 time_from_server: 0,
                                 must_shutdown: false,
+                                flush_signal,
                             })
                             .unwrap();
                         return;
@@ -182,6 +175,7 @@ where
                         success: true,
                         time_from_server: self.get_server_time_from_response(&response),
                         must_shutdown: false,
+                        flush_signal,
                     });
                     return;
                 }
@@ -192,6 +186,7 @@ where
                             success: false,
                             time_from_server: 0,
                             must_shutdown: true,
+                            flush_signal,
                         })
                         .unwrap();
                     return;
@@ -203,6 +198,7 @@ where
                     success: false,
                     time_from_server: 0,
                     must_shutdown: false,
+                    flush_signal,
                 })
                 .unwrap();
         })
@@ -227,7 +223,8 @@ impl EventSender for InMemoryEventSender {
         &self,
         events: Vec<OutputEvent>,
         sender: Sender<EventSenderResult>,
-    ) -> BoxFuture<()> {
+        flush_signal: Option<Sender<()>>,
+    ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             for event in events {
                 self.event_tx.send(event).unwrap();
@@ -238,6 +235,7 @@ impl EventSender for InMemoryEventSender {
                     time_from_server: 0,
                     success: true,
                     must_shutdown: true,
+                    flush_signal,
                 })
                 .unwrap();
         })
@@ -251,18 +249,18 @@ mod tests {
     use std::str::FromStr;
     use test_case::test_case;
 
-    #[test_case(hyper::StatusCode::CONTINUE, true)]
-    #[test_case(hyper::StatusCode::OK, true)]
-    #[test_case(hyper::StatusCode::MULTIPLE_CHOICES, true)]
-    #[test_case(hyper::StatusCode::BAD_REQUEST, true)]
-    #[test_case(hyper::StatusCode::UNAUTHORIZED, false)]
-    #[test_case(hyper::StatusCode::REQUEST_TIMEOUT, true)]
-    #[test_case(hyper::StatusCode::CONFLICT, false)]
-    #[test_case(hyper::StatusCode::TOO_MANY_REQUESTS, true)]
-    #[test_case(hyper::StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE, false)]
-    #[test_case(hyper::StatusCode::INTERNAL_SERVER_ERROR, true)]
-    fn can_determine_recoverable_errors(status: hyper::StatusCode, is_recoverable: bool) {
-        assert_eq!(is_recoverable, is_http_error_recoverable(status.as_u16()));
+    #[test_case(100, true; "100 CONTINUE is recoverable")]
+    #[test_case(200, true; "200 OK is recoverable")]
+    #[test_case(300, true; "300 MULTIPLE_CHOICES is recoverable")]
+    #[test_case(400, true; "400 BAD_REQUEST is recoverable")]
+    #[test_case(401, false; "401 UNAUTHORIZED is not recoverable")]
+    #[test_case(408, true; "408 REQUEST_TIMEOUT is recoverable")]
+    #[test_case(409, false; "409 CONFLICT is not recoverable")]
+    #[test_case(429, true; "429 TOO_MANY_REQUESTS is recoverable")]
+    #[test_case(431, false; "431 REQUEST_HEADER_FIELDS_TOO_LARGE is not recoverable")]
+    #[test_case(500, true; "500 INTERNAL_SERVER_ERROR is recoverable")]
+    fn can_determine_recoverable_errors(status: u16, is_recoverable: bool) {
+        assert_eq!(is_recoverable, is_http_error_recoverable(status));
     }
 
     #[tokio::test]
@@ -278,7 +276,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().unwrap();
         assert!(sender_result.success);
@@ -298,7 +296,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().expect("Failed to receive sender_result");
         assert!(!sender_result.success);
@@ -318,7 +316,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().expect("Failed to receive sender_result");
         assert!(!sender_result.success);
@@ -344,7 +342,7 @@ mod tests {
         let (tx, rx) = bounded::<EventSenderResult>(5);
         let event_sender = build_event_sender(server.url());
 
-        event_sender.send_event_data(vec![], tx).await;
+        event_sender.send_event_data(vec![], tx, None).await;
 
         let sender_result = rx.recv().expect("Failed to receive sender_result");
         assert!(sender_result.success);
@@ -352,12 +350,16 @@ mod tests {
         assert_eq!(sender_result.time_from_server, 1234567890000);
     }
 
-    fn build_event_sender(url: String) -> HyperEventSender<hyper::client::HttpConnector> {
+    fn build_event_sender(
+        url: String,
+    ) -> HttpEventSender<launchdarkly_sdk_transport::HyperTransport> {
         let url = format!("{}/bulk", &url);
-        let url = hyper::Uri::from_str(&url).expect("Failed parsing the mock server url");
+        let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
-        HyperEventSender::new(
-            hyper::client::HttpConnector::new(),
+        let transport = launchdarkly_sdk_transport::HyperTransport::new()
+            .expect("Failed to create HyperTransport");
+        HttpEventSender::new(
+            transport,
             url,
             "sdk-key",
             HashMap::<&str, String>::new(),

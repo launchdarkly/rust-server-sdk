@@ -1,5 +1,15 @@
 name: CI Workflow
-description: 'Shared CI workflow.'
+description: "Shared CI workflow."
+
+inputs:
+  cargo-flags:
+    description: "Flags to pass to cargo commands."
+    required: false
+    default: ""
+  cargo-test-flags:
+    description: "Flags to pass to cargo test commands."
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -10,8 +20,8 @@ runs:
 
     - name: Run tests
       shell: bash
-      run: cargo test -p launchdarkly-server-sdk
+      run: cargo test ${{ inputs.cargo-flags }} ${{ inputs.cargo-test-flags }} -p launchdarkly-server-sdk
 
     - name: Run clippy checks
       shell: bash
-      run: cargo clippy -p launchdarkly-server-sdk -- -D warnings
+      run: cargo clippy ${{ inputs.cargo-flags }} -p launchdarkly-server-sdk -- -D warnings

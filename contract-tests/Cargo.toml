@@ -9,18 +9,44 @@ license = "Apache-2.0"
 actix = "0.13.0"
 actix-web = "4.2.1"
 env_logger = "0.10.0"
+eventsource-client = { version = "0.17.0" }
+launchdarkly-sdk-transport = { version = "0.1.0" }
 log = "0.4.14"
 launchdarkly-server-sdk = { path = "../launchdarkly-server-sdk/", default-features = false, features = ["event-compression"]}
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = "1.0.73"
 futures = "0.3.12"
-hyper = { version = "0.14.19", features = ["client"] }
-hyper-rustls = { version = "0.24.1" , optional = true, features = ["http2"]}
-hyper-tls = { version = "0.5.0", optional = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring"], optional = true }
+hyper-tls = { version = "0.6.0", optional = true }
 reqwest = { version = "0.12.4", features = ["default", "blocking", "json"] }
 async-mutex = "1.4.0"
 
 [features]
-default = ["rustls"]
-rustls = ["hyper-rustls/http1", "hyper-rustls/http2", "launchdarkly-server-sdk/rustls"]
-tls = ["hyper-tls"]
+default = ["hyper", "crypto-aws-lc-rs"]
+
+crypto-aws-lc-rs = ["launchdarkly-server-sdk/crypto-aws-lc-rs"]
+crypto-openssl = ["launchdarkly-server-sdk/crypto-openssl"]
+
+hyper = [
+    "launchdarkly-sdk-transport/hyper",
+    "eventsource-client/hyper"
+]
+hyper-rustls-native-roots = [
+    "hyper",
+    "dep:hyper-rustls",
+    "launchdarkly-sdk-transport/hyper-rustls-native-roots",
+    "eventsource-client/hyper-rustls-native-roots"
+]
+hyper-rustls-webpki-roots = [
+    "hyper",
+    "dep:hyper-rustls",
+    "launchdarkly-sdk-transport/hyper-rustls-webpki-roots",
+    "eventsource-client/hyper-rustls-webpki-roots"
+]
+native-tls = [
+    "hyper",
+    "dep:hyper-tls",
+    "launchdarkly-sdk-transport/native-tls",
+    "eventsource-client/native-tls"
+]
