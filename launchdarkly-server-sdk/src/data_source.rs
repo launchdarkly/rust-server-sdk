@@ -142,11 +142,20 @@ impl DataSource for StreamingDataSource {
                                     }
                                 }
                             },
+                            Some(Err(es::Error::Eof)) => {
+                                // Clean end-of-stream from the server;
+                                // routine for streams that rotate connections.
+                                debug!("event stream eof, will reconnect");
+                                continue;
+                            },
                             Some(Err(e)) => {
-                                // The eventsource-client owns reconnection;
-                                // breaking here would drop this task and leave
-                                // the data source silently dysfunctional.
-                                warn!("recoverable error on event stream, will retry: {e:?}");
+                                // Keep polling. The eventsource-client will
+                                // either reconnect on the next poll or end
+                                // the stream (we'll observe that as `None`
+                                // on the next iteration). Breaking here
+                                // would drop this task and leave the data
+                                // source silently dysfunctional.
+                                warn!("error on event stream, will keep polling: {e:?}");
                                 continue;
                             },
                             None => {
@@ -455,6 +464,7 @@ mod tests {
             .await;
 
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        let init_outcome = Arc::new(Mutex::new(None::<bool>));
 
         let streaming = StreamingDataSource::new(
             &server.url(),
@@ -467,9 +477,12 @@ mod tests {
 
         let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));
 
+        let init_outcome_clone = init_outcome.clone();
         streaming.subscribe(
             data_store,
-            Arc::new(move |_success| {}),
+            Arc::new(move |success| {
+                *init_outcome_clone.lock().unwrap() = Some(success);
+            }),
             shutdown_tx.subscribe(),
         );
 
@@ -478,6 +491,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let _ = shutdown_tx.send(());
 
+        // While the eventsource-client is still actively reconnecting, the
+        // SDK should treat the situation as transient and not signal init
+        // failure. (Permanent failure is exercised by the 401 test.)
+        assert_eq!(
+            *init_outcome.lock().unwrap(),
+            None,
+            "init_complete should not be called while the stream is still retrying"
+        );
         mock.assert();
     }
 
