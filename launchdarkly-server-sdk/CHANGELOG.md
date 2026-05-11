@@ -2,6 +2,13 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.0.3](https://github.com/launchdarkly/rust-server-sdk/compare/3.0.2...3.0.3) (2026-05-11)
+
+
+### Bug Fixes
+
+* keep StreamingDataSource alive on non-Eof stream errors ([#168](https://github.com/launchdarkly/rust-server-sdk/issues/168)) ([b91a9ca](https://github.com/launchdarkly/rust-server-sdk/commit/b91a9caaca9941c462e5d854197d9556e6503d39))
+
 ## [3.0.2](https://github.com/launchdarkly/rust-server-sdk/compare/3.0.1...3.0.2) (2026-04-20)
 
 
