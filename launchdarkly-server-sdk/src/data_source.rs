@@ -149,13 +149,13 @@ impl DataSource for StreamingDataSource {
                                 continue;
                             },
                             Some(Err(e)) => {
-                                // Keep polling. The eventsource-client will
-                                // either reconnect on the next poll or end
-                                // the stream (we'll observe that as `None`
-                                // on the next iteration). Breaking here
-                                // would drop this task and leave the data
-                                // source silently dysfunctional.
-                                warn!("error on event stream, will keep polling: {e:?}");
+                                // Continue. The eventsource-client will
+                                // either reconnect on its own or end the
+                                // stream (we'll observe that as `None` on
+                                // the next iteration). Breaking here would
+                                // drop this task and leave the data source
+                                // silently dysfunctional.
+                                warn!("error on event stream, continuing: {e:?}");
                                 continue;
                             },
                             None => {
