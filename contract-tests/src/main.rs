@@ -122,6 +122,7 @@ async fn status() -> impl Responder {
             "client-prereq-events".to_string(),
             "event-gzip".to_string(),
             "optional-event-gzip".to_string(),
+            "instance-id".to_string(),
         ],
     })
 }

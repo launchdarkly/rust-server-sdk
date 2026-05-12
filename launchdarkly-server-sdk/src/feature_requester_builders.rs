@@ -1,5 +1,5 @@
 use crate::feature_requester::{FeatureRequester, HttpFeatureRequester};
-use crate::LAUNCHDARKLY_TAGS_HEADER;
+use crate::{LAUNCHDARKLY_INSTANCE_ID_HEADER, LAUNCHDARKLY_TAGS_HEADER};
 use http::Uri;
 use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
@@ -27,15 +27,17 @@ pub trait FeatureRequesterFactory: Send {
 pub struct HttpFeatureRequesterBuilder<T: HttpTransport> {
     url: String,
     sdk_key: String,
+    instance_id: String,
     transport: T,
 }
 
 impl<T: HttpTransport> HttpFeatureRequesterBuilder<T> {
-    pub fn new(url: &str, sdk_key: &str, transport: T) -> Self {
+    pub fn new(url: &str, sdk_key: &str, instance_id: &str, transport: T) -> Self {
         Self {
             transport,
             url: url.into(),
             sdk_key: sdk_key.into(),
+            instance_id: instance_id.into(),
         }
     }
 }
@@ -49,6 +51,7 @@ impl<T: HttpTransport> FeatureRequesterFactory for HttpFeatureRequesterBuilder<T
         if let Some(tags) = tags {
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
+        default_headers.insert(LAUNCHDARKLY_INSTANCE_ID_HEADER, self.instance_id.clone());
 
         let url = Uri::from_str(url.as_str())
             .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
@@ -73,6 +76,7 @@ mod tests {
         let builder = HttpFeatureRequesterBuilder::new(
             "This is clearly not a valid URL",
             "sdk-key",
+            "test-instance-id",
             transport,
         );
         let result = builder.build(None);
