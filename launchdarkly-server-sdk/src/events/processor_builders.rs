@@ -9,7 +9,7 @@ use launchdarkly_server_sdk_evaluation::Reference;
 use thiserror::Error;
 
 use crate::events::sender::HttpEventSender;
-use crate::{service_endpoints, LAUNCHDARKLY_TAGS_HEADER};
+use crate::{service_endpoints, LAUNCHDARKLY_INSTANCE_ID_HEADER, LAUNCHDARKLY_TAGS_HEADER};
 use launchdarkly_sdk_transport::HttpTransport;
 
 use super::processor::{
@@ -46,6 +46,7 @@ pub trait EventProcessorFactory {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
+        instance_id: &str,
     ) -> Result<Arc<dyn EventProcessor>, BuildError>;
     fn to_owned(&self) -> Box<dyn EventProcessorFactory>;
 }
@@ -89,6 +90,7 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
+        instance_id: &str,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         let url_string = format!("{}/bulk", endpoints.events_base_url());
 
@@ -97,6 +99,7 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
         if let Some(tags) = tags {
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
+        default_headers.insert(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id.to_string());
 
         let event_sender_result: Result<Arc<dyn EventSender>, BuildError> =
             // NOTE: This would only be possible under unit testing conditions.
@@ -298,6 +301,7 @@ impl EventProcessorFactory for NullEventProcessorBuilder {
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
         _: Option<String>,
+        _: &str,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         Ok(Arc::new(NullEventProcessor::new()))
     }
@@ -419,7 +423,51 @@ mod tests {
 
         let builder = EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         let processor = builder
-            .build(&service_endpoints, "sdk-key", tag)
+            .build(&service_endpoints, "sdk-key", tag, "test-instance-id")
+            .expect("Processor failed to build");
+
+        let event_factory = EventFactory::new(false);
+
+        let context = ContextBuilder::new("bob")
+            .build()
+            .expect("Failed to create context");
+        let identify_event = event_factory.new_identify(context);
+
+        processor.send(identify_event);
+        processor.close();
+
+        mock.assert()
+    }
+
+    // Verifies that event POSTs carry the X-LaunchDarkly-Instance-Id header. The Go reference
+    // attaches the per-instance GUID at the default-headers layer so streaming, polling, and
+    // events all inherit it; this is the events-channel half of that contract.
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
+    #[test]
+    fn processor_sends_instance_id_header() {
+        let mut server = mockito::Server::new();
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let mock = server
+            .mock("POST", "/bulk")
+            .with_status(200)
+            .expect_at_least(1)
+            .match_header(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id.as_str())
+            .create();
+
+        let service_endpoints = ServiceEndpointsBuilder::new()
+            .events_base_url(&server.url())
+            .polling_base_url(&server.url())
+            .streaming_base_url(&server.url())
+            .build()
+            .expect("Service endpoints failed to be created");
+
+        let builder = EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
+        let processor = builder
+            .build(&service_endpoints, "sdk-key", None, &instance_id)
             .expect("Processor failed to build");
 
         let event_factory = EventFactory::new(false);

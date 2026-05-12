@@ -74,6 +74,12 @@ mod version;
 static LAUNCHDARKLY_EVENT_SCHEMA_HEADER: &str = "x-launchdarkly-event-schema";
 static LAUNCHDARKLY_PAYLOAD_ID_HEADER: &str = "x-launchdarkly-payload-id";
 static LAUNCHDARKLY_TAGS_HEADER: &str = "x-launchdarkly-tags";
+// X-LaunchDarkly-Instance-Id identifies this SDK instance for the purpose of estimating
+// server-connection-minutes when polling. It contains a v4 UUID that is generated once
+// per SDK instance and remains constant for the lifetime of the client.
+//
+// See: sdk-specs / SCMP-server-connection-minutes-polling.
+static LAUNCHDARKLY_INSTANCE_ID_HEADER: &str = "x-launchdarkly-instance-id";
 static CURRENT_EVENT_SCHEMA: &str = "4";
 
 static USER_AGENT: LazyLock<String> =

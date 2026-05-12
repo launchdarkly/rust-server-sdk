@@ -174,6 +174,7 @@ impl DataSourceFactory for TestData {
         _endpoints: &service_endpoints::ServiceEndpoints,
         _sdk_key: &str,
         _tags: Option<String>,
+        _instance_id: &str,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         Ok(Arc::new(TestDataSource {
             inner: self.inner.clone(),
@@ -240,7 +241,9 @@ mod tests {
     fn subscribe_store(td: &TestData, store: &Arc<RwLock<dyn DataStore>>) -> broadcast::Sender<()> {
         let factory: &dyn DataSourceFactory = td;
         let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
-        let ds = factory.build(&endpoints, "fake-key", None).unwrap();
+        let ds = factory
+            .build(&endpoints, "fake-key", None, "test-instance-id")
+            .unwrap();
 
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         ds.subscribe(store.clone(), Arc::new(|_| {}), shutdown_rx);
@@ -343,7 +346,9 @@ mod tests {
 
         let factory: &dyn DataSourceFactory = &td;
         let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
-        let ds = factory.build(&endpoints, "fake-key", None).unwrap();
+        let ds = factory
+            .build(&endpoints, "fake-key", None, "test-instance-id")
+            .unwrap();
 
         let initialized = Arc::new(AtomicBool::new(false));
         let init_clone = initialized.clone();
@@ -430,7 +435,9 @@ mod tests {
 
         let factory: &dyn DataSourceFactory = &td;
         let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
-        let ds = factory.build(&endpoints, "key", None).unwrap();
+        let ds = factory
+            .build(&endpoints, "key", None, "test-instance-id")
+            .unwrap();
 
         let store = make_store();
         let (_tx, rx) = broadcast::channel(1);
@@ -447,7 +454,9 @@ mod tests {
         td.update(FlagBuilder::new("shared-state"));
 
         let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
-        let ds = owned.build(&endpoints, "key", None).unwrap();
+        let ds = owned
+            .build(&endpoints, "key", None, "test-instance-id")
+            .unwrap();
 
         let store = make_store();
         let (_tx, rx) = broadcast::channel(1);

@@ -28,6 +28,7 @@ pub trait DataSourceFactory {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
+        instance_id: &str,
     ) -> Result<Arc<dyn DataSource>, BuildError>;
     fn to_owned(&self) -> Box<dyn DataSourceFactory>;
 }
@@ -90,6 +91,7 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
+        instance_id: &str,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let data_source_result = match &self.transport {
             #[cfg(any(
@@ -109,6 +111,7 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
                     sdk_key,
                     self.initial_reconnect_delay,
                     &tags,
+                    instance_id,
                     transport,
                 ))
             }
@@ -125,6 +128,7 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
                 sdk_key,
                 self.initial_reconnect_delay,
                 &tags,
+                instance_id,
                 transport.clone(),
             )),
         };
@@ -159,6 +163,7 @@ impl DataSourceFactory for NullDataSourceBuilder {
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
         _: Option<String>,
+        _: &str,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         Ok(Arc::new(NullDataSource::new()))
     }
@@ -259,6 +264,7 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
+        instance_id: &str,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         let feature_requester_builder: Result<Box<dyn FeatureRequesterFactory>, BuildError> =
             match &self.transport {
@@ -278,6 +284,7 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
                     Ok(Box::new(HttpFeatureRequesterBuilder::new(
                         endpoints.polling_base_url(),
                         sdk_key,
+                        instance_id,
                         transport,
                     )))
                 }
@@ -292,6 +299,7 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
                 Some(transport) => Ok(Box::new(HttpFeatureRequesterBuilder::new(
                     endpoints.polling_base_url(),
                     sdk_key,
+                    instance_id,
                     transport.clone(),
                 ))),
             };
@@ -344,6 +352,7 @@ impl DataSourceFactory for MockDataSourceBuilder {
         _endpoints: &service_endpoints::ServiceEndpoints,
         _sdk_key: &str,
         _tags: Option<String>,
+        _instance_id: &str,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
         Ok(self.data_source.as_ref().unwrap().clone())
     }
@@ -389,7 +398,8 @@ mod tests {
             .build(
                 &crate::ServiceEndpointsBuilder::new().build().unwrap(),
                 "test",
-                None
+                None,
+                "test-instance-id",
             )
             .is_ok());
     }
