@@ -175,21 +175,18 @@ impl Client {
         }
 
         let tags = config.application_tag();
-        let instance_id = config.instance_id();
+        let instance_id = config.instance_id().to_string();
 
         let endpoints = config.service_endpoints_builder().build()?;
-        let event_processor = config.event_processor_builder().build(
-            &endpoints,
-            config.sdk_key(),
-            tags.clone(),
-            instance_id,
-        )?;
-        let data_source = config.data_source_builder().build(
-            &endpoints,
-            config.sdk_key(),
-            tags.clone(),
-            instance_id,
-        )?;
+
+        let mut event_processor_builder = config.event_processor_builder().to_owned();
+        event_processor_builder.set_instance_id(instance_id.clone());
+        let event_processor =
+            event_processor_builder.build(&endpoints, config.sdk_key(), tags.clone())?;
+
+        let mut data_source_builder = config.data_source_builder().to_owned();
+        data_source_builder.set_instance_id(instance_id);
+        let data_source = data_source_builder.build(&endpoints, config.sdk_key(), tags.clone())?;
         let data_store = config.data_store_builder().build()?;
 
         let events_default = EventsScope {

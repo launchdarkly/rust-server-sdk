@@ -75,7 +75,7 @@ impl StreamingDataSource {
         sdk_key: &str,
         initial_reconnect_delay: Duration,
         tags: &Option<String>,
-        instance_id: &str,
+        instance_id: Option<&str>,
         transport: T,
     ) -> std::result::Result<Self, es::Error> {
         let stream_url = format!("{base_url}/all");
@@ -90,8 +90,11 @@ impl StreamingDataSource {
                     .build(),
             )
             .header("Authorization", sdk_key)?
-            .header("User-Agent", &crate::USER_AGENT)?
-            .header(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id)?;
+            .header("User-Agent", &crate::USER_AGENT)?;
+
+        if let Some(instance_id) = instance_id {
+            client_builder = client_builder.header(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id)?;
+        }
 
         if let Some(tags) = tags {
             client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
@@ -411,7 +414,7 @@ mod tests {
             "sdk-key",
             Duration::from_secs(0),
             &tag,
-            "test-instance-id",
+            None,
             launchdarkly_sdk_transport::HyperTransport::new()
                 .expect("Failed to create streaming data source"),
         )
@@ -466,12 +469,7 @@ mod tests {
 
         let transport = launchdarkly_sdk_transport::HyperTransport::new()
             .expect("Failed to create transport for polling data source");
-        let hyper_builder = HttpFeatureRequesterBuilder::new(
-            &server.url(),
-            "sdk-key",
-            "test-instance-id",
-            transport,
-        );
+        let hyper_builder = HttpFeatureRequesterBuilder::new(&server.url(), "sdk-key", transport);
 
         let polling = PollingDataSource::new(
             Arc::new(Mutex::new(Box::new(hyper_builder))),
@@ -534,7 +532,7 @@ mod tests {
             "sdk-key",
             Duration::from_secs(0),
             &None,
-            &instance_id,
+            Some(&instance_id),
             launchdarkly_sdk_transport::HyperTransport::new()
                 .expect("Failed to create streaming data source"),
         )
@@ -591,8 +589,8 @@ mod tests {
         let transport = launchdarkly_sdk_transport::HyperTransport::new()
             .expect("Failed to create transport for polling data source");
         let instance_id = uuid::Uuid::new_v4().to_string();
-        let hyper_builder =
-            HttpFeatureRequesterBuilder::new(&server.url(), "sdk-key", &instance_id, transport);
+        let hyper_builder = HttpFeatureRequesterBuilder::new(&server.url(), "sdk-key", transport)
+            .with_instance_id(&instance_id);
 
         let polling = PollingDataSource::new(
             Arc::new(Mutex::new(Box::new(hyper_builder))),

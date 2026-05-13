@@ -46,8 +46,15 @@ pub trait EventProcessorFactory {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
-        instance_id: &str,
     ) -> Result<Arc<dyn EventProcessor>, BuildError>;
+
+    /// Sets the per-SDK-instance identifier used to populate the
+    /// `X-LaunchDarkly-Instance-Id` header on outbound requests. LD-owned builders override
+    /// this to stamp the header on event posts. External implementors of this trait may
+    /// ignore this — the default no-op is correct unless the implementor constructs HTTP
+    /// clients that talk to LaunchDarkly's API.
+    fn set_instance_id(&mut self, _instance_id: String) {}
+
     fn to_owned(&self) -> Box<dyn EventProcessorFactory>;
 }
 
@@ -81,6 +88,7 @@ pub struct EventProcessorBuilder<T: HttpTransport = launchdarkly_sdk_transport::
     transport: Option<T>,
     omit_anonymous_contexts: bool,
     compress_events: bool,
+    instance_id: Option<String>,
     // diagnostic_recording_interval: Duration
 }
 
@@ -90,7 +98,6 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
         endpoints: &service_endpoints::ServiceEndpoints,
         sdk_key: &str,
         tags: Option<String>,
-        instance_id: &str,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         let url_string = format!("{}/bulk", endpoints.events_base_url());
 
@@ -99,7 +106,9 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
         if let Some(tags) = tags {
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
-        default_headers.insert(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id.to_string());
+        if let Some(instance_id) = &self.instance_id {
+            default_headers.insert(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id.clone());
+        }
 
         let event_sender_result: Result<Arc<dyn EventSender>, BuildError> =
             // NOTE: This would only be possible under unit testing conditions.
@@ -162,6 +171,10 @@ impl<T: HttpTransport> EventProcessorFactory for EventProcessorBuilder<T> {
         Ok(Arc::new(events_processor))
     }
 
+    fn set_instance_id(&mut self, instance_id: String) {
+        self.instance_id = Some(instance_id);
+    }
+
     fn to_owned(&self) -> Box<dyn EventProcessorFactory> {
         Box::new(self.clone())
     }
@@ -181,6 +194,7 @@ impl<T: HttpTransport> EventProcessorBuilder<T> {
             private_attributes: HashSet::new(),
             omit_anonymous_contexts: false,
             transport: None,
+            instance_id: None,
             #[cfg(feature = "event-compression")]
             compress_events: true,
             #[cfg(not(feature = "event-compression"))]
@@ -301,7 +315,6 @@ impl EventProcessorFactory for NullEventProcessorBuilder {
         _: &service_endpoints::ServiceEndpoints,
         _: &str,
         _: Option<String>,
-        _: &str,
     ) -> Result<Arc<dyn EventProcessor>, BuildError> {
         Ok(Arc::new(NullEventProcessor::new()))
     }
@@ -423,7 +436,7 @@ mod tests {
 
         let builder = EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
         let processor = builder
-            .build(&service_endpoints, "sdk-key", tag, "test-instance-id")
+            .build(&service_endpoints, "sdk-key", tag)
             .expect("Processor failed to build");
 
         let event_factory = EventFactory::new(false);
@@ -439,9 +452,8 @@ mod tests {
         mock.assert()
     }
 
-    // Verifies that event POSTs carry the X-LaunchDarkly-Instance-Id header. The Go reference
-    // attaches the per-instance GUID at the default-headers layer so streaming, polling, and
-    // events all inherit it; this is the events-channel half of that contract.
+    // Verifies that event POSTs carry the X-LaunchDarkly-Instance-Id header when one has been
+    // injected via the trait's set_instance_id setter (the path Client::build uses).
     #[cfg(any(
         feature = "hyper-rustls-native-roots",
         feature = "hyper-rustls-webpki-roots",
@@ -465,9 +477,11 @@ mod tests {
             .build()
             .expect("Service endpoints failed to be created");
 
-        let builder = EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
+        let mut builder =
+            EventProcessorBuilder::<launchdarkly_sdk_transport::HyperTransport>::new();
+        builder.set_instance_id(instance_id.clone());
         let processor = builder
-            .build(&service_endpoints, "sdk-key", None, &instance_id)
+            .build(&service_endpoints, "sdk-key", None)
             .expect("Processor failed to build");
 
         let event_factory = EventFactory::new(false);
