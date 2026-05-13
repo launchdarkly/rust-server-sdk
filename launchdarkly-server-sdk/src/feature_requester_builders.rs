@@ -27,18 +27,26 @@ pub trait FeatureRequesterFactory: Send {
 pub struct HttpFeatureRequesterBuilder<T: HttpTransport> {
     url: String,
     sdk_key: String,
-    instance_id: String,
+    instance_id: Option<String>,
     transport: T,
 }
 
 impl<T: HttpTransport> HttpFeatureRequesterBuilder<T> {
-    pub fn new(url: &str, sdk_key: &str, instance_id: &str, transport: T) -> Self {
+    pub fn new(url: &str, sdk_key: &str, transport: T) -> Self {
         Self {
             transport,
             url: url.into(),
             sdk_key: sdk_key.into(),
-            instance_id: instance_id.into(),
+            instance_id: None,
         }
+    }
+
+    /// Sets the per-SDK-instance identifier that will be sent on outbound polling requests as
+    /// the `X-LaunchDarkly-Instance-Id` header. This is set by the SDK at client construction
+    /// time and is not part of the public API surface of the polling data source.
+    pub fn with_instance_id(mut self, instance_id: &str) -> Self {
+        self.instance_id = Some(instance_id.into());
+        self
     }
 }
 
@@ -51,7 +59,9 @@ impl<T: HttpTransport> FeatureRequesterFactory for HttpFeatureRequesterBuilder<T
         if let Some(tags) = tags {
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
         }
-        default_headers.insert(LAUNCHDARKLY_INSTANCE_ID_HEADER, self.instance_id.clone());
+        if let Some(instance_id) = &self.instance_id {
+            default_headers.insert(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id.clone());
+        }
 
         let url = Uri::from_str(url.as_str())
             .map_err(|_| BuildError::InvalidConfig("Invalid base url provided".into()))?;
@@ -76,7 +86,6 @@ mod tests {
         let builder = HttpFeatureRequesterBuilder::new(
             "This is clearly not a valid URL",
             "sdk-key",
-            "test-instance-id",
             transport,
         );
         let result = builder.build(None);
