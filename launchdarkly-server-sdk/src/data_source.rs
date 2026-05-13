@@ -3,7 +3,7 @@ use crate::feature_requester::FeatureRequesterError;
 use crate::feature_requester_builders::FeatureRequesterFactory;
 use crate::reqwest::is_http_error_recoverable;
 use crate::stores::store::{DataStore, UpdateError};
-use crate::LAUNCHDARKLY_TAGS_HEADER;
+use crate::{LAUNCHDARKLY_INSTANCE_ID_HEADER, LAUNCHDARKLY_TAGS_HEADER};
 use es::{Client, ClientBuilder, ReconnectOptionsBuilder};
 use eventsource_client as es;
 use futures::StreamExt;
@@ -75,6 +75,7 @@ impl StreamingDataSource {
         sdk_key: &str,
         initial_reconnect_delay: Duration,
         tags: &Option<String>,
+        instance_id: Option<&str>,
         transport: T,
     ) -> std::result::Result<Self, es::Error> {
         let stream_url = format!("{base_url}/all");
@@ -90,6 +91,10 @@ impl StreamingDataSource {
             )
             .header("Authorization", sdk_key)?
             .header("User-Agent", &crate::USER_AGENT)?;
+
+        if let Some(instance_id) = instance_id {
+            client_builder = client_builder.header(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id)?;
+        }
 
         if let Some(tags) = tags {
             client_builder = client_builder.header(LAUNCHDARKLY_TAGS_HEADER, tags)?;
@@ -384,7 +389,15 @@ mod tests {
 
     use super::{DataSource, PollingDataSource, StreamingDataSource};
     use crate::feature_requester_builders::HttpFeatureRequesterBuilder;
-    use crate::{stores::store::InMemoryDataStore, LAUNCHDARKLY_TAGS_HEADER};
+    use crate::{
+        stores::store::InMemoryDataStore, LAUNCHDARKLY_INSTANCE_ID_HEADER, LAUNCHDARKLY_TAGS_HEADER,
+    };
+
+    // Matches lowercased canonical UUID v4 format, e.g.
+    // "550e8400-e29b-41d4-a716-446655440000". The third group must start with "4" (UUID
+    // version) and the fourth must start with one of 8/9/a/b (variant 10x).
+    const UUID_V4_REGEX: &str =
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 
     #[test_case(Some("application-id/abc:application-sha/xyz".into()), "application-id/abc:application-sha/xyz")]
     #[test_case(None, Matcher::Missing)]
@@ -411,6 +424,7 @@ mod tests {
             "sdk-key",
             Duration::from_secs(0),
             &tag,
+            None,
             launchdarkly_sdk_transport::HyperTransport::new()
                 .expect("Failed to create streaming data source"),
         )
@@ -580,6 +594,127 @@ mod tests {
             Arc::new(Mutex::new(Box::new(hyper_builder))),
             Duration::from_secs(10),
             tag,
+        );
+
+        let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+
+        let init_state = initialized.clone();
+        polling.subscribe(
+            data_store,
+            Arc::new(move |success| init_state.store(success, Ordering::SeqCst)),
+            shutdown_tx.subscribe(),
+        );
+
+        let mut attempts = 0;
+        loop {
+            if initialized.load(Ordering::SeqCst) {
+                break;
+            }
+
+            attempts += 1;
+            if attempts > 10 {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = shutdown_tx.send(());
+
+        mock.assert()
+    }
+
+    // Asserts that streaming requests carry the X-LaunchDarkly-Instance-Id header, that its
+    // value matches the value passed in, and that a UUID-v4-shaped value is accepted (this
+    // mirrors how the value is generated in ConfigBuilder::build).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn streaming_source_passes_along_instance_id_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/all")
+            .with_status(200)
+            .with_body("event:one\ndata:One\n\n")
+            .expect_at_least(1)
+            .match_header(
+                LAUNCHDARKLY_INSTANCE_ID_HEADER,
+                Matcher::Regex(UUID_V4_REGEX.into()),
+            )
+            .create_async()
+            .await;
+
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        let initialized = Arc::new(AtomicBool::new(false));
+
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let streaming = StreamingDataSource::new(
+            &server.url(),
+            "sdk-key",
+            Duration::from_secs(0),
+            &None,
+            Some(&instance_id),
+            launchdarkly_sdk_transport::HyperTransport::new()
+                .expect("Failed to create streaming data source"),
+        )
+        .unwrap();
+
+        let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+
+        let init_state = initialized.clone();
+        streaming.subscribe(
+            data_store,
+            Arc::new(move |success| init_state.store(success, Ordering::SeqCst)),
+            shutdown_tx.subscribe(),
+        );
+
+        let mut attempts = 0;
+        loop {
+            if initialized.load(Ordering::SeqCst) {
+                break;
+            }
+
+            attempts += 1;
+            if attempts > 10 {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = shutdown_tx.send(());
+        mock.assert()
+    }
+
+    // Asserts that polling requests carry the X-LaunchDarkly-Instance-Id header. The polling
+    // feature requester is what actually issues the HTTP request, so this is the level at
+    // which the spec's "every polling request must carry the header" requirement is verified.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn polling_source_passes_along_instance_id_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/sdk/latest-all")
+            .with_status(200)
+            .with_body("{}")
+            .expect_at_least(1)
+            .match_header(
+                LAUNCHDARKLY_INSTANCE_ID_HEADER,
+                Matcher::Regex(UUID_V4_REGEX.into()),
+            )
+            .create_async()
+            .await;
+
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        let initialized = Arc::new(AtomicBool::new(false));
+
+        let transport = launchdarkly_sdk_transport::HyperTransport::new()
+            .expect("Failed to create transport for polling data source");
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let hyper_builder = HttpFeatureRequesterBuilder::new(&server.url(), "sdk-key", transport)
+            .with_instance_id(&instance_id);
+
+        let polling = PollingDataSource::new(
+            Arc::new(Mutex::new(Box::new(hyper_builder))),
+            Duration::from_secs(10),
+            None,
         );
 
         let data_store = Arc::new(RwLock::new(InMemoryDataStore::new()));

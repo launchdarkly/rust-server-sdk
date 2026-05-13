@@ -1,5 +1,5 @@
 use crate::feature_requester::{FeatureRequester, HttpFeatureRequester};
-use crate::LAUNCHDARKLY_TAGS_HEADER;
+use crate::{LAUNCHDARKLY_INSTANCE_ID_HEADER, LAUNCHDARKLY_TAGS_HEADER};
 use http::Uri;
 use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
@@ -27,6 +27,7 @@ pub trait FeatureRequesterFactory: Send {
 pub struct HttpFeatureRequesterBuilder<T: HttpTransport> {
     url: String,
     sdk_key: String,
+    instance_id: Option<String>,
     transport: T,
 }
 
@@ -36,7 +37,16 @@ impl<T: HttpTransport> HttpFeatureRequesterBuilder<T> {
             transport,
             url: url.into(),
             sdk_key: sdk_key.into(),
+            instance_id: None,
         }
+    }
+
+    /// Sets the per-SDK-instance identifier that will be sent on outbound polling requests as
+    /// the `X-LaunchDarkly-Instance-Id` header. This is set by the SDK at client construction
+    /// time and is not part of the public API surface of the polling data source.
+    pub fn with_instance_id(mut self, instance_id: &str) -> Self {
+        self.instance_id = Some(instance_id.into());
+        self
     }
 }
 
@@ -48,6 +58,9 @@ impl<T: HttpTransport> FeatureRequesterFactory for HttpFeatureRequesterBuilder<T
 
         if let Some(tags) = tags {
             default_headers.insert(LAUNCHDARKLY_TAGS_HEADER, tags);
+        }
+        if let Some(instance_id) = &self.instance_id {
+            default_headers.insert(LAUNCHDARKLY_INSTANCE_ID_HEADER, instance_id.clone());
         }
 
         let url = Uri::from_str(url.as_str())

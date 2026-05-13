@@ -138,6 +138,7 @@ pub struct Config {
     data_source_builder: Box<dyn DataSourceFactory>,
     event_processor_builder: Box<dyn EventProcessorFactory>,
     application_tag: Option<String>,
+    instance_id: String,
     offline: bool,
     daemon_mode: bool,
 }
@@ -181,6 +182,13 @@ impl Config {
     /// Returns the tag builder if provided
     pub fn application_tag(&self) -> &Option<String> {
         &self.application_tag
+    }
+
+    /// Returns the per-SDK-instance identifier. This is a v4 UUID, generated once when the
+    /// [Config] is built, that is included in the `X-LaunchDarkly-Instance-Id` HTTP header
+    /// on outbound requests for the lifetime of the SDK instance.
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 }
 
@@ -381,6 +389,13 @@ impl ConfigBuilder {
             _ => None,
         };
 
+        // Per SCMP-server-connection-minutes-polling, every polling request must carry a
+        // per-SDK-instance v4 UUID. We generate it once here, store it on Config, and pass it
+        // into the data source, feature requester, and event processor so that streaming,
+        // polling, and event requests all carry the same stable identifier for the lifetime
+        // of this client.
+        let instance_id = uuid::Uuid::new_v4().to_string();
+
         Ok(Config {
             sdk_key: self.sdk_key,
             service_endpoints_builder,
@@ -388,6 +403,7 @@ impl ConfigBuilder {
             data_source_builder,
             event_processor_builder,
             application_tag,
+            instance_id,
             offline: self.offline,
             daemon_mode: self.daemon_mode,
         })
@@ -429,6 +445,50 @@ mod tests {
         let config = builder.build().expect("config should build");
 
         assert_eq!(None, config.application_tag);
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
+    fn instance_id_is_a_uuid_v4() {
+        let config = ConfigBuilder::new("sdk-key")
+            .build()
+            .expect("config should build");
+
+        let parsed = uuid::Uuid::parse_str(config.instance_id())
+            .expect("instance id should be a parseable UUID");
+        assert_eq!(
+            uuid::Version::Random,
+            parsed.get_version().expect("uuid should have a version"),
+            "instance id must be UUID v4"
+        );
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
+    fn instance_id_is_unique_per_config() {
+        // Each call to ConfigBuilder::build represents a new SDK instance; each must get its own
+        // GUID so connection-minutes accounting on the server side can distinguish them.
+        let c1 = ConfigBuilder::new("sdk-key")
+            .build()
+            .expect("config should build");
+        let c2 = ConfigBuilder::new("sdk-key")
+            .build()
+            .expect("config should build");
+        assert!(!c1.instance_id().is_empty());
+        assert!(!c2.instance_id().is_empty());
+        assert_ne!(
+            c1.instance_id(),
+            c2.instance_id(),
+            "each SDK instance should generate its own instance id"
+        );
     }
 
     #[test_case("id", "version", Some("application-id/id application-version/version".to_string()))]
