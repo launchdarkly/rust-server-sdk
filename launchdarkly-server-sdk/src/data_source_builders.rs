@@ -29,6 +29,14 @@ pub trait DataSourceFactory {
         sdk_key: &str,
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError>;
+
+    /// Sets the per-SDK-instance identifier used to populate the
+    /// `X-LaunchDarkly-Instance-Id` header on outbound requests. LD-owned builders override
+    /// this to stamp the header on streaming, polling, and event requests. External
+    /// implementors of this trait may ignore this — the default no-op is correct unless the
+    /// implementor constructs HTTP clients that talk to LaunchDarkly's API.
+    fn set_instance_id(&mut self, _instance_id: String) {}
+
     fn to_owned(&self) -> Box<dyn DataSourceFactory>;
 }
 
@@ -55,6 +63,7 @@ pub trait DataSourceFactory {
 pub struct StreamingDataSourceBuilder<T: launchdarkly_sdk_transport::HttpTransport> {
     initial_reconnect_delay: Duration,
     transport: Option<T>,
+    instance_id: Option<String>,
 }
 
 impl<T: launchdarkly_sdk_transport::HttpTransport> StreamingDataSourceBuilder<T> {
@@ -63,6 +72,7 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> StreamingDataSourceBuilder<T>
         Self {
             initial_reconnect_delay: DEFAULT_INITIAL_RECONNECT_DELAY,
             transport: None,
+            instance_id: None,
         }
     }
 
@@ -91,6 +101,7 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
         sdk_key: &str,
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
+        let instance_id = self.instance_id.as_deref();
         let data_source_result = match &self.transport {
             #[cfg(any(
                 feature = "hyper-rustls-native-roots",
@@ -109,6 +120,7 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
                     sdk_key,
                     self.initial_reconnect_delay,
                     &tags,
+                    instance_id,
                     transport,
                 ))
             }
@@ -125,12 +137,17 @@ impl<T: launchdarkly_sdk_transport::HttpTransport> DataSourceFactory
                 sdk_key,
                 self.initial_reconnect_delay,
                 &tags,
+                instance_id,
                 transport.clone(),
             )),
         };
         let data_source = data_source_result?
             .map_err(|e| BuildError::InvalidConfig(format!("invalid stream_base_url: {e:?}")))?;
         Ok(Arc::new(data_source))
+    }
+
+    fn set_instance_id(&mut self, instance_id: String) {
+        self.instance_id = Some(instance_id);
     }
 
     fn to_owned(&self) -> Box<dyn DataSourceFactory> {
@@ -200,6 +217,7 @@ impl Default for NullDataSourceBuilder {
 pub struct PollingDataSourceBuilder<T: HttpTransport = launchdarkly_sdk_transport::HyperTransport> {
     poll_interval: Duration,
     transport: Option<T>,
+    instance_id: Option<String>,
 }
 
 /// Contains methods for configuring the polling data source.
@@ -231,6 +249,7 @@ impl<T: HttpTransport> PollingDataSourceBuilder<T> {
         Self {
             poll_interval: MINIMUM_POLL_INTERVAL,
             transport: None,
+            instance_id: None,
         }
     }
 
@@ -260,6 +279,7 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
         sdk_key: &str,
         tags: Option<String>,
     ) -> Result<Arc<dyn DataSource>, BuildError> {
+        let instance_id = self.instance_id.as_deref();
         let feature_requester_builder: Result<Box<dyn FeatureRequesterFactory>, BuildError> =
             match &self.transport {
                 #[cfg(any(
@@ -274,12 +294,15 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
                                 "failed to create default https transport: {e:?}"
                             ))
                         })?;
-
-                    Ok(Box::new(HttpFeatureRequesterBuilder::new(
+                    let mut builder = HttpFeatureRequesterBuilder::new(
                         endpoints.polling_base_url(),
                         sdk_key,
                         transport,
-                    )))
+                    );
+                    if let Some(instance_id) = instance_id {
+                        builder = builder.with_instance_id(instance_id);
+                    }
+                    Ok(Box::new(builder))
                 }
                 #[cfg(not(any(
                     feature = "hyper-rustls-native-roots",
@@ -289,11 +312,17 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
                 None => Err(BuildError::InvalidConfig(
                     "transport is required when hyper-rustls-native-roots, hyper-rustls-webpki-roots, or native-tls features are disabled".into(),
                 )),
-                Some(transport) => Ok(Box::new(HttpFeatureRequesterBuilder::new(
-                    endpoints.polling_base_url(),
-                    sdk_key,
-                    transport.clone(),
-                ))),
+                Some(transport) => {
+                    let mut builder = HttpFeatureRequesterBuilder::new(
+                        endpoints.polling_base_url(),
+                        sdk_key,
+                        transport.clone(),
+                    );
+                    if let Some(instance_id) = instance_id {
+                        builder = builder.with_instance_id(instance_id);
+                    }
+                    Ok(Box::new(builder))
+                }
             };
 
         let feature_requester_factory: Arc<Mutex<Box<dyn FeatureRequesterFactory>>> =
@@ -302,6 +331,10 @@ impl<T: HttpTransport> DataSourceFactory for PollingDataSourceBuilder<T> {
         let data_source =
             PollingDataSource::new(feature_requester_factory, self.poll_interval, tags);
         Ok(Arc::new(data_source))
+    }
+
+    fn set_instance_id(&mut self, instance_id: String) {
+        self.instance_id = Some(instance_id);
     }
 
     fn to_owned(&self) -> Box<dyn DataSourceFactory> {
@@ -389,7 +422,7 @@ mod tests {
             .build(
                 &crate::ServiceEndpointsBuilder::new().build().unwrap(),
                 "test",
-                None
+                None,
             )
             .is_ok());
     }
