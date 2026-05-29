@@ -485,6 +485,7 @@ mod tests {
             "sdk-key",
             Duration::from_millis(10),
             &None,
+            None,
             launchdarkly_sdk_transport::HyperTransport::new().expect("Failed to create transport"),
         )
         .unwrap();
@@ -538,6 +539,7 @@ mod tests {
             "sdk-key",
             Duration::from_millis(10),
             &None,
+            None,
             launchdarkly_sdk_transport::HyperTransport::new().expect("Failed to create transport"),
         )
         .unwrap();
