@@ -2,6 +2,13 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.1.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.0.3...3.1.0) (2026-05-29)
+
+
+### Features
+
+* add X-LaunchDarkly-Instance-Id header (SDK-2359) ([#170](https://github.com/launchdarkly/rust-server-sdk/issues/170)) ([370cb10](https://github.com/launchdarkly/rust-server-sdk/commit/370cb10f45c343998cfa961c5b8d0897849393f6))
+
 ## [3.0.3](https://github.com/launchdarkly/rust-server-sdk/compare/3.0.2...3.0.3) (2026-05-11)
 
 
