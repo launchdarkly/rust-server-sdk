@@ -18,7 +18,10 @@ pub(super) struct ServerIntent {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ServerIntentPayload {
+    pub(super) id: String,
+    pub(super) target: u64,
     pub(super) intent_code: IntentCode,
+    pub(super) reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,8 +42,6 @@ pub(super) struct DeleteObject {
 #[derive(Debug, Deserialize)]
 pub(super) struct PayloadTransferred {
     pub(super) state: String,
-    #[serde(default)]
-    pub(super) version: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,7 +60,7 @@ pub(super) struct FDv2Error {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Selector {
     Empty,
-    Set { state: String, version: u64 },
+    Set { state: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,17 +72,8 @@ pub(super) enum ChangeSetKind {
 
 #[derive(Debug)]
 pub(super) enum FDv2Change {
-    Put {
-        kind: String,
-        key: String,
-        version: u64,
-        object: serde_json::Value,
-    },
-    Delete {
-        kind: String,
-        key: String,
-        version: u64,
-    },
+    Put(PutObject),
+    Delete(DeleteObject),
 }
 
 #[derive(Debug)]
@@ -128,11 +120,15 @@ mod tests {
         });
         let intent: ServerIntent = serde_json::from_value(payload).unwrap();
         assert_eq!(intent.payloads.len(), 1);
-        assert_eq!(intent.payloads[0].intent_code, IntentCode::XferFull);
+        let p = &intent.payloads[0];
+        assert_eq!(p.id, "abc");
+        assert_eq!(p.target, 5);
+        assert_eq!(p.intent_code, IntentCode::XferFull);
+        assert_eq!(p.reason, "payload-missing");
     }
 
     #[test]
-    fn put_object_keeps_object_as_raw_json() {
+    fn put_object_keeps_object_as_json_value() {
         let payload = json!({
             "version": 42,
             "kind": "flag",
@@ -144,13 +140,6 @@ mod tests {
         assert_eq!(put.kind, "flag");
         assert_eq!(put.key, "my-flag");
         assert_eq!(put.object["on"], json!(true));
-    }
-
-    #[test]
-    fn payload_transferred_defaults_version_when_absent() {
-        let pt: PayloadTransferred = serde_json::from_value(json!({"state": "s-1"})).unwrap();
-        assert_eq!(pt.state, "s-1");
-        assert_eq!(pt.version, 0);
     }
 
     #[test]

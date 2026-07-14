@@ -108,12 +108,7 @@ impl FDv2ProtocolHandler {
                 )));
             }
         };
-        self.changes.push(FDv2Change::Put {
-            kind: put.kind,
-            key: put.key,
-            version: put.version,
-            object: put.object,
-        });
+        self.changes.push(FDv2Change::Put(put));
         ProtocolResult::None
     }
 
@@ -127,11 +122,7 @@ impl FDv2ProtocolHandler {
                 )));
             }
         };
-        self.changes.push(FDv2Change::Delete {
-            kind: del.kind,
-            key: del.key,
-            version: del.version,
-        });
+        self.changes.push(FDv2Change::Delete(del));
         ProtocolResult::None
     }
 
@@ -161,7 +152,6 @@ impl FDv2ProtocolHandler {
             changes: std::mem::take(&mut self.changes),
             selector: Selector::Set {
                 state: transferred.state,
-                version: transferred.version,
             },
         };
         // Subsequent put/delete + payload-transferred cycles continue as
@@ -198,7 +188,12 @@ mod tests {
     use serde_json::json;
 
     fn server_intent(code: &str) -> serde_json::Value {
-        json!({"payloads": [{"id": "p", "target": 1, "intentCode": code}]})
+        json!({"payloads": [{
+            "id": "p",
+            "target": 1,
+            "intentCode": code,
+            "reason": "payload-missing",
+        }]})
     }
 
     fn put_flag(key: &str, version: u64) -> serde_json::Value {
@@ -209,8 +204,8 @@ mod tests {
         json!({"version": version, "kind": "segment", "key": key})
     }
 
-    fn payload_transferred(state: &str, version: u64) -> serde_json::Value {
-        json!({"state": state, "version": version})
+    fn payload_transferred(state: &str) -> serde_json::Value {
+        json!({"state": state})
     }
 
     fn expect_changeset(result: ProtocolResult) -> ChangeSet {
@@ -227,36 +222,29 @@ mod tests {
         h.handle_event("put-object", put_flag("a", 1));
         h.handle_event("delete-object", delete_segment("old", 2));
         let cs =
-            expect_changeset(h.handle_event("payload-transferred", payload_transferred("s-1", 7)));
+            expect_changeset(h.handle_event("payload-transferred", payload_transferred("s-1")));
 
         assert_eq!(cs.kind, ChangeSetKind::Full);
 
-        let FDv2Change::Put {
-            kind,
-            key,
-            version,
-            object,
-        } = &cs.changes[0]
-        else {
+        let FDv2Change::Put(put) = &cs.changes[0] else {
             panic!("expected Put");
         };
-        assert_eq!(kind, "flag");
-        assert_eq!(key, "a");
-        assert_eq!(*version, 1);
-        assert_eq!(object["on"], json!(true));
+        assert_eq!(put.kind, "flag");
+        assert_eq!(put.key, "a");
+        assert_eq!(put.version, 1);
+        assert_eq!(put.object["on"], json!(true));
 
-        let FDv2Change::Delete { kind, key, version } = &cs.changes[1] else {
+        let FDv2Change::Delete(del) = &cs.changes[1] else {
             panic!("expected Delete");
         };
-        assert_eq!(kind, "segment");
-        assert_eq!(key, "old");
-        assert_eq!(*version, 2);
+        assert_eq!(del.kind, "segment");
+        assert_eq!(del.key, "old");
+        assert_eq!(del.version, 2);
 
         assert_eq!(
             cs.selector,
             Selector::Set {
                 state: "s-1".into(),
-                version: 7,
             },
         );
     }
@@ -266,12 +254,12 @@ mod tests {
         let mut h = FDv2ProtocolHandler::new();
         h.handle_event("server-intent", server_intent("xfer-full"));
         h.handle_event("put-object", put_flag("a", 1));
-        let _ = h.handle_event("payload-transferred", payload_transferred("s-1", 7));
+        let _ = h.handle_event("payload-transferred", payload_transferred("s-1"));
 
         // Without a new server-intent, the next cycle is Partial.
         h.handle_event("put-object", put_flag("b", 2));
         let cs =
-            expect_changeset(h.handle_event("payload-transferred", payload_transferred("s-2", 8)));
+            expect_changeset(h.handle_event("payload-transferred", payload_transferred("s-2")));
         assert_eq!(cs.kind, ChangeSetKind::Partial);
         assert_eq!(cs.changes.len(), 1);
     }
@@ -298,7 +286,7 @@ mod tests {
     #[test]
     fn payload_transferred_without_intent_is_protocol_error() {
         let mut h = FDv2ProtocolHandler::new();
-        let result = h.handle_event("payload-transferred", payload_transferred("s-1", 1));
+        let result = h.handle_event("payload-transferred", payload_transferred("s-1"));
         assert!(matches!(
             result,
             ProtocolResult::Error(ProtocolError::Protocol(_))
@@ -320,7 +308,7 @@ mod tests {
         // State preserved: a new put + payload-transferred should still emit Full.
         h.handle_event("put-object", put_flag("b", 2));
         let cs =
-            expect_changeset(h.handle_event("payload-transferred", payload_transferred("s-1", 7)));
+            expect_changeset(h.handle_event("payload-transferred", payload_transferred("s-1")));
         assert_eq!(cs.kind, ChangeSetKind::Full);
         assert_eq!(cs.changes.len(), 1, "accumulated changes were not cleared");
     }
@@ -339,7 +327,7 @@ mod tests {
 
         // After goodbye, payload-transferred should now be a protocol error
         // (state is Inactive again).
-        let result = h.handle_event("payload-transferred", payload_transferred("s-1", 1));
+        let result = h.handle_event("payload-transferred", payload_transferred("s-1"));
         assert!(matches!(
             result,
             ProtocolResult::Error(ProtocolError::Protocol(_))
