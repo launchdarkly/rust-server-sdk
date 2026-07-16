@@ -1,9 +1,9 @@
 use super::wire::{DeleteObject, PutObject};
 
-pub(super) type Selector = Option<String>;
+pub(crate) type Selector = Option<String>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ChangeSetKind {
+pub(crate) enum ChangeSetKind {
     None,
     Full,
     Partial,

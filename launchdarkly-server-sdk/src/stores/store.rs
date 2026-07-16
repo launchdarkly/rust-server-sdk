@@ -1,3 +1,5 @@
+use crate::fdv2::model::ChangeSetKind;
+use crate::stores::change_set::{ChangeSet, ItemChange};
 use crate::stores::store_types::{AllData, PatchTarget, StorageItem};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -29,6 +31,12 @@ pub trait DataStore: Store + Send + Sync {
     fn all_flags(&self) -> HashMap<String, Flag>;
     fn upsert(&mut self, key: &str, data: PatchTarget) -> Result<(), UpdateError>;
     fn to_store(&self) -> &dyn Store;
+}
+
+/// Trait for a data store that accepts atomic batch updates from FDv2 delivery.
+pub(crate) trait TransactionalDataStore: Send + Sync {
+    /// Apply the batch atomically per the change set's kind.
+    fn apply(&mut self, change_set: ChangeSet);
 }
 
 /// Default implementation of [DataStore] which holds information in-memory.
@@ -113,6 +121,29 @@ impl DataStore for InMemoryDataStore {
 
     fn to_store(&self) -> &dyn Store {
         self
+    }
+}
+
+impl TransactionalDataStore for InMemoryDataStore {
+    fn apply(&mut self, change_set: ChangeSet) {
+        match change_set.kind {
+            ChangeSetKind::None => return,
+            ChangeSetKind::Full => {
+                self.data.flags.clear();
+                self.data.segments.clear();
+            }
+            ChangeSetKind::Partial => {}
+        }
+        for change in change_set.changes {
+            match change {
+                ItemChange::Flag { key, item } => {
+                    self.data.flags.insert(key, item);
+                }
+                ItemChange::Segment { key, item } => {
+                    self.data.segments.insert(key, item);
+                }
+            }
+        }
     }
 }
 
@@ -365,5 +396,67 @@ mod tests {
             )
             .is_ok());
         assert!(data_store.segment("segment-key").is_none());
+    }
+
+    fn flag_change(key: &str) -> ItemChange {
+        ItemChange::Flag {
+            key: key.to_string(),
+            item: StorageItem::Item(basic_flag(key)),
+        }
+    }
+
+    fn segment_change(key: &str) -> ItemChange {
+        ItemChange::Segment {
+            key: key.to_string(),
+            item: StorageItem::Item(basic_segment(key)),
+        }
+    }
+
+    #[test]
+    fn apply_none_leaves_store_unchanged() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        data_store.apply(ChangeSet {
+            kind: ChangeSetKind::None,
+            changes: vec![],
+            selector: None,
+        });
+
+        assert_eq!(data_store.flag("flag-key").unwrap().key, "flag-key");
+        assert_eq!(data_store.segment("segment-key").unwrap().key, "segment-key");
+    }
+
+    #[test]
+    fn apply_full_replaces_existing_state() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        data_store.apply(ChangeSet {
+            kind: ChangeSetKind::Full,
+            changes: vec![flag_change("new-flag"), segment_change("new-segment")],
+            selector: Some("s-1".into()),
+        });
+
+        assert!(data_store.flag("flag-key").is_none());
+        assert!(data_store.segment("segment-key").is_none());
+        assert_eq!(data_store.flag("new-flag").unwrap().key, "new-flag");
+        assert_eq!(data_store.segment("new-segment").unwrap().key, "new-segment");
+    }
+
+    #[test]
+    fn apply_partial_adds_items_and_preserves_others() {
+        let mut data_store = InMemoryDataStore::new();
+        data_store.init(basic_data());
+
+        data_store.apply(ChangeSet {
+            kind: ChangeSetKind::Partial,
+            changes: vec![flag_change("added-flag")],
+            selector: Some("s-2".into()),
+        });
+
+        assert_eq!(data_store.flag("added-flag").unwrap().key, "added-flag");
+        assert_eq!(data_store.flag("flag-key").unwrap().key, "flag-key");
+        assert_eq!(data_store.segment("segment-key").unwrap().key, "segment-key");
     }
 }

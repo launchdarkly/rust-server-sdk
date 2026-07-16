@@ -1,3 +1,4 @@
+pub mod change_set;
 pub mod persistent_store;
 pub mod persistent_store_builders;
 pub mod persistent_store_cache;
