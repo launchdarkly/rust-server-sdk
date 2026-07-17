@@ -1,6 +1,6 @@
+use super::model::{ChangeSet, ChangeSetKind, FDv2Change};
 use super::wire::{
-    ChangeSet, ChangeSetKind, DeleteObject, FDv2Change, FDv2Error, Goodbye, IntentCode,
-    PayloadTransferred, PutObject, Selector, ServerIntent,
+    DeleteObject, FDv2Error, Goodbye, IntentCode, PayloadTransferred, PutObject, ServerIntent,
 };
 
 pub(super) enum ProtocolResult {
@@ -86,7 +86,7 @@ impl FDv2ProtocolHandler {
                 ProtocolResult::ChangeSet(ChangeSet {
                     kind: ChangeSetKind::None,
                     changes: Vec::new(),
-                    selector: Selector::Empty,
+                    selector: None,
                 })
             }
             IntentCode::Unknown => {
@@ -150,9 +150,7 @@ impl FDv2ProtocolHandler {
         let changeset = ChangeSet {
             kind,
             changes: std::mem::take(&mut self.changes),
-            selector: Selector::Set {
-                state: transferred.state,
-            },
+            selector: Some(transferred.state),
         };
         // Subsequent put/delete + payload-transferred cycles continue as
         // partial transfers without a new server-intent.
@@ -241,12 +239,7 @@ mod tests {
         assert_eq!(del.key, "old");
         assert_eq!(del.version, 2);
 
-        assert_eq!(
-            cs.selector,
-            Selector::Set {
-                state: "s-1".into(),
-            },
-        );
+        assert_eq!(cs.selector.as_deref(), Some("s-1"));
     }
 
     #[test]
@@ -270,7 +263,7 @@ mod tests {
         let cs = expect_changeset(h.handle_event("server-intent", server_intent("none")));
         assert_eq!(cs.kind, ChangeSetKind::None);
         assert!(cs.changes.is_empty());
-        assert_eq!(cs.selector, Selector::Empty);
+        assert!(cs.selector.is_none());
     }
 
     #[test]
