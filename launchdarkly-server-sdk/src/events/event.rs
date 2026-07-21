@@ -33,20 +33,7 @@ impl Serialize for BaseEvent {
         state.serialize_field("creationDate", &self.creation_date)?;
 
         if self.inline {
-            let context_attribute: ContextAttributes = if self.redact_anonymous {
-                ContextAttributes::from_context_with_anonymous_redaction(
-                    self.context.clone(),
-                    self.all_attribute_private,
-                    self.global_private_attributes.clone(),
-                )
-            } else {
-                ContextAttributes::from_context(
-                    self.context.clone(),
-                    self.all_attribute_private,
-                    self.global_private_attributes.clone(),
-                )
-            };
-            state.serialize_field("context", &context_attribute)?;
+            state.serialize_field("context", &self.redacted_context_attributes())?;
         } else {
             state.serialize_field("contextKeys", &self.context.context_keys())?;
         }
@@ -56,6 +43,26 @@ impl Serialize for BaseEvent {
 }
 
 impl BaseEvent {
+    /// Builds a [ContextAttributes] view of this event's context with the configured private
+    /// attribute redaction applied. This is the representation that must be used whenever the
+    /// full context is serialized into an inline event, so that attributes marked private are
+    /// removed before the event leaves the SDK.
+    pub(crate) fn redacted_context_attributes(&self) -> ContextAttributes {
+        if self.redact_anonymous {
+            ContextAttributes::from_context_with_anonymous_redaction(
+                self.context.clone(),
+                self.all_attribute_private,
+                self.global_private_attributes.clone(),
+            )
+        } else {
+            ContextAttributes::from_context(
+                self.context.clone(),
+                self.all_attribute_private,
+                self.global_private_attributes.clone(),
+            )
+        }
+    }
+
     pub fn new(creation_date: u64, context: Context) -> Self {
         Self {
             creation_date,
@@ -136,7 +143,7 @@ impl Serialize for MigrationOpEvent {
         let mut state = serializer.serialize_struct("MigrationOpEvent", 10)?;
         state.serialize_field("kind", "migration_op")?;
         state.serialize_field("creationDate", &self.base.creation_date)?;
-        state.serialize_field("context", &self.base.context)?;
+        state.serialize_field("context", &self.base.redacted_context_attributes())?;
         state.serialize_field("operation", &self.operation)?;
 
         if !is_default_ratio(&self.sampling_ratio) {
@@ -1154,6 +1161,118 @@ mod tests {
 
             assert_json_eq!(output_event, event_json);
         }
+    }
+
+    // Builds a minimal migration op event for the given context. Migration op events always inline
+    // the full context, so these tests exercise the redaction path the dispatcher relies on.
+    fn migration_op_event(context: Context) -> MigrationOpEvent {
+        MigrationOpEvent {
+            base: BaseEvent::new(1234, context),
+            key: "migration-key".into(),
+            version: None,
+            operation: Operation::Read,
+            default_stage: Stage::Live,
+            evaluation: Detail {
+                value: Some(Stage::Live),
+                variation_index: Some(1),
+                reason: Reason::Fallthrough {
+                    in_experiment: false,
+                },
+            },
+            sampling_ratio: None,
+            invoked: hashset![Origin::Old],
+            consistency_check: None,
+            consistency_check_ratio: None,
+            errors: HashSet::new(),
+            latency: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn migration_op_event_redacts_global_private_attribute() {
+        let context = ContextBuilder::new("alice")
+            .set_value("foo", AttributeValue::Bool(true))
+            .build()
+            .expect("Failed to create context");
+        let event = migration_op_event(context)
+            .into_inline_with_anonymous_redaction(false, hashset!["foo".into()]);
+        let output = serde_json::to_value(OutputEvent::MigrationOp(event))
+            .expect("Failed to serialize event");
+
+        assert_json_eq!(
+            output["context"],
+            json!({
+                "key": "alice",
+                "kind": "user",
+                "_meta": { "redactedAttributes": ["foo"] }
+            })
+        );
+    }
+
+    #[test]
+    fn migration_op_event_redacts_all_private_attributes() {
+        let context = ContextBuilder::new("alice")
+            .set_value("foo", AttributeValue::Bool(true))
+            .build()
+            .expect("Failed to create context");
+        let event =
+            migration_op_event(context).into_inline_with_anonymous_redaction(true, HashSet::new());
+        let output = serde_json::to_value(OutputEvent::MigrationOp(event))
+            .expect("Failed to serialize event");
+
+        assert_json_eq!(
+            output["context"],
+            json!({
+                "key": "alice",
+                "kind": "user",
+                "_meta": { "redactedAttributes": ["foo"] }
+            })
+        );
+    }
+
+    #[test]
+    fn migration_op_event_redacts_context_declared_private_attribute() {
+        let context = ContextBuilder::new("alice")
+            .set_value("foo", AttributeValue::Bool(true))
+            .add_private_attribute("foo")
+            .build()
+            .expect("Failed to create context");
+        let event =
+            migration_op_event(context).into_inline_with_anonymous_redaction(false, HashSet::new());
+        let output = serde_json::to_value(OutputEvent::MigrationOp(event))
+            .expect("Failed to serialize event");
+
+        assert_json_eq!(
+            output["context"],
+            json!({
+                "key": "alice",
+                "kind": "user",
+                "_meta": { "redactedAttributes": ["foo"] }
+            })
+        );
+    }
+
+    #[test]
+    fn migration_op_event_redacts_anonymous_context_attributes() {
+        let context = ContextBuilder::new("alice")
+            .anonymous(true)
+            .set_value("foo", AttributeValue::Bool(true))
+            .build()
+            .expect("Failed to create context");
+        let event =
+            migration_op_event(context).into_inline_with_anonymous_redaction(false, HashSet::new());
+        let output = serde_json::to_value(OutputEvent::MigrationOp(event))
+            .expect("Failed to serialize event");
+
+        assert_json_eq!(
+            output["context"],
+            json!({
+                "key": "alice",
+                "kind": "user",
+                "anonymous": true,
+                "_meta": { "redactedAttributes": ["foo"] }
+            })
+        );
     }
 
     #[test]
