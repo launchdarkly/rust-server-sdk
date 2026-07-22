@@ -424,7 +424,10 @@ mod tests {
         });
 
         assert_eq!(data_store.flag("flag-key").unwrap().key, "flag-key");
-        assert_eq!(data_store.segment("segment-key").unwrap().key, "segment-key");
+        assert_eq!(
+            data_store.segment("segment-key").unwrap().key,
+            "segment-key"
+        );
     }
 
     #[test]
@@ -441,7 +444,10 @@ mod tests {
         assert!(data_store.flag("flag-key").is_none());
         assert!(data_store.segment("segment-key").is_none());
         assert_eq!(data_store.flag("new-flag").unwrap().key, "new-flag");
-        assert_eq!(data_store.segment("new-segment").unwrap().key, "new-segment");
+        assert_eq!(
+            data_store.segment("new-segment").unwrap().key,
+            "new-segment"
+        );
     }
 
     #[test]
@@ -457,6 +463,9 @@ mod tests {
 
         assert_eq!(data_store.flag("added-flag").unwrap().key, "added-flag");
         assert_eq!(data_store.flag("flag-key").unwrap().key, "flag-key");
-        assert_eq!(data_store.segment("segment-key").unwrap().key, "segment-key");
+        assert_eq!(
+            data_store.segment("segment-key").unwrap().key,
+            "segment-key"
+        );
     }
 }

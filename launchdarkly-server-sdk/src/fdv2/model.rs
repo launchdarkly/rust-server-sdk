@@ -124,12 +124,18 @@ mod tests {
         };
         let out = change_set::ChangeSet::try_from(wire).unwrap();
         assert_eq!(out.changes.len(), 3);
-        assert!(matches!(&out.changes[0], ItemChange::Flag { key, item: StorageItem::Item(f) }
-            if key == "f1" && f.key == "f1"));
-        assert!(matches!(&out.changes[1], ItemChange::Segment { key, item: StorageItem::Item(s) }
-            if key == "s1" && s.key == "s1"));
-        assert!(matches!(&out.changes[2], ItemChange::Flag { key, item: StorageItem::Tombstone(3) }
-            if key == "old"));
+        assert!(
+            matches!(&out.changes[0], ItemChange::Flag { key, item: StorageItem::Item(f) }
+            if key == "f1" && f.key == "f1")
+        );
+        assert!(
+            matches!(&out.changes[1], ItemChange::Segment { key, item: StorageItem::Item(s) }
+            if key == "s1" && s.key == "s1")
+        );
+        assert!(
+            matches!(&out.changes[2], ItemChange::Flag { key, item: StorageItem::Tombstone(3) }
+            if key == "old")
+        );
     }
 
     #[test]
