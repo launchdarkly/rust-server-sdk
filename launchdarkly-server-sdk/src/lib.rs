@@ -60,6 +60,8 @@ mod data_source;
 mod data_source_builders;
 mod evaluation;
 mod events;
+#[allow(dead_code)] // Tested but not yet reachable from production code.
+mod fdv2;
 mod feature_requester;
 mod feature_requester_builders;
 mod migrations;
