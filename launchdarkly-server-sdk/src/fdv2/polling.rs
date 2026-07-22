@@ -4,60 +4,18 @@ use bytes::Bytes;
 use futures::StreamExt;
 use http::{HeaderMap, Request, Response, StatusCode};
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport};
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
 use super::model::{ChangeSetKind, Selector};
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
 use super::source::{ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent, FDv2SourceResult};
+use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
 use crate::stores::change_set::ChangeSet;
 
 const FALLBACK_HEADER: &str = "X-LD-FD-Fallback";
 const FALLBACK_TTL_HEADER: &str = "X-LD-FD-Fallback-TTL";
 const DEFAULT_FALLBACK_TTL: Duration = Duration::from_secs(60 * 60);
-
-/// Percent-encoding set for URL query values: encodes everything except
-/// RFC 3986 unreserved characters (A-Za-z0-9 and `- . _ ~`).
-const QUERY_VALUE: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
-
-fn is_valid_filter_key(k: &str) -> bool {
-    let mut chars = k.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphanumeric() {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-fn build_poll_url(base_url: &str, selector: &Selector, filter_key: Option<&str>) -> String {
-    let trimmed = base_url.trim_end_matches('/');
-    let mut url = format!("{trimmed}/sdk/poll");
-
-    let mut sep = '?';
-    if let Some(state) = selector.as_deref() {
-        url.push(sep);
-        url.push_str("basis=");
-        url.push_str(&utf8_percent_encode(state, QUERY_VALUE).to_string());
-        sep = '&';
-    }
-    if let Some(filter) = filter_key {
-        if is_valid_filter_key(filter) {
-            url.push(sep);
-            url.push_str("filter=");
-            url.push_str(&utf8_percent_encode(filter, QUERY_VALUE).to_string());
-        } else {
-            warn!("data source config: filter key '{filter}' is invalid, requesting full environment instead");
-        }
-    }
-    url
-}
 
 fn interrupted(kind: ErrorKind, message: impl Into<String>) -> FDv2SourceEvent {
     FDv2SourceEvent {
@@ -361,7 +319,7 @@ fn build_poll_request(
     selector: &Selector,
     filter_key: Option<&str>,
 ) -> Result<Request<Option<Bytes>>, http::Error> {
-    let url = build_poll_url(base_url, selector, filter_key);
+    let url = build_fdv2_url(base_url, "sdk/poll", selector, filter_key);
     Request::builder()
         .uri(url)
         .method("GET")
@@ -374,48 +332,6 @@ fn build_poll_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base_with_subpath_trailing_slash_joins_cleanly() {
-        let url = build_poll_url("http://example.com/relay/", &None, None);
-        assert_eq!(url, "http://example.com/relay/sdk/poll");
-    }
-
-    #[test]
-    fn valid_filter_key_is_included() {
-        let url = build_poll_url("http://example.com", &None, Some("my-filter_1.0"));
-        assert_eq!(url, "http://example.com/sdk/poll?filter=my-filter_1.0");
-    }
-
-    #[test]
-    fn invalid_filter_key_is_dropped() {
-        let url = build_poll_url("http://example.com", &None, Some("has spaces"));
-        assert_eq!(url, "http://example.com/sdk/poll");
-    }
-
-    #[test]
-    fn selector_state_is_percent_encoded() {
-        let selector = Some("a&b".to_string());
-        let url = build_poll_url("http://example.com", &selector, None);
-        assert_eq!(url, "http://example.com/sdk/poll?basis=a%26b");
-    }
-
-    #[test]
-    fn selector_with_reserved_chars_is_encoded() {
-        let selector = Some("(p:abc:52)".to_string());
-        let url = build_poll_url("http://example.com", &selector, None);
-        assert_eq!(url, "http://example.com/sdk/poll?basis=%28p%3Aabc%3A52%29");
-    }
-
-    #[test]
-    fn selector_and_filter_both_included() {
-        let selector = Some("state-1".to_string());
-        let url = build_poll_url("http://example.com", &selector, Some("my-filter"));
-        assert_eq!(
-            url,
-            "http://example.com/sdk/poll?basis=state-1&filter=my-filter"
-        );
-    }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();
