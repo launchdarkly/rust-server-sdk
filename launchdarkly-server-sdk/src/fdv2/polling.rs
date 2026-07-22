@@ -8,7 +8,9 @@ use serde::Deserialize;
 
 use super::model::{ChangeSetKind, Selector};
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
-use super::source::{ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent, FDv2SourceResult};
+use super::source::{
+    ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent, FDv2SourceResult,
+};
 use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
 use crate::stores::change_set::ChangeSet;
@@ -42,7 +44,10 @@ fn parse_poll_body(body: &[u8]) -> FDv2SourceEvent {
     let envelope: PollEnvelope = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => {
-            return interrupted(ErrorKind::InvalidData, "could not parse FDv2 polling response");
+            return interrupted(
+                ErrorKind::InvalidData,
+                "could not parse FDv2 polling response",
+            );
         }
     };
 
@@ -364,10 +369,7 @@ mod tests {
 
     #[test]
     fn fallback_ttl_header_is_parsed() {
-        let h = headers(&[
-            ("X-LD-FD-Fallback", "true"),
-            ("X-LD-FD-Fallback-TTL", "60"),
-        ]);
+        let h = headers(&[("X-LD-FD-Fallback", "true"), ("X-LD-FD-Fallback-TTL", "60")]);
         let d = read_fallback_directive(&h).expect("directive");
         assert_eq!(d.ttl, Duration::from_secs(60));
     }
@@ -474,7 +476,11 @@ mod tests {
             panic!("expected Interrupted");
         };
         assert_eq!(err.kind, ErrorKind::InvalidData);
-        assert!(err.message.contains("translated"), "message: {}", err.message);
+        assert!(
+            err.message.contains("translated"),
+            "message: {}",
+            err.message
+        );
     }
 
     fn make_response(status: u16, headers: &[(&str, &str)], body: &[u8]) -> Response<ByteStream> {
@@ -634,8 +640,7 @@ mod tests {
             &self,
             _request: Request<Option<Bytes>>,
         ) -> launchdarkly_sdk_transport::ResponseFuture {
-            self.count
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(make_response(200, &[], b"{\"events\":[]}")) })
         }
     }
