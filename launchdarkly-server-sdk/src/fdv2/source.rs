@@ -25,7 +25,7 @@ pub(crate) struct ErrorInfo {
     pub(crate) message: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FDv1FallbackDirective {
     pub(crate) ttl: Duration,
 }
