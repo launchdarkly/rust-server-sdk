@@ -2,22 +2,19 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use http::{HeaderMap, Request, Response, StatusCode};
+use http::{Request, Response, StatusCode};
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport};
 use serde::Deserialize;
 
 use super::model::{ChangeSetKind, Selector};
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
 use super::source::{
-    ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent, FDv2SourceResult,
+    read_fallback_directive, ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent,
+    FDv2SourceResult,
 };
 use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
 use crate::stores::change_set::ChangeSet;
-
-const FALLBACK_HEADER: &str = "X-LD-FD-Fallback";
-const FALLBACK_TTL_HEADER: &str = "X-LD-FD-Fallback-TTL";
-const DEFAULT_FALLBACK_TTL: Duration = Duration::from_secs(60 * 60);
 
 fn interrupted(kind: ErrorKind, message: impl Into<String>) -> FDv2SourceEvent {
     FDv2SourceEvent {
@@ -304,20 +301,6 @@ impl<T: HttpTransport> super::source::Synchronizer for PollingSynchronizer<T> {
     }
 }
 
-fn read_fallback_directive(headers: &HeaderMap) -> Option<FDv1FallbackDirective> {
-    let flag = headers.get(FALLBACK_HEADER)?;
-    if !flag.to_str().is_ok_and(|s| s.eq_ignore_ascii_case("true")) {
-        return None;
-    }
-    let ttl = headers
-        .get(FALLBACK_TTL_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_FALLBACK_TTL);
-    Some(FDv1FallbackDirective { ttl })
-}
-
 fn build_poll_request(
     base_url: &str,
     sdk_key: &str,
@@ -337,52 +320,7 @@ fn build_poll_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
-        let mut h = HeaderMap::new();
-        for (k, v) in pairs {
-            h.insert(
-                http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
-                http::HeaderValue::from_str(v).unwrap(),
-            );
-        }
-        h
-    }
-
-    #[test]
-    fn fallback_absent_header_returns_none() {
-        assert!(read_fallback_directive(&HeaderMap::new()).is_none());
-    }
-
-    #[test]
-    fn fallback_header_value_other_than_true_returns_none() {
-        let h = headers(&[("X-LD-FD-Fallback", "false")]);
-        assert!(read_fallback_directive(&h).is_none());
-    }
-
-    #[test]
-    fn fallback_header_uppercase_true_uses_default_ttl() {
-        let h = headers(&[("X-LD-FD-Fallback", "TRUE")]);
-        let d = read_fallback_directive(&h).expect("directive");
-        assert_eq!(d.ttl, DEFAULT_FALLBACK_TTL);
-    }
-
-    #[test]
-    fn fallback_ttl_header_is_parsed() {
-        let h = headers(&[("X-LD-FD-Fallback", "true"), ("X-LD-FD-Fallback-TTL", "60")]);
-        let d = read_fallback_directive(&h).expect("directive");
-        assert_eq!(d.ttl, Duration::from_secs(60));
-    }
-
-    #[test]
-    fn fallback_ttl_header_malformed_uses_default() {
-        let h = headers(&[
-            ("X-LD-FD-Fallback", "true"),
-            ("X-LD-FD-Fallback-TTL", "not-a-number"),
-        ]);
-        let d = read_fallback_directive(&h).expect("directive");
-        assert_eq!(d.ttl, DEFAULT_FALLBACK_TTL);
-    }
+    use http::HeaderMap;
 
     fn full_payload_body(flag_key: &str) -> Vec<u8> {
         let flag = crate::test_common::basic_flag(flag_key);
