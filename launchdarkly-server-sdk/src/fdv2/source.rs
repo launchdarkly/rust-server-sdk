@@ -41,12 +41,12 @@ pub(crate) struct FDv2SourceEvent {
     pub(crate) fdv1_fallback: Option<FDv1FallbackDirective>,
 }
 
-pub(crate) trait Initializer: Send + Sync {
+pub(crate) trait Initializer: Send {
     fn run(&mut self) -> BoxFuture<'_, FDv2SourceEvent>;
     fn name(&self) -> &str;
 }
 
-pub(crate) trait Synchronizer: Send + Sync {
+pub(crate) trait Synchronizer: Send {
     fn next(&mut self, selector: Selector) -> BoxFuture<'_, FDv2SourceEvent>;
     fn name(&self) -> &str;
 }
