@@ -234,7 +234,7 @@ pub(crate) struct PollingSynchronizer<T: HttpTransport> {
     sdk_key: String,
     filter_key: Option<String>,
     poll_interval: Duration,
-    last_poll_start: std::sync::Arc<parking_lot::Mutex<Option<std::time::Instant>>>,
+    last_poll_start: Option<std::time::Instant>,
 }
 
 impl<T: HttpTransport> PollingSynchronizer<T> {
@@ -251,7 +251,7 @@ impl<T: HttpTransport> PollingSynchronizer<T> {
             sdk_key,
             filter_key,
             poll_interval,
-            last_poll_start: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+            last_poll_start: None,
         }
     }
 }
@@ -260,17 +260,14 @@ impl<T: HttpTransport> super::source::Synchronizer for PollingSynchronizer<T> {
     fn next(&mut self, selector: Selector) -> futures::future::BoxFuture<'_, FDv2SourceEvent> {
         Box::pin(async move {
             // Wait for the poll interval to elapse since the previous request.
-            let wait = {
-                let last = self.last_poll_start.lock();
-                match *last {
-                    Some(t) => self.poll_interval.saturating_sub(t.elapsed()),
-                    None => Duration::ZERO,
-                }
+            let wait = match self.last_poll_start {
+                Some(t) => self.poll_interval.saturating_sub(t.elapsed()),
+                None => Duration::ZERO,
             };
             if !wait.is_zero() {
                 tokio::time::sleep(wait).await;
             }
-            *self.last_poll_start.lock() = Some(std::time::Instant::now());
+            self.last_poll_start = Some(std::time::Instant::now());
 
             // Build the poll request.
             let request = match build_poll_request(
@@ -320,7 +317,6 @@ fn build_poll_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::HeaderMap;
 
     fn full_payload_body(flag_key: &str) -> Vec<u8> {
         let flag = crate::test_common::basic_flag(flag_key);
@@ -643,5 +639,49 @@ mod tests {
             event.fdv1_fallback.as_ref().map(|d| d.ttl),
             Some(Duration::from_secs(90))
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn end_to_end_full_payload_emits_changeset() {
+        let mut server = mockito::Server::new_async().await;
+        let flag = crate::test_common::basic_flag("f");
+        let flag_json = serde_json::to_value(&flag).unwrap();
+        let envelope = serde_json::json!({
+            "events": [
+                {"event": "server-intent", "data": {"payloads": [{
+                    "id": "p", "target": 1, "intentCode": "xfer-full", "reason": "payload-missing",
+                }]}},
+                {"event": "put-object", "data": {
+                    "version": 1, "kind": "flag", "key": "f", "object": flag_json,
+                }},
+                {"event": "payload-transferred", "data": {"state": "s-1"}},
+            ]
+        });
+        let mock = server
+            .mock("GET", "/sdk/poll")
+            .match_header("Authorization", "sdk-key")
+            .with_status(200)
+            .with_body(envelope.to_string())
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let transport = launchdarkly_sdk_transport::HyperTransport::new().expect("hyper transport");
+        use super::super::source::Synchronizer;
+        let mut sync = PollingSynchronizer::new(
+            transport,
+            server.url(),
+            "sdk-key".into(),
+            None,
+            Duration::ZERO,
+        );
+
+        let out = sync.next(None).await;
+        let FDv2SourceResult::ChangeSet(cs) = out.result else {
+            panic!("expected ChangeSet, got {:?}", out.result);
+        };
+        assert_eq!(cs.selector.as_deref(), Some("s-1"));
+        assert_eq!(cs.changes.len(), 1);
+        mock.assert_async().await;
     }
 }
