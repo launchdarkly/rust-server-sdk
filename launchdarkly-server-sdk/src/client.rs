@@ -12,8 +12,8 @@ use thiserror::Error;
 use tokio::sync::{broadcast, Semaphore};
 
 use super::config::Config;
-use super::data_source::DataSource;
 use super::data_source_builders::BuildError as DataSourceError;
+use super::data_system::{DataSystem, FDv1DataSystem};
 use super::evaluation::{FlagDetail, FlagDetailConfig};
 use super::stores::store::DataStore;
 use super::stores::store_builders::BuildError as DataStoreError;
@@ -147,7 +147,7 @@ impl From<usize> for ClientInitState {
 /// Each builder type includes usage examples for the builder.
 pub struct Client {
     event_processor: Arc<dyn EventProcessor>,
-    data_source: Arc<dyn DataSource>,
+    data_system: Arc<dyn DataSystem>,
     data_store: Arc<RwLock<dyn DataStore>>,
     events_default: EventsScope,
     events_with_reasons: EventsScope,
@@ -187,7 +187,11 @@ impl Client {
         let mut data_source_builder = config.data_source_builder().to_owned();
         data_source_builder.set_instance_id(instance_id);
         let data_source = data_source_builder.build(&endpoints, config.sdk_key(), tags.clone())?;
-        let data_store = config.data_store_builder().build()?;
+        let data_system: Arc<dyn DataSystem> = Arc::new(FDv1DataSystem::new(
+            data_source,
+            config.data_store_builder(),
+        )?);
+        let data_store = data_system.store();
 
         let events_default = EventsScope {
             disabled: config.offline(),
@@ -211,7 +215,7 @@ impl Client {
 
         Ok(Client {
             event_processor,
-            data_source,
+            data_system,
             data_store,
             events_default,
             events_with_reasons,
@@ -242,8 +246,7 @@ impl Client {
         let notify = self.init_notify.clone();
         let init_state = self.init_state.clone();
 
-        self.data_source.subscribe(
-            self.data_store.clone(),
+        self.data_system.start(
             Arc::new(move |success| {
                 init_state.store(
                     (if success {
