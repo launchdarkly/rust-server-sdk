@@ -12,7 +12,9 @@ env_logger = "0.10.0"
 eventsource-client = { version = "0.17.0" }
 launchdarkly-sdk-transport = { version = "0.1.0" }
 log = "0.4.14"
-launchdarkly-server-sdk = { path = "../launchdarkly-server-sdk/", default-features = false, features = ["event-compression"]}
+# float-roundtrip is requested explicitly: the contract tests are our cross-SDK consistency
+# check, so the service under test has to parse numbers the way the other SDKs do.
+launchdarkly-server-sdk = { path = "../launchdarkly-server-sdk/", default-features = false, features = ["event-compression", "float-roundtrip"]}
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = "1.0.73"
 futures = "0.3.12"

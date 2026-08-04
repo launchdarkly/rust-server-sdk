@@ -23,6 +23,35 @@ This repository also contains several small [example implementations](./examples
 cargo run --example EXAMPLE_NAME
 ```
 
+## Cargo features
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| `hyper-rustls-native-roots` | yes | Uses `hyper` for HTTP, with `rustls` for TLS and the platform's native certificate roots. |
+| `hyper-rustls-webpki-roots` | no | Uses `hyper` for HTTP, with `rustls` for TLS and the bundled `webpki` certificate roots. |
+| `native-tls` | no | Uses `hyper` for HTTP, with the platform's native TLS implementation. |
+| `hyper` | no | Uses `hyper` for HTTP without selecting a TLS implementation. |
+| `crypto-aws-lc-rs` | yes | Uses `aws-lc-rs` for cryptographic operations. |
+| `crypto-openssl` | no | Uses `openssl` for cryptographic operations. |
+| `event-compression` | yes | Compresses analytics event payloads before sending them to LaunchDarkly. |
+| `float-roundtrip` | yes | Enables `serde_json`'s `float_roundtrip` feature so that fractional JSON numbers deserialize to the same `f64` that Go's `encoding/json` produces. |
+
+### Disabling `float-roundtrip`
+
+`float-roundtrip` is enabled by default because it is what keeps numeric flag values and numeric context attributes consistent with the other LaunchDarkly SDKs. Without it, `serde_json` uses a faster best-effort float parser that can land one unit in the last place away from the correctly-rounded value, so a numeric evaluation could in principle differ from what another SDK computes for the same flag.
+
+Disable it if you would rather have the faster parser and do not depend on that cross-SDK consistency. Because it is a default feature, opting out means turning the defaults off and re-listing the ones you want:
+
+```toml
+launchdarkly-server-sdk = { version = "3", default-features = false, features = [
+    "hyper-rustls-native-roots",
+    "crypto-aws-lc-rs",
+    "event-compression",
+] }
+```
+
+Note that Cargo feature unification is additive and applies to the whole build, so `float_roundtrip` remains enabled if any other crate in your dependency graph asks for it.
+
 ## Learn more
 
 Read our [documentation](https://docs.launchdarkly.com) for in-depth instructions on configuring and using LaunchDarkly. You can also head straight to the [complete reference guide for this SDK](https://docs.launchdarkly.com/sdk/server-side/rust).

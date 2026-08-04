@@ -89,10 +89,14 @@ static USER_AGENT: LazyLock<String> =
 
 static EMPTY_HEADER: LazyLock<HeaderValue> = LazyLock::new(|| HeaderValue::from_static(""));
 
-#[cfg(test)]
+#[cfg(all(test, feature = "float-roundtrip"))]
 mod tests {
     use test_case::test_case;
 
+    // Fractional numbers must parse to the same f64 that Go's encoding/json produces, so that
+    // numeric flag values and numeric context attributes behave identically across LaunchDarkly
+    // SDKs. This requires serde_json's correctly-rounded parser, which the float-roundtrip
+    // feature selects.
     #[test_case("130.65331632653061", 130.65331632653061)]
     #[test_case("130.65331632653062", 130.65331632653061)]
     #[test_case("130.65331632653063", 130.65331632653064)]
