@@ -194,6 +194,7 @@ async fn run(
         let has_recovery = has_fallback && !source_manager.is_prime();
         let mut fallback_at: Option<Instant> = None;
         let recovery_at = has_recovery.then(|| Instant::now() + RECOVERY_TIMEOUT);
+        let mut interrupted_logged = false;
 
         // Drive the active synchronizer, racing its events against the timers.
         loop {
@@ -220,16 +221,22 @@ async fn run(
                         }
                         // Good data clears the fallback countdown.
                         fallback_at = None;
+                        interrupted_logged = false;
                     }
                     // Sustained interruption starts the fallback countdown.
-                    FDv2SourceResult::Interrupted(_) => {
+                    FDv2SourceResult::Interrupted(error) => {
+                        if !interrupted_logged {
+                            info!("FDv2 synchronizer interrupted: {}", error.message);
+                            interrupted_logged = true;
+                        }
                         if has_fallback && fallback_at.is_none() {
                             fallback_at = Some(Instant::now() + FALLBACK_TIMEOUT);
                         }
                     }
                     // Handled internally by the synchronizer.
                     FDv2SourceResult::Goodbye { .. } => {}
-                    FDv2SourceResult::TerminalError(_) => {
+                    FDv2SourceResult::TerminalError(error) => {
+                        warn!("FDv2 synchronizer terminal error: {}", error.message);
                         // Dead source: drop it and advance.
                         source_manager.block_current();
                         break;
