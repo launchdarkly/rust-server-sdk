@@ -394,18 +394,18 @@ mod tests {
         })
     }
 
-    /// A prime factory that is down on first build and recovers on rebuild.
-    struct RecoveringPrimeFactory {
+    /// A factory that is down on its first build and delivers data on rebuild.
+    struct DownThenDataFactory {
         builds: AtomicUsize,
     }
 
-    impl SynchronizerFactory for RecoveringPrimeFactory {
+    impl SynchronizerFactory for DownThenDataFactory {
         fn create(&self) -> Box<dyn Synchronizer> {
             let (results, hang) = if self.builds.fetch_add(1, Ordering::SeqCst) == 0 {
                 // Down: interrupt, then idle so the fallback timer fires.
                 (vec![interrupted()], true)
             } else {
-                // Recovered: deliver a delta once the prime is active again.
+                // Rebuilt: deliver a delta.
                 (
                     vec![changeset(
                         ChangeSetKind::Partial,
@@ -847,7 +847,7 @@ mod tests {
 
         // Prime recovers on rebuild; the fallback supplies a basis then idles.
         let source_manager = SourceManager::new(vec![
-            Arc::new(RecoveringPrimeFactory {
+            Arc::new(DownThenDataFactory {
                 builds: AtomicUsize::new(0),
             }) as Arc<dyn SynchronizerFactory>,
             sync_factory(
