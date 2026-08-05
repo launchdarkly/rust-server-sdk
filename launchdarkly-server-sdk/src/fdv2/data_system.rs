@@ -217,40 +217,56 @@ async fn run(
 ) {
     let mut selector: Selector = None;
     let mut initialized = false;
+    let mut fdv2_retry_at: Option<Instant> = None;
 
-    // Initializer phase: try each in order until one yields a basis.
+    // Initializer phase: try each in order until one yields a basis or an
+    // FDv1 fallback directive.
     for factory in initializer_factories {
         let mut initializer = factory.create();
         let name = initializer.name().to_string();
         let mut shutdown = Box::pin(shutdown_receiver.recv()).fuse();
-        futures::select! {
+        let event = futures::select! {
             _ = shutdown => return,
-            event = initializer.run().fuse() => {
-                match event.result {
-                    FDv2SourceResult::ChangeSet(change_set)
-                        if !matches!(change_set.kind, ChangeSetKind::None) =>
-                    {
-                        let got_basis = change_set.selector.is_some();
-                        if got_basis {
-                            selector = change_set.selector.clone();
-                        }
-                        store.write().apply(change_set);
-                        if !initialized {
-                            init_complete(true);
-                            initialized = true;
-                        }
-                        if got_basis {
-                            break;
-                        }
-                    }
-                    _ => debug!("{name} did not provide a basis"),
+            event = initializer.run().fuse() => event,
+        };
+
+        let FDv2SourceEvent {
+            result,
+            fdv1_fallback,
+        } = event;
+        let mut got_basis = false;
+        match result {
+            FDv2SourceResult::ChangeSet(change_set)
+                if !matches!(change_set.kind, ChangeSetKind::None) =>
+            {
+                got_basis = change_set.selector.is_some();
+                if got_basis {
+                    selector = change_set.selector.clone();
+                }
+                store.write().apply(change_set);
+                if !initialized {
+                    init_complete(true);
+                    initialized = true;
                 }
             }
+            _ => debug!("{name} did not provide a basis"),
+        }
+        // An FDv1 fallback directive ends the initializer phase and switches
+        // to the fallback.
+        if let Some(fallback_directive) = fdv1_fallback {
+            info!("FDv2 falling back to the FDv1 protocol");
+            source_manager.switch_to_fdv1_fallback();
+            if fallback_directive.ttl != Duration::ZERO {
+                fdv2_retry_at = Some(Instant::now() + fallback_directive.ttl);
+            }
+            break;
+        }
+        if got_basis {
+            break;
         }
     }
 
     // Synchronizer phase: rotate through synchronizers as the timers fire.
-    let mut fdv2_retry_at: Option<Instant> = None;
     let mut current = source_manager.next_synchronizer();
     while let Some(mut active) = current {
         let name = active.name().to_string();
@@ -319,13 +335,13 @@ async fn run(
                         }
                         FDv2SourceResult::Shutdown => return,
                     }
-                    // A fallback directive takes precedence over a terminal error.
-                    if let Some(directive) = fdv1_fallback {
+                    // An FDv1 fallback directive takes precedence over a terminal error.
+                    if let Some(fallback_directive) = fdv1_fallback {
                         if !source_manager.is_current_fdv1_fallback() {
                             info!("FDv2 falling back to the FDv1 protocol");
                             source_manager.switch_to_fdv1_fallback();
-                            if directive.ttl != Duration::ZERO {
-                                fdv2_retry_at = Some(Instant::now() + directive.ttl);
+                            if fallback_directive.ttl != Duration::ZERO {
+                                fdv2_retry_at = Some(Instant::now() + fallback_directive.ttl);
                             }
                             break;
                         }
@@ -417,6 +433,34 @@ mod tests {
 
         fn name(&self) -> &str {
             "mock-initializer"
+        }
+    }
+
+    /// An initializer that reports an FDv1 fallback directive with no TTL.
+    struct FallbackInitializer;
+
+    impl Initializer for FallbackInitializer {
+        fn run(&mut self) -> BoxFuture<'_, FDv2SourceEvent> {
+            Box::pin(async {
+                FDv2SourceEvent {
+                    result: interrupted(),
+                    fdv1_fallback: Some(FDv1FallbackDirective {
+                        ttl: Duration::ZERO,
+                    }),
+                }
+            })
+        }
+
+        fn name(&self) -> &str {
+            "fallback-initializer"
+        }
+    }
+
+    struct FallbackInitializerFactory;
+
+    impl InitializerFactory for FallbackInitializerFactory {
+        fn create(&self) -> Box<dyn Initializer> {
+            Box::new(FallbackInitializer)
         }
     }
 
@@ -1238,7 +1282,7 @@ mod tests {
     async fn fallback_directive_switches_to_fdv1() {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // The FDv2 source reports a fallback directive with a zero TTL, so FDv2
         // is never retried; the FDv1 fallback holds the basis.
@@ -1257,7 +1301,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -1276,7 +1320,7 @@ mod tests {
     async fn fdv2_retry_reengages_after_ttl() {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // The FDv2 source reports a directive with a 60s TTL; the FDv1 fallback
         // supplies a basis and then idles until FDv2 is retried.
@@ -1299,7 +1343,7 @@ mod tests {
 
         // Paused time auto-advances past the TTL, re-engaging FDv2.
         let handle = tokio::spawn(run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -1313,5 +1357,43 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), vec![true]);
         assert!(store.read().flag("from-fdv1").is_some());
         assert!(store.read().flag("fdv2-back").is_some());
+    }
+
+    #[tokio::test]
+    async fn initializer_fallback_directive_switches_to_fdv1() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let (init_complete, calls) = recording_init_complete();
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> =
+            vec![Arc::new(FallbackInitializerFactory)];
+
+        // The FDv2 synchronizer is never reached; the FDv1 fallback holds the basis.
+        let source_manager = SourceManager::new(vec![
+            sync_factory(vec![], no_selectors(), false),
+            fdv1_factory(
+                vec![changeset(
+                    ChangeSetKind::Full,
+                    "from-fdv1",
+                    Some("s".into()),
+                )],
+                no_selectors(),
+                false,
+            ),
+        ]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializer_factories,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // The initializer's directive switched straight to the FDv1 fallback.
+        assert_eq!(*calls.lock().unwrap(), vec![true]);
+        assert!(store.read().flag("from-fdv1").is_some());
     }
 }
