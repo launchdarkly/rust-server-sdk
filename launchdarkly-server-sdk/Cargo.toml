@@ -25,9 +25,11 @@ launchdarkly-sdk-transport = { version = "0.1.0" }
 futures = "0.3.12"
 log = "0.4.14"
 lru = { version = "0.16.3", default-features = false }
-launchdarkly-server-sdk-evaluation = "2.1.0"
+# Pulled without default features so that the float-roundtrip feature below is what decides
+# whether the evaluation engine parses floats the way Go does.
+launchdarkly-server-sdk-evaluation = { version = "2.2.0", default-features = false }
 serde = { version = "1.0.132", features = ["derive"] }
-serde_json = { version = "1.0.73", features = ["float_roundtrip"] }
+serde_json = { version = "1.0.73" }
 thiserror = "2.0"
 tokio = { version = "1.17.0", features = ["rt-multi-thread"] }
 parking_lot = "0.12.0"
@@ -58,7 +60,8 @@ testing_logger = "0.1.1"
 default = [
     "hyper-rustls-native-roots",
     "crypto-aws-lc-rs",
-    "event-compression"
+    "event-compression",
+    "float-roundtrip"
 ]
 
 crypto-aws-lc-rs = ["dep:aws-lc-rs"]
@@ -85,6 +88,20 @@ native-tls = [
 ]
 
 event-compression = ["flate2"]
+
+# Parse fractional JSON numbers with serde_json's correctly-rounded float parser, so that
+# numeric flag values and numeric context attributes deserialize to the same f64 that Go's
+# encoding/json produces. This keeps evaluations consistent with the other LaunchDarkly SDKs
+# and is why the feature is enabled by default.
+#
+# Disabling it makes serde_json use its faster best-effort parser, which can land one unit in
+# the last place away from the correctly-rounded value. Note that Cargo feature unification is
+# additive and global, so this feature is still on if any other crate in the dependency graph
+# asks for serde_json/float_roundtrip.
+float-roundtrip = [
+    "serde_json/float_roundtrip",
+    "launchdarkly-server-sdk-evaluation/float-roundtrip"
+]
 
 [[example]]
 name = "print_flags"
