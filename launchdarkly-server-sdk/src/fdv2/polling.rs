@@ -6,12 +6,13 @@ use http::{Request, Response, StatusCode};
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport};
 use serde::Deserialize;
 
+use super::data_system::{InitializerFactory, SynchronizerFactory};
 use super::model::{ChangeSetKind, Selector};
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
 use super::request_headers::RequestHeaders;
 use super::source::{
     read_fallback_directive, ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent,
-    FDv2SourceResult,
+    FDv2SourceResult, Initializer, Synchronizer,
 };
 use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
@@ -287,6 +288,73 @@ impl<T: HttpTransport> super::source::Synchronizer for PollingSynchronizer<T> {
 
     fn name(&self) -> &str {
         "FDv2 polling synchronizer"
+    }
+}
+
+/// Builds a fresh `PollingInitializer` each time an initializer run starts.
+pub(crate) struct PollingInitializerFactory<T> {
+    transport: T,
+    base_url: String,
+    headers: RequestHeaders,
+}
+
+impl<T: HttpTransport + Clone + Send + Sync + 'static> PollingInitializerFactory<T> {
+    pub(crate) fn new(transport: T, base_url: String, headers: RequestHeaders) -> Self {
+        Self {
+            transport,
+            base_url,
+            headers,
+        }
+    }
+}
+
+impl<T: HttpTransport + Clone + Send + Sync + 'static> InitializerFactory
+    for PollingInitializerFactory<T>
+{
+    fn create(&self) -> Box<dyn Initializer> {
+        Box::new(PollingInitializer::new(
+            self.transport.clone(),
+            self.base_url.clone(),
+            self.headers.clone(),
+            None,
+        ))
+    }
+}
+
+/// Builds a fresh `PollingSynchronizer` each time the synchronizer activates.
+pub(crate) struct PollingSynchronizerFactory<T> {
+    transport: T,
+    base_url: String,
+    headers: RequestHeaders,
+    poll_interval: Duration,
+}
+
+impl<T: HttpTransport + Clone + Send + Sync + 'static> PollingSynchronizerFactory<T> {
+    pub(crate) fn new(
+        transport: T,
+        base_url: String,
+        headers: RequestHeaders,
+        poll_interval: Duration,
+    ) -> Self {
+        Self {
+            transport,
+            base_url,
+            headers,
+            poll_interval,
+        }
+    }
+}
+
+impl<T: HttpTransport + Clone + Send + Sync + 'static> SynchronizerFactory
+    for PollingSynchronizerFactory<T>
+{
+    fn create(&self) -> Box<dyn Synchronizer> {
+        Box::new(PollingSynchronizer::new(
+            self.transport.clone(),
+            self.base_url.clone(),
+            self.headers.clone(),
+            self.poll_interval,
+        ))
     }
 }
 
