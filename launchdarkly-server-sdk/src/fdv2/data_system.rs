@@ -27,6 +27,8 @@ pub(crate) trait SynchronizerFactory: Send + Sync {
 pub(crate) struct FDv2DataSystem {
     initializer_factories: Vec<Box<dyn InitializerFactory>>,
     synchronizer_factories: Vec<Arc<dyn SynchronizerFactory>>,
+    fallback_timeout: Duration,
+    recovery_timeout: Duration,
     store: Arc<RwLock<InMemoryDataStore>>,
 }
 
@@ -34,10 +36,14 @@ impl FDv2DataSystem {
     pub(crate) fn new(
         initializer_factories: Vec<Box<dyn InitializerFactory>>,
         synchronizer_factories: Vec<Arc<dyn SynchronizerFactory>>,
+        fallback_timeout: Duration,
+        recovery_timeout: Duration,
     ) -> Self {
         Self {
             initializer_factories,
             synchronizer_factories,
+            fallback_timeout,
+            recovery_timeout,
             store: Arc::new(RwLock::new(InMemoryDataStore::new())),
         }
     }
@@ -63,6 +69,8 @@ impl DataSystem for FDv2DataSystem {
             store,
             init_complete,
             shutdown_receiver,
+            self.fallback_timeout,
+            self.recovery_timeout,
         ));
     }
 
@@ -149,9 +157,6 @@ impl SourceManager {
     }
 }
 
-const FALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
-const RECOVERY_TIMEOUT: Duration = Duration::from_secs(300);
-
 /// Sleeps until `at`, or never when `None` (an inactive timer arm).
 async fn deadline(at: Option<Instant>) {
     match at {
@@ -166,6 +171,8 @@ async fn run(
     store: Arc<RwLock<InMemoryDataStore>>,
     init_complete: Arc<dyn Fn(bool) + Send + Sync>,
     mut shutdown_receiver: broadcast::Receiver<()>,
+    fallback_timeout: Duration,
+    recovery_timeout: Duration,
 ) {
     let mut selector: Selector = None;
     let mut initialized = false;
@@ -193,7 +200,7 @@ async fn run(
         let has_fallback = source_manager.available_count() > 1;
         let has_recovery = has_fallback && !source_manager.is_prime();
         let mut fallback_at: Option<Instant> = None;
-        let recovery_at = has_recovery.then(|| Instant::now() + RECOVERY_TIMEOUT);
+        let recovery_at = has_recovery.then(|| Instant::now() + recovery_timeout);
         let mut interrupted_logged = false;
 
         // Drive the active synchronizer, racing its events against the timers.
@@ -230,7 +237,7 @@ async fn run(
                             interrupted_logged = true;
                         }
                         if has_fallback && fallback_at.is_none() {
-                            fallback_at = Some(Instant::now() + FALLBACK_TIMEOUT);
+                            fallback_at = Some(Instant::now() + fallback_timeout);
                         }
                     }
                     // Handled internally by the synchronizer.
@@ -270,6 +277,9 @@ mod tests {
     use crate::stores::change_set::{ChangeSet, ItemChange};
     use crate::stores::store_types::StorageItem;
     use crate::test_common::basic_flag;
+
+    const FALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
+    const RECOVERY_TIMEOUT: Duration = Duration::from_secs(300);
 
     type Selectors = Arc<Mutex<Vec<Selector>>>;
     type InitCalls = Arc<Mutex<Vec<bool>>>;
@@ -443,6 +453,8 @@ mod tests {
                 )]),
             })],
             vec![sync_factory(vec![], no_selectors(), false)],
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         );
 
         // Record init-complete calls and wake the test when one arrives.
@@ -500,6 +512,8 @@ mod tests {
             store.clone(),
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         )
         .await;
 
@@ -548,6 +562,8 @@ mod tests {
             store.clone(),
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         )
         .await;
 
@@ -581,6 +597,8 @@ mod tests {
             store,
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         )
         .await;
 
@@ -616,6 +634,8 @@ mod tests {
             store.clone(),
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         )
         .await;
 
@@ -648,6 +668,8 @@ mod tests {
             store.clone(),
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         )
         .await;
 
@@ -674,6 +696,8 @@ mod tests {
             store,
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         ));
         shutdown_tx.send(()).unwrap();
         handle.await.unwrap();
@@ -775,6 +799,8 @@ mod tests {
             store.clone(),
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         ));
         handle.await.unwrap();
 
@@ -825,6 +851,8 @@ mod tests {
             store.clone(),
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         ));
 
         // Wait for the basis, let well past the fallback timeout elapse, then stop.
@@ -869,6 +897,8 @@ mod tests {
             store.clone(),
             init_complete,
             shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
         ));
         handle.await.unwrap();
 
