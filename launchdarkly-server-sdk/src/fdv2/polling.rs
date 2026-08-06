@@ -16,6 +16,9 @@ use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
 use crate::stores::change_set::ChangeSet;
 
+// Minimum polling interval to avoid accidentally hammering the service.
+const MINIMUM_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
 fn interrupted(kind: ErrorKind, message: impl Into<String>) -> FDv2SourceEvent {
     FDv2SourceEvent {
         result: FDv2SourceResult::Interrupted(ErrorInfo {
@@ -250,7 +253,7 @@ impl<T: HttpTransport> PollingSynchronizer<T> {
             base_url,
             sdk_key,
             filter_key,
-            poll_interval,
+            poll_interval: std::cmp::max(poll_interval, MINIMUM_POLL_INTERVAL),
             last_poll_start: None,
         }
     }
@@ -579,31 +582,65 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn synchronizer_next_enforces_poll_interval() {
         use super::super::source::Synchronizer;
         use std::sync::atomic::Ordering;
+
+        // Configure an interval above the floor.
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let transport = CountingTransport {
-            count: count.clone(),
-        };
         let mut sync = PollingSynchronizer::new(
-            transport,
+            CountingTransport {
+                count: count.clone(),
+            },
             "http://example.com".to_string(),
             "sdk-key".to_string(),
             None,
-            Duration::from_millis(50),
+            Duration::from_secs(60),
         );
 
-        let start = std::time::Instant::now();
+        // Poll twice, timing the gap on the paused clock.
+        let start = tokio::time::Instant::now();
         let _ = sync.next(None).await;
         let _ = sync.next(None).await;
         let elapsed = start.elapsed();
 
+        // The second poll waited the configured 60s.
         assert_eq!(count.load(Ordering::SeqCst), 2);
         assert!(
-            elapsed >= Duration::from_millis(45),
-            "expected the second poll to wait ~50ms, got total {elapsed:?}",
+            elapsed >= Duration::from_secs(59),
+            "expected the second poll to wait the configured 60s, got {elapsed:?}",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn synchronizer_clamps_poll_interval_to_minimum() {
+        use super::super::source::Synchronizer;
+        use std::sync::atomic::Ordering;
+
+        // Configure an interval below the floor.
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut sync = PollingSynchronizer::new(
+            CountingTransport {
+                count: count.clone(),
+            },
+            "http://example.com".to_string(),
+            "sdk-key".to_string(),
+            None,
+            Duration::from_secs(1),
+        );
+
+        // Poll twice, timing the gap on the paused clock.
+        let start = tokio::time::Instant::now();
+        let _ = sync.next(None).await;
+        let _ = sync.next(None).await;
+        let elapsed = start.elapsed();
+
+        // The second poll waited the clamped 30s minimum, not the configured 1s.
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert!(
+            elapsed >= Duration::from_secs(29),
+            "expected the second poll to wait the clamped 30s minimum, got {elapsed:?}",
         );
     }
 
