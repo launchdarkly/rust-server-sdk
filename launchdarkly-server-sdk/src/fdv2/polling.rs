@@ -181,23 +181,15 @@ pub(crate) struct PollingInitializer<T: HttpTransport> {
     base_url: String,
     sdk_key: String,
     selector: Selector,
-    filter_key: Option<String>,
 }
 
 impl<T: HttpTransport> PollingInitializer<T> {
-    pub(crate) fn new(
-        transport: T,
-        base_url: String,
-        sdk_key: String,
-        selector: Selector,
-        filter_key: Option<String>,
-    ) -> Self {
+    pub(crate) fn new(transport: T, base_url: String, sdk_key: String, selector: Selector) -> Self {
         Self {
             transport,
             base_url,
             sdk_key,
             selector,
-            filter_key,
         }
     }
 }
@@ -205,12 +197,7 @@ impl<T: HttpTransport> PollingInitializer<T> {
 impl<T: HttpTransport> super::source::Initializer for PollingInitializer<T> {
     fn run(&mut self) -> futures::future::BoxFuture<'_, FDv2SourceEvent> {
         Box::pin(async move {
-            let request = match build_poll_request(
-                &self.base_url,
-                &self.sdk_key,
-                &self.selector,
-                self.filter_key.as_deref(),
-            ) {
+            let request = match build_poll_request(&self.base_url, &self.sdk_key, &self.selector) {
                 Ok(r) => r,
                 Err(e) => {
                     return FDv2SourceEvent {
@@ -235,7 +222,6 @@ pub(crate) struct PollingSynchronizer<T: HttpTransport> {
     transport: T,
     base_url: String,
     sdk_key: String,
-    filter_key: Option<String>,
     poll_interval: Duration,
     last_poll_start: Option<std::time::Instant>,
 }
@@ -245,14 +231,12 @@ impl<T: HttpTransport> PollingSynchronizer<T> {
         transport: T,
         base_url: String,
         sdk_key: String,
-        filter_key: Option<String>,
         poll_interval: Duration,
     ) -> Self {
         Self {
             transport,
             base_url,
             sdk_key,
-            filter_key,
             poll_interval: std::cmp::max(poll_interval, MINIMUM_POLL_INTERVAL),
             last_poll_start: None,
         }
@@ -273,12 +257,7 @@ impl<T: HttpTransport> super::source::Synchronizer for PollingSynchronizer<T> {
             self.last_poll_start = Some(std::time::Instant::now());
 
             // Build the poll request.
-            let request = match build_poll_request(
-                &self.base_url,
-                &self.sdk_key,
-                &selector,
-                self.filter_key.as_deref(),
-            ) {
+            let request = match build_poll_request(&self.base_url, &self.sdk_key, &selector) {
                 Ok(r) => r,
                 Err(e) => {
                     return FDv2SourceEvent {
@@ -305,9 +284,8 @@ fn build_poll_request(
     base_url: &str,
     sdk_key: &str,
     selector: &Selector,
-    filter_key: Option<&str>,
 ) -> Result<Request<Option<Bytes>>, http::Error> {
-    let url = build_fdv2_url(base_url, "sdk/poll", selector, filter_key);
+    let url = build_fdv2_url(base_url, "sdk/poll", selector);
     Request::builder()
         .uri(url)
         .method("GET")
@@ -542,7 +520,6 @@ mod tests {
             "http://example.com".to_string(),
             "sdk-key".to_string(),
             Some("stored-state".to_string()),
-            None,
         );
         let _ = initializer.run().await;
         let uri = captured.lock().unwrap().clone().expect("uri captured");
@@ -560,7 +537,6 @@ mod tests {
             transport,
             "http://example.com".to_string(),
             "sdk-key".to_string(),
-            None,
             Duration::ZERO,
         );
         let _ = sync.next(Some("per-call-state".to_string())).await;
@@ -595,7 +571,6 @@ mod tests {
             },
             "http://example.com".to_string(),
             "sdk-key".to_string(),
-            None,
             Duration::from_secs(60),
         );
 
@@ -626,7 +601,6 @@ mod tests {
             },
             "http://example.com".to_string(),
             "sdk-key".to_string(),
-            None,
             Duration::from_secs(1),
         );
 
@@ -647,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn network_error_returns_interrupted_without_fallback() {
         let transport = FailingTransport;
-        let req = build_poll_request("http://example.com", "sdk-key", &None, None).unwrap();
+        let req = build_poll_request("http://example.com", "sdk-key", &None).unwrap();
         let event = fetch_and_handle(&transport, req).await;
         let FDv2SourceResult::Interrupted(err) = event.result else {
             panic!("expected Interrupted");
@@ -705,13 +679,8 @@ mod tests {
 
         let transport = launchdarkly_sdk_transport::HyperTransport::new().expect("hyper transport");
         use super::super::source::Synchronizer;
-        let mut sync = PollingSynchronizer::new(
-            transport,
-            server.url(),
-            "sdk-key".into(),
-            None,
-            Duration::ZERO,
-        );
+        let mut sync =
+            PollingSynchronizer::new(transport, server.url(), "sdk-key".into(), Duration::ZERO);
 
         let out = sync.next(None).await;
         let FDv2SourceResult::ChangeSet(cs) = out.result else {
