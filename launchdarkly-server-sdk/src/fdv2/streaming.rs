@@ -43,7 +43,6 @@ pub(crate) struct StreamingSynchronizer<T: HttpTransport + Clone + Send + Sync +
     transport: T,
     base_url: String,
     sdk_key: String,
-    filter_key: Option<String>,
     initial_reconnect_delay: Duration,
 
     url_sender: watch::Sender<Uri>,
@@ -58,7 +57,6 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
         transport: T,
         base_url: String,
         sdk_key: String,
-        filter_key: Option<String>,
         initial_reconnect_delay: Duration,
     ) -> Self {
         let (url_sender, _) = watch::channel(Uri::default());
@@ -66,7 +64,6 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
             transport,
             base_url,
             sdk_key,
-            filter_key,
             initial_reconnect_delay,
             url_sender,
             stream: None,
@@ -76,13 +73,7 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
     }
 
     fn build_stream_uri(&self, selector: &Selector) -> Result<Uri, http::uri::InvalidUri> {
-        build_fdv2_url(
-            &self.base_url,
-            STREAM_ENDPOINT,
-            selector,
-            self.filter_key.as_deref(),
-        )
-        .parse::<Uri>()
+        build_fdv2_url(&self.base_url, STREAM_ENDPOINT, selector).parse::<Uri>()
     }
 
     fn drop_connection(&mut self) {
@@ -314,7 +305,6 @@ mod tests {
             NoopTransport,
             "http://example.com".into(),
             "sdk-key".into(),
-            None,
             Duration::ZERO,
         )
     }
@@ -584,7 +574,6 @@ mod tests {
             transport,
             server.url(),
             "sdk-key".into(),
-            None,
             Duration::from_millis(10),
         );
 
@@ -617,7 +606,6 @@ mod tests {
             transport,
             server.url(),
             "sdk-key".into(),
-            None,
             Duration::from_millis(10),
         );
 
