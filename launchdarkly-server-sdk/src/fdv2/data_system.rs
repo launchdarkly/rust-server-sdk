@@ -273,7 +273,31 @@ async fn run(
 
     // Synchronizer phase: rotate through synchronizers as the timers fire.
     let mut current = source_manager.next_synchronizer();
-    while let Some(mut active) = current {
+    loop {
+        let mut active = match current {
+            Some(active) => active,
+            None => {
+                // No synchronizer is available. While an FDv1 fallback directive's
+                // retry is pending, wait it out and return to FDv2 rather than exiting
+                // -- a blocked or terminal fallback must not strand the data system.
+                // With no retry pending, every source hit an unrecoverable error, so stop.
+                if fdv2_retry_at.is_none() {
+                    break;
+                }
+                let mut shutdown = Box::pin(shutdown_receiver.recv()).fuse();
+                let mut fdv2_retry = Box::pin(deadline(fdv2_retry_at)).fuse();
+                futures::select! {
+                    _ = shutdown => return,
+                    _ = fdv2_retry => {
+                        source_manager.switch_back_to_fdv2();
+                        fdv2_retry_at = None;
+                    }
+                }
+                current = source_manager.next_synchronizer();
+                continue;
+            }
+        };
+
         let name = active.name().to_string();
         let has_fallback = source_manager.available_count() > 1;
         let has_recovery = has_fallback && !source_manager.is_prime();
@@ -1542,6 +1566,40 @@ mod tests {
         // Fell back to FDv1, then re-engaged FDv2 once the TTL expired.
         assert_eq!(*calls.lock().unwrap(), vec![true]);
         assert!(store.read().flag("from-fdv1").is_some());
+        assert!(store.read().flag("fdv2-back").is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fdv2_retry_survives_a_terminal_fdv1_fallback() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let (init_complete, calls) = recording_init_complete();
+        let initializers: Vec<Box<dyn Initializer>> = vec![];
+
+        // The FDv2 source reports a 60s directive; the FDv1 fallback then fails
+        // terminally, blocking every source before the TTL expires.
+        let source_manager = SourceManager::new(vec![
+            Arc::new(FallbackThenDataFactory {
+                ttl: Duration::from_secs(60),
+                builds: AtomicUsize::new(0),
+            }) as Arc<dyn SynchronizerFactory>,
+            fdv1_factory(vec![terminal()], no_selectors(), false),
+        ]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        // Paused time advances past the TTL while no source is available.
+        let handle = tokio::spawn(run(
+            initializers,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        ));
+        handle.await.unwrap();
+
+        // The blocked fallback did not strand the run; FDv2 re-engaged after the TTL.
+        assert_eq!(*calls.lock().unwrap(), vec![true]);
         assert!(store.read().flag("fdv2-back").is_some());
     }
 
