@@ -9,10 +9,12 @@ const DEFAULT_POLLING_BASE_URL: &str = "https://sdk.launchdarkly.com";
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
+use launchdarkly_sdk_transport::HttpTransport;
 use launchdarkly_server_sdk::{
-    ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
-    FlagDetailConfig, FlagFilter, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
-    ServiceEndpointsBuilder, StreamingDataSourceBuilder,
+    ApplicationInfo, BuildError, Client, ConfigBuilder, DataSystemBuilder, Detail,
+    EventProcessorBuilder, FDv2PollingBuilder, FDv2StreamingBuilder, FlagDetailConfig, FlagFilter,
+    FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder, ServiceEndpointsBuilder,
+    StreamingDataSourceBuilder,
 };
 
 #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
@@ -27,8 +29,115 @@ use crate::{
         CommandParams, CommandResponse, EvaluateAllFlagsParams, EvaluateAllFlagsResponse,
         EvaluateFlagParams, EvaluateFlagResponse,
     },
-    CreateInstanceParams,
+    CreateInstanceParams, DataSynchronizerParams, DataSystemParams,
 };
+
+/// Builds an FDv2 data system from the contract test's data system params. The
+/// FDv1 fallback is always polling and reads its base URL from the polling
+/// service endpoint, so it is set here alongside the fallback source.
+fn build_fdv2_data_system<T: HttpTransport + Clone + Send + Sync + 'static>(
+    params: DataSystemParams,
+    transport: T,
+    service_endpoints: &mut ServiceEndpointsBuilder,
+) -> DataSystemBuilder {
+    let mut builder = DataSystemBuilder::custom();
+
+    let synchronizers = params.synchronizers.unwrap_or_default();
+    for sync in &synchronizers {
+        if let Some(streaming) = &sync.streaming {
+            let mut source = FDv2StreamingBuilder::<T>::new();
+            if let Some(base_uri) = &streaming.base_uri {
+                source.base_url(base_uri);
+            }
+            if let Some(delay) = streaming.initial_retry_delay_ms {
+                source.initial_reconnect_delay(Duration::from_millis(delay));
+            }
+            source.transport(transport.clone());
+            builder.streaming_synchronizer(source);
+        } else if let Some(polling) = &sync.polling {
+            let mut source = FDv2PollingBuilder::<T>::new();
+            if let Some(base_uri) = &polling.base_uri {
+                source.base_url(base_uri);
+            }
+            if let Some(interval) = polling.poll_interval_ms {
+                source.poll_interval(Duration::from_millis(interval));
+            }
+            source.transport(transport.clone());
+            builder.polling_synchronizer(source);
+        }
+    }
+
+    for init in params.initializers.unwrap_or_default() {
+        if let Some(polling) = &init.polling {
+            let mut source = FDv2PollingBuilder::<T>::new();
+            if let Some(base_uri) = &polling.base_uri {
+                source.base_url(base_uri);
+            }
+            if let Some(interval) = polling.poll_interval_ms {
+                source.poll_interval(Duration::from_millis(interval));
+            }
+            source.transport(transport.clone());
+            builder.initializer(source);
+        }
+    }
+
+    // Use the configured FDv1 fallback if present, otherwise derive one from the
+    // synchronizers. The fallback is always polling.
+    let fallback = match params.fdv1_fallback {
+        Some(fallback) => Some((
+            fallback
+                .base_uri
+                .or_else(|| derive_fallback_base_url(&synchronizers)),
+            fallback.poll_interval_ms,
+        )),
+        None => select_fallback_synchronizer(&synchronizers).map(|sync| {
+            if let Some(polling) = &sync.polling {
+                (polling.base_uri.clone(), polling.poll_interval_ms)
+            } else if let Some(streaming) = &sync.streaming {
+                (streaming.base_uri.clone(), None)
+            } else {
+                (None, None)
+            }
+        }),
+    };
+
+    if let Some((base_url, poll_interval)) = fallback {
+        if let Some(base_url) = base_url {
+            service_endpoints.polling_base_url(&base_url);
+        }
+        let mut fallback_builder = PollingDataSourceBuilder::<T>::new();
+        if let Some(interval) = poll_interval {
+            fallback_builder.poll_interval(Duration::from_millis(interval));
+        }
+        fallback_builder.transport(transport.clone());
+        builder.fdv1_fallback(&fallback_builder);
+    }
+
+    builder
+}
+
+/// Selects the synchronizer to derive an FDv1 fallback from: the first polling
+/// synchronizer, otherwise the first synchronizer.
+fn select_fallback_synchronizer(
+    synchronizers: &[DataSynchronizerParams],
+) -> Option<&DataSynchronizerParams> {
+    synchronizers
+        .iter()
+        .find(|sync| sync.polling.is_some())
+        .or_else(|| synchronizers.first())
+}
+
+/// Derives an FDv1 fallback base URL from the synchronizers.
+fn derive_fallback_base_url(synchronizers: &[DataSynchronizerParams]) -> Option<String> {
+    let sync = select_fallback_synchronizer(synchronizers)?;
+    if let Some(polling) = &sync.polling {
+        polling.base_uri.clone()
+    } else if let Some(streaming) = &sync.streaming {
+        streaming.base_uri.clone()
+    } else {
+        None
+    }
+}
 
 pub struct ClientEntity {
     client: Arc<Client>,
@@ -87,7 +196,14 @@ impl ClientEntity {
             }
         }
 
-        if let Some(streaming) = create_instance_params.configuration.streaming {
+        if let Some(data_system) = create_instance_params.configuration.data_system {
+            let data_system_builder = build_fdv2_data_system(
+                data_system,
+                transport.clone(),
+                &mut service_endpoints_builder,
+            );
+            config_builder = config_builder.data_system(&data_system_builder);
+        } else if let Some(streaming) = create_instance_params.configuration.streaming {
             if let Some(base_uri) = streaming.base_uri {
                 service_endpoints_builder.streaming_base_url(&base_uri);
             }
