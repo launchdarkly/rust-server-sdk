@@ -326,8 +326,27 @@ impl ConfigBuilder {
             Some(_data_store_builder) => self.data_store_builder.unwrap(),
         };
 
+        // The data system is optional; when set it supersedes the data source.
+        // Like the data source, it is ignored in offline or daemon mode.
+        let data_system_builder = match self.data_system_builder {
+            Some(_) if self.offline => {
+                warn!("Custom data system builders will be ignored when in offline mode");
+                None
+            }
+            Some(_) if self.daemon_mode => {
+                warn!("Custom data system builders will be ignored when in daemon mode");
+                None
+            }
+            other => other,
+        };
+
         let data_source_builder_result: Result<Box<dyn DataSourceFactory>, BuildError> =
             match self.data_source_builder {
+                None if data_system_builder.is_some() => Ok(Box::new(NullDataSourceBuilder::new())),
+                Some(_) if data_system_builder.is_some() => {
+                    warn!("Custom data source builders will be ignored when a data system is configured");
+                    Ok(Box::new(NullDataSourceBuilder::new()))
+                }
                 None if self.offline => Ok(Box::new(NullDataSourceBuilder::new())),
                 Some(_) if self.offline => {
                     warn!("Custom data source builders will be ignored when in offline mode");
@@ -366,20 +385,6 @@ impl ConfigBuilder {
                 )),
             };
         let data_source_builder = data_source_builder_result?;
-
-        // The data system is optional; when unset the client uses the data source above.
-        // Like that data source, it is ignored in offline or daemon mode.
-        let data_system_builder = match self.data_system_builder {
-            Some(_) if self.offline => {
-                warn!("Custom data system builders will be ignored when in offline mode");
-                None
-            }
-            Some(_) if self.daemon_mode => {
-                warn!("Custom data system builders will be ignored when in daemon mode");
-                None
-            }
-            other => other,
-        };
 
         let event_processor_builder_result: Result<Box<dyn EventProcessorFactory>, BuildError> =
             match self.event_processor_builder {
