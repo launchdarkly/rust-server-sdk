@@ -3,7 +3,7 @@ pub mod fdv1_adapter;
 pub mod model;
 pub mod polling;
 mod protocol;
-mod request_headers;
+pub mod request_headers;
 mod source;
 pub mod streaming;
 mod url;
