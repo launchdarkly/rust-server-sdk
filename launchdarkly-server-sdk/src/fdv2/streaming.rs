@@ -14,7 +14,7 @@ use super::model::Selector;
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
 use super::source::{
     read_fallback_directive, ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent,
-    FDv2SourceResult, Synchronizer,
+    FDv2SourceResult, RequestHeaders, Synchronizer,
 };
 use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
@@ -42,7 +42,7 @@ type EventStream = Pin<Box<dyn Stream<Item = eventsource::Result<SSE>> + Send>>;
 pub(crate) struct StreamingSynchronizer<T: HttpTransport + Clone + Send + Sync + 'static> {
     transport: T,
     base_url: String,
-    sdk_key: String,
+    headers: RequestHeaders,
     initial_reconnect_delay: Duration,
 
     url_sender: watch::Sender<Uri>,
@@ -56,14 +56,14 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
     pub(crate) fn new(
         transport: T,
         base_url: String,
-        sdk_key: String,
+        headers: RequestHeaders,
         initial_reconnect_delay: Duration,
     ) -> Self {
         let (url_sender, _) = watch::channel(Uri::default());
         Self {
             transport,
             base_url,
-            sdk_key,
+            headers,
             initial_reconnect_delay,
             url_sender,
             stream: None,
@@ -196,7 +196,7 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
 
     fn start(&mut self) -> Result<(), eventsource::Error> {
         let initial_uri = self.url_sender.borrow().clone();
-        let client = ClientBuilder::for_url(&initial_uri.to_string())?
+        let mut client_builder = ClientBuilder::for_url(&initial_uri.to_string())?
             .dynamic_url(self.url_sender.subscribe())
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
@@ -204,10 +204,11 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
                     .delay(self.initial_reconnect_delay)
                     .delay_max(RECONNECT_DELAY_MAX)
                     .build(),
-            )
-            .header("Authorization", &self.sdk_key)?
-            .header("User-Agent", &crate::USER_AGENT)?
-            .build_with_transport(self.transport.clone());
+            );
+        for (name, value) in self.headers.iter() {
+            client_builder = client_builder.header(name, value)?;
+        }
+        let client = client_builder.build_with_transport(self.transport.clone());
 
         self.stream = Some(Box::pin(client.stream()));
         Ok(())
@@ -300,11 +301,15 @@ mod tests {
         }
     }
 
+    fn test_headers() -> RequestHeaders {
+        RequestHeaders::new("sdk-key", None, "test-instance")
+    }
+
     fn new_synchronizer() -> StreamingSynchronizer<NoopTransport> {
         StreamingSynchronizer::new(
             NoopTransport,
             "http://example.com".into(),
-            "sdk-key".into(),
+            test_headers(),
             Duration::ZERO,
         )
     }
@@ -573,7 +578,7 @@ mod tests {
         let mut sync = StreamingSynchronizer::new(
             transport,
             server.url(),
-            "sdk-key".into(),
+            test_headers(),
             Duration::from_millis(10),
         );
 
@@ -605,7 +610,7 @@ mod tests {
         let mut sync = StreamingSynchronizer::new(
             transport,
             server.url(),
-            "sdk-key".into(),
+            test_headers(),
             Duration::from_millis(10),
         );
 
