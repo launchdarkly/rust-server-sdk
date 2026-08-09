@@ -83,6 +83,12 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
     }
 
     fn handle_sse_event(&mut self, event: eventsource::Event) -> Option<FDv2SourceEvent> {
+        // Unrecognized events are ignored without parsing their data, leaving
+        // room for future protocol additions.
+        if !FDv2ProtocolHandler::is_known_event(&event.event_type) {
+            return None;
+        }
+
         let data: serde_json::Value = match serde_json::from_str(&event.data) {
             Ok(v) => v,
             Err(e) => {
@@ -403,6 +409,32 @@ mod tests {
             panic!("expected Interrupted");
         };
         assert_eq!(err.kind, ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn unknown_event_is_ignored_without_parsing_body() {
+        let mut sync = new_synchronizer();
+
+        // An unrecognized event with a non-JSON body must be ignored, not parsed.
+        let unknown = eventsource::Event {
+            event_type: "whatever".into(),
+            data: "not json".into(),
+            id: None,
+            retry: None,
+        };
+        assert!(sync.handle_sse_event(unknown).is_none());
+
+        // The stream keeps working: a following valid cycle still produces a changeset.
+        let flag = crate::test_common::basic_flag("my-flag");
+        let flag_json = serde_json::to_value(&flag).unwrap();
+        assert!(feed(&mut sync, "server-intent", intent("xfer-full")).is_none());
+        assert!(feed(
+            &mut sync,
+            "put-object",
+            json!({"version": 1, "kind": "flag", "key": "my-flag", "object": flag_json}),
+        )
+        .is_none());
+        assert!(feed(&mut sync, "payload-transferred", json!({"state": "s-1"})).is_some());
     }
 
     #[test]
