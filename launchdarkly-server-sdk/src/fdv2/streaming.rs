@@ -12,9 +12,10 @@ use tokio::sync::watch;
 
 use super::model::Selector;
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
+use super::request_headers::RequestHeaders;
 use super::source::{
     read_fallback_directive, ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent,
-    FDv2SourceResult, RequestHeaders, Synchronizer,
+    FDv2SourceResult, Synchronizer,
 };
 use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
