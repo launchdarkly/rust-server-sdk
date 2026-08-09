@@ -10,7 +10,7 @@ use super::model::{ChangeSetKind, Selector};
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
 use super::source::{
     read_fallback_directive, ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent,
-    FDv2SourceResult,
+    FDv2SourceResult, RequestHeaders,
 };
 use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
@@ -179,16 +179,21 @@ async fn fetch_and_handle<T: HttpTransport>(
 pub(crate) struct PollingInitializer<T: HttpTransport> {
     transport: T,
     base_url: String,
-    sdk_key: String,
+    headers: RequestHeaders,
     selector: Selector,
 }
 
 impl<T: HttpTransport> PollingInitializer<T> {
-    pub(crate) fn new(transport: T, base_url: String, sdk_key: String, selector: Selector) -> Self {
+    pub(crate) fn new(
+        transport: T,
+        base_url: String,
+        headers: RequestHeaders,
+        selector: Selector,
+    ) -> Self {
         Self {
             transport,
             base_url,
-            sdk_key,
+            headers,
             selector,
         }
     }
@@ -197,7 +202,7 @@ impl<T: HttpTransport> PollingInitializer<T> {
 impl<T: HttpTransport> super::source::Initializer for PollingInitializer<T> {
     fn run(&mut self) -> futures::future::BoxFuture<'_, FDv2SourceEvent> {
         Box::pin(async move {
-            let request = match build_poll_request(&self.base_url, &self.sdk_key, &self.selector) {
+            let request = match build_poll_request(&self.base_url, &self.headers, &self.selector) {
                 Ok(r) => r,
                 Err(e) => {
                     return FDv2SourceEvent {
@@ -221,7 +226,7 @@ impl<T: HttpTransport> super::source::Initializer for PollingInitializer<T> {
 pub(crate) struct PollingSynchronizer<T: HttpTransport> {
     transport: T,
     base_url: String,
-    sdk_key: String,
+    headers: RequestHeaders,
     poll_interval: Duration,
     last_poll_start: Option<std::time::Instant>,
 }
@@ -230,13 +235,13 @@ impl<T: HttpTransport> PollingSynchronizer<T> {
     pub(crate) fn new(
         transport: T,
         base_url: String,
-        sdk_key: String,
+        headers: RequestHeaders,
         poll_interval: Duration,
     ) -> Self {
         Self {
             transport,
             base_url,
-            sdk_key,
+            headers,
             poll_interval: std::cmp::max(poll_interval, MINIMUM_POLL_INTERVAL),
             last_poll_start: None,
         }
@@ -257,7 +262,7 @@ impl<T: HttpTransport> super::source::Synchronizer for PollingSynchronizer<T> {
             self.last_poll_start = Some(std::time::Instant::now());
 
             // Build the poll request.
-            let request = match build_poll_request(&self.base_url, &self.sdk_key, &selector) {
+            let request = match build_poll_request(&self.base_url, &self.headers, &selector) {
                 Ok(r) => r,
                 Err(e) => {
                     return FDv2SourceEvent {
@@ -282,22 +287,27 @@ impl<T: HttpTransport> super::source::Synchronizer for PollingSynchronizer<T> {
 
 fn build_poll_request(
     base_url: &str,
-    sdk_key: &str,
+    headers: &RequestHeaders,
     selector: &Selector,
 ) -> Result<Request<Option<Bytes>>, http::Error> {
     let url = build_fdv2_url(base_url, "sdk/poll", selector);
-    Request::builder()
+    let mut builder = Request::builder()
         .uri(url)
         .method("GET")
-        .header("Content-Type", "application/json")
-        .header("Authorization", sdk_key)
-        .header("User-Agent", &*crate::USER_AGENT)
-        .body(Some(Bytes::new()))
+        .header("Content-Type", "application/json");
+    for (name, value) in headers.iter() {
+        builder = builder.header(name, value);
+    }
+    builder.body(Some(Bytes::new()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_headers() -> RequestHeaders {
+        RequestHeaders::new("sdk-key", None, "test-instance")
+    }
 
     fn full_payload_body(flag_key: &str) -> Vec<u8> {
         let flag = crate::test_common::basic_flag(flag_key);
@@ -518,7 +528,7 @@ mod tests {
         let mut initializer = PollingInitializer::new(
             transport,
             "http://example.com".to_string(),
-            "sdk-key".to_string(),
+            test_headers(),
             Some("stored-state".to_string()),
         );
         let _ = initializer.run().await;
@@ -536,7 +546,7 @@ mod tests {
         let mut sync = PollingSynchronizer::new(
             transport,
             "http://example.com".to_string(),
-            "sdk-key".to_string(),
+            test_headers(),
             Duration::ZERO,
         );
         let _ = sync.next(Some("per-call-state".to_string())).await;
@@ -570,7 +580,7 @@ mod tests {
                 count: count.clone(),
             },
             "http://example.com".to_string(),
-            "sdk-key".to_string(),
+            test_headers(),
             Duration::from_secs(60),
         );
 
@@ -600,7 +610,7 @@ mod tests {
                 count: count.clone(),
             },
             "http://example.com".to_string(),
-            "sdk-key".to_string(),
+            test_headers(),
             Duration::from_secs(1),
         );
 
@@ -621,7 +631,7 @@ mod tests {
     #[tokio::test]
     async fn network_error_returns_interrupted_without_fallback() {
         let transport = FailingTransport;
-        let req = build_poll_request("http://example.com", "sdk-key", &None).unwrap();
+        let req = build_poll_request("http://example.com", &test_headers(), &None).unwrap();
         let event = fetch_and_handle(&transport, req).await;
         let FDv2SourceResult::Interrupted(err) = event.result else {
             panic!("expected Interrupted");
@@ -680,7 +690,7 @@ mod tests {
         let transport = launchdarkly_sdk_transport::HyperTransport::new().expect("hyper transport");
         use super::super::source::Synchronizer;
         let mut sync =
-            PollingSynchronizer::new(transport, server.url(), "sdk-key".into(), Duration::ZERO);
+            PollingSynchronizer::new(transport, server.url(), test_headers(), Duration::ZERO);
 
         let out = sync.next(None).await;
         let FDv2SourceResult::ChangeSet(cs) = out.result else {
