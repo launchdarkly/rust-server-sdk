@@ -9,7 +9,7 @@ use crate::data_system::DataSystem;
 use crate::fdv2::data_system::{FDv2DataSystem, InitializerFactory, SynchronizerFactory};
 use crate::fdv2::fdv1_adapter::FDv1AdapterFactory;
 use crate::fdv2::polling::{PollingInitializerFactory, PollingSynchronizerFactory};
-use crate::fdv2::source::RequestHeaders;
+use crate::fdv2::request_headers::RequestHeaders;
 use crate::fdv2::streaming::StreamingSynchronizerFactory;
 use crate::service_endpoints::ServiceEndpoints;
 
@@ -366,7 +366,7 @@ pub(crate) trait DataSystemFactory {
         &self,
         endpoints: &ServiceEndpoints,
         sdk_key: &str,
-        tags: Option<String>,
+        tags: Option<&str>,
         instance_id: &str,
     ) -> Result<Arc<dyn DataSystem>, BuildError>;
 }
@@ -376,10 +376,10 @@ impl DataSystemFactory for DataSystemBuilder {
         &self,
         endpoints: &ServiceEndpoints,
         sdk_key: &str,
-        tags: Option<String>,
+        tags: Option<&str>,
         instance_id: &str,
     ) -> Result<Arc<dyn DataSystem>, BuildError> {
-        let headers = RequestHeaders::new(sdk_key, tags.as_deref(), instance_id);
+        let headers = RequestHeaders::new(sdk_key, tags, instance_id);
 
         let initializer_factories: Vec<Box<dyn InitializerFactory>> = self
             .initializers
@@ -398,9 +398,11 @@ impl DataSystemFactory for DataSystemBuilder {
         if let Some(fdv1_factory) = &self.fdv1_fallback {
             let mut fdv1_factory = (**fdv1_factory).to_owned();
             fdv1_factory.set_instance_id(instance_id.to_string());
-            let source = fdv1_factory.build(endpoints, sdk_key, tags).map_err(|e| {
-                BuildError::InvalidConfig(format!("failed to build FDv1 fallback source: {e}"))
-            })?;
+            let source = fdv1_factory
+                .build(endpoints, sdk_key, tags.map(|t| t.to_string()))
+                .map_err(|e| {
+                    BuildError::InvalidConfig(format!("failed to build FDv1 fallback source: {e}"))
+                })?;
             let adapter = FDv1AdapterFactory::new(Box::new(move || source.clone()));
             synchronizer_factories.push(Arc::new(adapter));
         }

@@ -192,9 +192,12 @@ impl Client {
             event_processor_builder.build(&endpoints, config.sdk_key(), tags.clone())?;
 
         let data_system: Arc<dyn DataSystem> = match config.data_system_builder() {
-            Some(data_system_builder) => {
-                data_system_builder.build(&endpoints, config.sdk_key(), tags.clone(), &instance_id)?
-            }
+            Some(data_system_builder) => data_system_builder.build(
+                &endpoints,
+                config.sdk_key(),
+                tags.as_deref(),
+                &instance_id,
+            )?,
             None => {
                 let mut data_source_builder = config.data_source_builder().to_owned();
                 data_source_builder.set_instance_id(instance_id);
