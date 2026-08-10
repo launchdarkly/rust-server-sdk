@@ -58,6 +58,7 @@ mod client;
 mod config;
 mod data_source;
 mod data_source_builders;
+mod data_system;
 mod evaluation;
 mod events;
 #[allow(dead_code)] // Tested but not yet reachable from production code.
