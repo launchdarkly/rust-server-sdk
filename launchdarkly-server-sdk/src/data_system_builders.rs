@@ -419,6 +419,9 @@ impl DataSystemFactory for DataSystemBuilder {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
+    use launchdarkly_sdk_transport::{Request, ResponseFuture};
+
     use super::*;
 
     #[test]
@@ -462,7 +465,43 @@ mod tests {
         assert_eq!(builder.recovery_timeout, Duration::from_secs(11));
     }
 
+    #[derive(Debug, Clone)]
+    struct TestTransport;
+
+    impl HttpTransport for TestTransport {
+        fn request(&self, _request: Request<Option<Bytes>>) -> ResponseFuture {
+            unreachable!();
+        }
+    }
+
     #[test]
+    fn builders_build_factories_with_injected_transport() {
+        let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
+        let headers = RequestHeaders::new("sdk-key", None, "test-instance");
+
+        // Each source builds a factory from a configured transport.
+        assert!(FDv2StreamingBuilder::<TestTransport>::new()
+            .transport(TestTransport)
+            .build_synchronizer(&endpoints, &headers)
+            .is_ok());
+        assert!(FDv2PollingBuilder::<TestTransport>::new()
+            .transport(TestTransport)
+            .build_synchronizer(&endpoints, &headers)
+            .is_ok());
+        assert!(FDv2PollingBuilder::<TestTransport>::new()
+            .transport(TestTransport)
+            .build_initializer(&endpoints, &headers)
+            .is_ok());
+    }
+
+    // The default path builds a real HTTPS transport, which needs a TLS backend,
+    // so this only runs where one of those features is enabled.
+    #[test]
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
     fn builders_build_factories_with_default_transport() {
         let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
         let headers = RequestHeaders::new("sdk-key", None, "test-instance");
