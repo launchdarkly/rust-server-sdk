@@ -71,8 +71,11 @@ fn parse_poll_body(body: &[u8]) -> FDv2SourceEvent {
                 }
             },
             ProtocolResult::Goodbye(g) => {
+                if let Some(reason) = &g.reason {
+                    info!("FDv2 polling source received goodbye: {reason}");
+                }
                 return FDv2SourceEvent {
-                    result: FDv2SourceResult::Goodbye { reason: g.reason },
+                    result: FDv2SourceResult::Goodbye,
                     fdv1_fallback: g.protocol_fallback_ttl.map(|s| FDv1FallbackDirective {
                         ttl: Duration::from_secs(s),
                     }),
@@ -653,10 +656,7 @@ mod tests {
         });
         let body = serde_json::to_vec(&envelope).unwrap();
         let event = parse_poll_body(&body);
-        let FDv2SourceResult::Goodbye { reason } = event.result else {
-            panic!("expected Goodbye");
-        };
-        assert_eq!(reason.as_deref(), Some("rotating"));
+        assert!(matches!(event.result, FDv2SourceResult::Goodbye));
         assert_eq!(
             event.fdv1_fallback.as_ref().map(|d| d.ttl),
             Some(Duration::from_secs(90))
