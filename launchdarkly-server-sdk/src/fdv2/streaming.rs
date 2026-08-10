@@ -114,6 +114,9 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
                 }
             },
             ProtocolResult::Goodbye(g) => {
+                if let Some(reason) = &g.reason {
+                    info!("FDv2 streaming source received goodbye: {reason}");
+                }
                 // An explicit directive on the goodbye takes precedence over
                 // the most recent response header.
                 let fallback = g
@@ -124,7 +127,7 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
                     .or_else(|| self.latest_fdv1_fallback.clone());
                 self.drop_connection();
                 Some(FDv2SourceEvent {
-                    result: FDv2SourceResult::Goodbye { reason: g.reason },
+                    result: FDv2SourceResult::Goodbye,
                     fdv1_fallback: fallback,
                 })
             }
@@ -450,10 +453,7 @@ mod tests {
         )
         .expect("goodbye produced");
 
-        let FDv2SourceResult::Goodbye { reason } = out.result else {
-            panic!("expected Goodbye");
-        };
-        assert_eq!(reason.as_deref(), Some("rotating"));
+        assert!(matches!(out.result, FDv2SourceResult::Goodbye));
         assert_eq!(
             out.fdv1_fallback.map(|d| d.ttl),
             Some(Duration::from_secs(90))
