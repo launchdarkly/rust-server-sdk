@@ -179,6 +179,7 @@ async fn run(
 
     // Initializer phase: try each in order until one yields a basis.
     for mut initializer in initializers {
+        let name = initializer.name().to_string();
         let mut shutdown = Box::pin(shutdown_receiver.recv()).fuse();
         futures::select! {
             _ = shutdown => return,
@@ -190,6 +191,7 @@ async fn run(
                     initialized = true;
                     break;
                 }
+                debug!("{name} did not provide a basis");
             }
         }
     }
@@ -197,6 +199,7 @@ async fn run(
     // Synchronizer phase: rotate through synchronizers as the timers fire.
     let mut current = source_manager.next_synchronizer();
     while let Some(mut active) = current {
+        let name = active.name().to_string();
         let has_fallback = source_manager.available_count() > 1;
         let has_recovery = has_fallback && !source_manager.is_prime();
         let mut fallback_at: Option<Instant> = None;
@@ -233,7 +236,7 @@ async fn run(
                     // Sustained interruption starts the fallback countdown.
                     FDv2SourceResult::Interrupted(error) => {
                         if !interrupted_logged {
-                            info!("FDv2 synchronizer interrupted: {}", error.message);
+                            info!("{name} interrupted: {}", error.message);
                             interrupted_logged = true;
                         }
                         if has_fallback && fallback_at.is_none() {
@@ -241,9 +244,9 @@ async fn run(
                         }
                     }
                     // Handled internally by the synchronizer.
-                    FDv2SourceResult::Goodbye { .. } => {}
+                    FDv2SourceResult::Goodbye => {}
                     FDv2SourceResult::TerminalError(error) => {
-                        warn!("FDv2 synchronizer terminal error: {}", error.message);
+                        warn!("{name} terminal error: {}", error.message);
                         // Dead source: drop it and advance.
                         source_manager.block_current();
                         break;
