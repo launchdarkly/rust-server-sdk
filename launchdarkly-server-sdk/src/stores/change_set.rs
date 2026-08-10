@@ -20,5 +20,6 @@ pub(crate) enum ItemChange {
 pub(crate) struct ChangeSet {
     pub(crate) kind: ChangeSetKind,
     pub(crate) changes: Vec<ItemChange>,
+    #[allow(dead_code)] // Read by the orchestrator in a later phase.
     pub(crate) selector: Selector,
 }

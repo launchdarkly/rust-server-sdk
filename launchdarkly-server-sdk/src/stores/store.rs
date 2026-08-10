@@ -34,6 +34,7 @@ pub trait DataStore: Store + Send + Sync {
 }
 
 /// Trait for a data store that accepts atomic batch updates from FDv2 delivery.
+#[allow(dead_code)] // Consumed by the FDv2 orchestrator in a later phase.
 pub(crate) trait TransactionalDataStore: Send + Sync {
     /// Apply the batch atomically per the change set's kind.
     fn apply(&mut self, change_set: ChangeSet);
