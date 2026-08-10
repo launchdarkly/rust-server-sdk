@@ -65,7 +65,6 @@ mod data_system;
 mod data_system_builders;
 mod evaluation;
 mod events;
-#[allow(dead_code)] // Some items are consumed only by later data-system phases.
 mod fdv2;
 mod feature_requester;
 mod feature_requester_builders;
