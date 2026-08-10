@@ -12,11 +12,11 @@ pub(crate) enum ErrorKind {
     NetworkError,
     ErrorResponse { status_code: u16 },
     InvalidData,
-    StoreError,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ErrorInfo {
+    #[allow(dead_code)] // Will be read by data source status provider, once implemented.
     pub(crate) kind: ErrorKind,
     pub(crate) message: String,
 }
@@ -32,7 +32,7 @@ pub(crate) enum FDv2SourceResult {
     Interrupted(ErrorInfo),
     TerminalError(ErrorInfo),
     Shutdown,
-    Goodbye { reason: Option<String> },
+    Goodbye,
 }
 
 #[derive(Debug)]
