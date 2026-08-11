@@ -2,6 +2,14 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.2.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.1.2...3.2.0) (2026-08-10)
+
+
+### Features
+
+* Add FDv2 wire format and protocol handler ([#177](https://github.com/launchdarkly/rust-server-sdk/issues/177)) ([a94f88c](https://github.com/launchdarkly/rust-server-sdk/commit/a94f88c0f40cc0f7af002d7c619611ec8ac7cfcb))
+* Add optional float-roundtrip feature ([#184](https://github.com/launchdarkly/rust-server-sdk/issues/184)) ([465b231](https://github.com/launchdarkly/rust-server-sdk/commit/465b2313faf89b72d851fd54a5a8dccf00ca61b5))
+
 ## [3.1.2](https://github.com/launchdarkly/rust-server-sdk/compare/3.1.1...3.1.2) (2026-07-21)
 
 
