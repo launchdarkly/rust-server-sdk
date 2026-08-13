@@ -2,6 +2,16 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.3.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.2.0...3.3.0) (2026-08-13)
+
+
+### Features
+
+* Add FDv2 source traits and result types ([#187](https://github.com/launchdarkly/rust-server-sdk/issues/187)) ([9e84674](https://github.com/launchdarkly/rust-server-sdk/commit/9e846744926c1c2bcb700bbdf8fa6fc30982451b))
+* Add the FDv2 polling data source ([#188](https://github.com/launchdarkly/rust-server-sdk/issues/188)) ([fec25e8](https://github.com/launchdarkly/rust-server-sdk/commit/fec25e81584902d1cf5a9f6a92a553f750c83c06))
+* Add the FDv2 streaming synchronizer ([#189](https://github.com/launchdarkly/rust-server-sdk/issues/189)) ([e26d224](https://github.com/launchdarkly/rust-server-sdk/commit/e26d22474e5ecb47b302c307aeea5a6eaf72f24c))
+* Add the FDv2 transactional store and change-set translation ([#186](https://github.com/launchdarkly/rust-server-sdk/issues/186)) ([e623336](https://github.com/launchdarkly/rust-server-sdk/commit/e623336ce4a3faf0af2d0b0cc5dd9fc85a750bd7))
+
 ## [3.2.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.1.2...3.2.0) (2026-08-10)
 
 
