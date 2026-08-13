@@ -102,7 +102,8 @@ fn parse_poll_body(body: &[u8]) -> FDv2SourceEvent {
 }
 
 async fn handle_response(response: Response<ByteStream>) -> FDv2SourceEvent {
-    let fallback = read_fallback_directive(response.headers());
+    let fallback =
+        read_fallback_directive(|name| response.headers().get(name).and_then(|v| v.to_str().ok()));
     let status = response.status();
 
     if status == StatusCode::NOT_MODIFIED {

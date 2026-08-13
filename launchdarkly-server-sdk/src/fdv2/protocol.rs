@@ -41,6 +41,19 @@ impl FDv2ProtocolHandler {
         self.changes.clear();
     }
 
+    /// Reports whether the FDv2 protocol handler recognizes this event type.
+    pub(super) fn is_known_event(event_type: &str) -> bool {
+        matches!(
+            event_type,
+            "server-intent"
+                | "put-object"
+                | "delete-object"
+                | "payload-transferred"
+                | "error"
+                | "goodbye"
+        )
+    }
+
     pub(super) fn handle_event(
         &mut self,
         event_type: &str,
