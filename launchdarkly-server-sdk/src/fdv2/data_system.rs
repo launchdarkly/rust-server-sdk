@@ -256,9 +256,7 @@ async fn run(
         if let Some(fallback_directive) = fdv1_fallback {
             info!("FDv2 falling back to the FDv1 protocol");
             source_manager.switch_to_fdv1_fallback();
-            if fallback_directive.ttl != Duration::ZERO {
-                fdv2_retry_at = Some(Instant::now() + fallback_directive.ttl);
-            }
+            fdv2_retry_at = Some(Instant::now() + fallback_directive.ttl);
             break;
         }
         if got_basis {
@@ -364,9 +362,7 @@ async fn run(
                         if !source_manager.is_current_fdv1_fallback() {
                             info!("FDv2 falling back to the FDv1 protocol");
                             source_manager.switch_to_fdv1_fallback();
-                            if fallback_directive.ttl != Duration::ZERO {
-                                fdv2_retry_at = Some(Instant::now() + fallback_directive.ttl);
-                            }
+                            fdv2_retry_at = Some(Instant::now() + fallback_directive.ttl);
                             break;
                         }
                     }
@@ -460,17 +456,18 @@ mod tests {
         }
     }
 
-    /// An initializer that reports an FDv1 fallback directive with no TTL.
-    struct FallbackInitializer;
+    /// An initializer that reports an FDv1 fallback directive with the given TTL.
+    struct FallbackInitializer {
+        ttl: Duration,
+    }
 
     impl Initializer for FallbackInitializer {
         fn run(&mut self) -> BoxFuture<'_, FDv2SourceEvent> {
-            Box::pin(async {
+            let ttl = self.ttl;
+            Box::pin(async move {
                 FDv2SourceEvent {
                     result: interrupted(),
-                    fdv1_fallback: Some(FDv1FallbackDirective {
-                        ttl: Duration::ZERO,
-                    }),
+                    fdv1_fallback: Some(FDv1FallbackDirective { ttl }),
                 }
             })
         }
@@ -480,11 +477,13 @@ mod tests {
         }
     }
 
-    struct FallbackInitializerFactory;
+    struct FallbackInitializerFactory {
+        ttl: Duration,
+    }
 
     impl InitializerFactory for FallbackInitializerFactory {
         fn create(&self) -> Box<dyn Initializer> {
-            Box::new(FallbackInitializer)
+            Box::new(FallbackInitializer { ttl: self.ttl })
         }
     }
 
@@ -1308,10 +1307,10 @@ mod tests {
         let (init_complete, calls) = recording_init_complete();
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
-        // The FDv2 source reports a fallback directive with a zero TTL, so FDv2
-        // is never retried; the FDv1 fallback holds the basis.
+        // The FDv2 source reports a fallback directive; the FDv1 fallback then
+        // supplies the basis and ends the run.
         let source_manager = SourceManager::new(vec![
-            fallback_directive_factory(Duration::ZERO),
+            fallback_directive_factory(Duration::from_secs(60)),
             fdv1_factory(
                 vec![changeset(
                     ChangeSetKind::Full,
@@ -1387,7 +1386,7 @@ mod tests {
     async fn fdv2_retry_survives_a_terminal_fdv1_fallback() {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // The FDv2 source reports a 60s directive; the FDv1 fallback then fails
         // terminally, blocking every source before the TTL expires.
@@ -1402,7 +1401,7 @@ mod tests {
 
         // Paused time advances past the TTL while no source is available.
         let handle = tokio::spawn(run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -1422,9 +1421,12 @@ mod tests {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> =
-            vec![Arc::new(FallbackInitializerFactory)];
+            vec![Arc::new(FallbackInitializerFactory {
+                ttl: Duration::from_secs(60),
+            })];
 
-        // The FDv2 synchronizer is never reached; the FDv1 fallback holds the basis.
+        // The initializer's directive switches to the FDv1 fallback, which supplies
+        // the basis and ends the run.
         let source_manager = SourceManager::new(vec![
             sync_factory(vec![], no_selectors(), false),
             fdv1_factory(

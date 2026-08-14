@@ -121,9 +121,7 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
                 // the most recent response header.
                 let fallback = g
                     .protocol_fallback_ttl
-                    .map(|s| FDv1FallbackDirective {
-                        ttl: Duration::from_secs(s),
-                    })
+                    .map(|s| FDv1FallbackDirective::from_ttl(Some(Duration::from_secs(s))))
                     .or_else(|| self.latest_fdv1_fallback.clone());
                 self.drop_connection();
                 Some(FDv2SourceEvent {
