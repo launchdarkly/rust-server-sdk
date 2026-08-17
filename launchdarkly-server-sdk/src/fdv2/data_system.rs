@@ -9,7 +9,7 @@ use tokio::time::{sleep_until, Instant};
 use crate::data_system::DataSystem;
 use crate::stores::store::{DataStore, InMemoryDataStore, TransactionalDataStore};
 
-use super::model::Selector;
+use super::model::{ChangeSetKind, Selector};
 use super::source::{FDv2SourceResult, Initializer, Synchronizer};
 
 /// Produces a fresh initializer each time the orchestrator starts a run.
@@ -185,11 +185,13 @@ async fn run(
             _ = shutdown => return,
             event = initializer.run().fuse() => {
                 if let FDv2SourceResult::ChangeSet(change_set) = event.result {
-                    selector = change_set.selector.clone();
-                    store.write().apply(change_set);
-                    init_complete(true);
-                    initialized = true;
-                    break;
+                    if !matches!(change_set.kind, ChangeSetKind::None) {
+                        selector = change_set.selector.clone();
+                        store.write().apply(change_set);
+                        init_complete(true);
+                        initialized = true;
+                        break;
+                    }
                 }
                 debug!("{name} did not provide a basis");
             }
@@ -223,13 +225,15 @@ async fn run(
                 }
                 event = next => match event.result {
                     FDv2SourceResult::ChangeSet(change_set) => {
-                        selector = change_set.selector.clone();
-                        store.write().apply(change_set);
-                        if !initialized {
-                            init_complete(true);
-                            initialized = true;
+                        if !matches!(change_set.kind, ChangeSetKind::None) {
+                            selector = change_set.selector.clone();
+                            store.write().apply(change_set);
+                            if !initialized {
+                                init_complete(true);
+                                initialized = true;
+                            }
                         }
-                        // Good data clears the fallback countdown.
+                        // A successful response clears the countdown.
                         fallback_at = None;
                         interrupted_logged = false;
                     }
@@ -529,6 +533,41 @@ mod tests {
 
         // The synchronizer's first call received the basis selector.
         assert_eq!(selectors_seen.lock().unwrap()[0], Some("sel-1".into()));
+    }
+
+    #[tokio::test]
+    async fn none_changeset_does_not_clobber_the_selector() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
+        let (init_complete, _calls) = recording_init_complete();
+        let initializers: Vec<Box<dyn Initializer>> = vec![];
+
+        // A full basis carrying selector "s1", then a "no changes" (None) changeset.
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![
+                changeset(ChangeSetKind::Full, "flag", Some("s1".into())),
+                changeset(ChangeSetKind::None, "flag", None),
+            ],
+            selectors_seen.clone(),
+            false,
+        )]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializers,
+            source_manager,
+            store,
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // Exactly three requests, and the one issued after the None changeset still
+        // carries "s1" -- the None must not reset the selector to None.
+        let seen = selectors_seen.lock().unwrap();
+        assert_eq!(*seen, vec![None, Some("s1".into()), Some("s1".into())]);
     }
 
     #[tokio::test]
