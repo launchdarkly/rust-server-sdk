@@ -184,16 +184,25 @@ async fn run(
         futures::select! {
             _ = shutdown => return,
             event = initializer.run().fuse() => {
-                if let FDv2SourceResult::ChangeSet(change_set) = event.result {
-                    if !matches!(change_set.kind, ChangeSetKind::None) {
-                        selector = change_set.selector.clone();
+                match event.result {
+                    FDv2SourceResult::ChangeSet(change_set)
+                        if !matches!(change_set.kind, ChangeSetKind::None) =>
+                    {
+                        let got_basis = change_set.selector.is_some();
+                        if got_basis {
+                            selector = change_set.selector.clone();
+                        }
                         store.write().apply(change_set);
-                        init_complete(true);
-                        initialized = true;
-                        break;
+                        if !initialized {
+                            init_complete(true);
+                            initialized = true;
+                        }
+                        if got_basis {
+                            break;
+                        }
                     }
+                    _ => debug!("{name} did not provide a basis"),
                 }
-                debug!("{name} did not provide a basis");
             }
         }
     }
@@ -226,7 +235,9 @@ async fn run(
                 event = next => match event.result {
                     FDv2SourceResult::ChangeSet(change_set) => {
                         if !matches!(change_set.kind, ChangeSetKind::None) {
-                            selector = change_set.selector.clone();
+                            if change_set.selector.is_some() {
+                                selector = change_set.selector.clone();
+                            }
                             store.write().apply(change_set);
                             if !initialized {
                                 init_complete(true);
@@ -536,6 +547,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn initializer_payload_without_basis_continues_to_next_initializer() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
+        let (init_complete, calls) = recording_init_complete();
+
+        let initializers: Vec<Box<dyn Initializer>> = vec![
+            // The first initializer delivers a payload with no basis.
+            Box::new(MockInitializer {
+                results: VecDeque::from(vec![changeset(
+                    ChangeSetKind::Full,
+                    "no-basis-flag",
+                    None,
+                )]),
+            }),
+            // The second is a partial basis that merges without clearing the first payload.
+            Box::new(MockInitializer {
+                results: VecDeque::from(vec![changeset(
+                    ChangeSetKind::Partial,
+                    "basis-flag",
+                    Some("sel-2".into()),
+                )]),
+            }),
+        ];
+
+        // The synchronizer only records the selector it is started with.
+        let source_manager =
+            SourceManager::new(vec![sync_factory(vec![], selectors_seen.clone(), false)]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializers,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // The no-basis payload survives and the second initializer's basis was applied.
+        assert!(store.read().flag("no-basis-flag").is_some());
+        assert!(store.read().flag("basis-flag").is_some());
+
+        // The synchronizer is started from the second initializer's basis selector.
+        assert_eq!(selectors_seen.lock().unwrap()[0], Some("sel-2".into()));
+
+        // init_complete fired exactly once.
+        assert_eq!(*calls.lock().unwrap(), vec![true]);
+    }
+
+    #[tokio::test]
     async fn none_changeset_does_not_clobber_the_selector() {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
@@ -566,6 +629,40 @@ mod tests {
 
         // Exactly three requests, and the one issued after the None changeset still
         // carries "s1" -- the None must not reset the selector to None.
+        let seen = selectors_seen.lock().unwrap();
+        assert_eq!(*seen, vec![None, Some("s1".into()), Some("s1".into())]);
+    }
+
+    #[tokio::test]
+    async fn selectorless_change_does_not_clobber_the_selector() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
+        let (init_complete, _calls) = recording_init_complete();
+        let initializers: Vec<Box<dyn Initializer>> = vec![];
+
+        // A full basis carrying selector "s1", then a partial change with no selector.
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![
+                changeset(ChangeSetKind::Full, "flag", Some("s1".into())),
+                changeset(ChangeSetKind::Partial, "flag", None),
+            ],
+            selectors_seen.clone(),
+            false,
+        )]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializers,
+            source_manager,
+            store,
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // The request after the selectorless change still carries "s1".
         let seen = selectors_seen.lock().unwrap();
         assert_eq!(*seen, vec![None, Some("s1".into()), Some("s1".into())]);
     }
