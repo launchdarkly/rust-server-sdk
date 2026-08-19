@@ -146,7 +146,7 @@ impl SourceManager {
             .states
             .iter()
             .position(|s| *s == SourceState::Available);
-        matches!((first, self.current_factory_index), (Some(f), Some(c)) if f == c)
+        first == self.current_factory_index && first.is_some()
     }
 
     fn available_count(&self) -> usize {
