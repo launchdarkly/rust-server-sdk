@@ -22,17 +22,17 @@ polling/requests/URL path is computed correctly/environment_filter_key="encoding
 polling/requests/URL path is computed correctly/environment_filter_key="encoding_not_necessary"/base URI has a trailing slash/GET
 
 # Rust does not escape `/`- or `~`-prefixed redacted attribute names as attribute references in events (SDK-2923).
-events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/debug event
-events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/identify event
-events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/index event from custom event
-events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/index event from evaluation
-events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: any
-events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: bool
-events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: double
-events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: int
-events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: string
-events/feature events/single-kind anonymous context redacts all attributes/type: any
-events/feature events/single-kind anonymous context redacts all attributes/type: bool
-events/feature events/single-kind anonymous context redacts all attributes/type: double
-events/feature events/single-kind anonymous context redacts all attributes/type: int
-events/feature events/single-kind anonymous context redacts all attributes/type: string
+# events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/debug event
+# events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/identify event
+# events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/index event from custom event
+# events/context properties/single-kind, allAttributesPrivate, slash-prefixed attribute name/index event from evaluation
+# events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: any
+# events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: bool
+# events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: double
+# events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: int
+# events/feature events/multi-kind with anonymous context redacts attributes appropriately/type: string
+# events/feature events/single-kind anonymous context redacts all attributes/type: any
+# events/feature events/single-kind anonymous context redacts all attributes/type: bool
+# events/feature events/single-kind anonymous context redacts all attributes/type: double
+# events/feature events/single-kind anonymous context redacts all attributes/type: int
+# events/feature events/single-kind anonymous context redacts all attributes/type: string
