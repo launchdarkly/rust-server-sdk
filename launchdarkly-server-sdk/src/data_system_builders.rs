@@ -381,10 +381,10 @@ impl DataSystemFactory for DataSystemBuilder {
     ) -> Result<Arc<dyn DataSystem>, BuildError> {
         let headers = RequestHeaders::new(sdk_key, tags, instance_id);
 
-        let initializer_factories: Vec<Box<dyn InitializerFactory>> = self
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = self
             .initializers
             .iter()
-            .map(|c| c.build_initializer(endpoints, &headers))
+            .map(|c| c.build_initializer(endpoints, &headers).map(Arc::from))
             .collect::<Result<_, _>>()?;
 
         let mut synchronizer_factories: Vec<Arc<dyn SynchronizerFactory>> = self
