@@ -25,7 +25,7 @@ pub(crate) trait SynchronizerFactory: Send + Sync {
 /// FDv2 orchestrator: owns the memory store and keeps it populated by running
 /// initializers to obtain a basis, then synchronizers for ongoing changes.
 pub(crate) struct FDv2DataSystem {
-    initializer_factories: Vec<Box<dyn InitializerFactory>>,
+    initializer_factories: Vec<Arc<dyn InitializerFactory>>,
     synchronizer_factories: Vec<Arc<dyn SynchronizerFactory>>,
     fallback_timeout: Duration,
     recovery_timeout: Duration,
@@ -34,7 +34,7 @@ pub(crate) struct FDv2DataSystem {
 
 impl FDv2DataSystem {
     pub(crate) fn new(
-        initializer_factories: Vec<Box<dyn InitializerFactory>>,
+        initializer_factories: Vec<Arc<dyn InitializerFactory>>,
         synchronizer_factories: Vec<Arc<dyn SynchronizerFactory>>,
         fallback_timeout: Duration,
         recovery_timeout: Duration,
@@ -55,16 +55,12 @@ impl DataSystem for FDv2DataSystem {
         init_complete: Arc<dyn Fn(bool) + Send + Sync>,
         shutdown_receiver: broadcast::Receiver<()>,
     ) {
-        let initializers = self
-            .initializer_factories
-            .iter()
-            .map(|f| f.create())
-            .collect();
+        let initializer_factories = self.initializer_factories.clone();
         let source_manager = SourceManager::new(self.synchronizer_factories.clone());
         let store = self.store.clone();
 
         tokio::spawn(run(
-            initializers,
+            initializer_factories,
             source_manager,
             store,
             init_complete,
@@ -166,7 +162,7 @@ async fn deadline(at: Option<Instant>) {
 }
 
 async fn run(
-    initializers: Vec<Box<dyn Initializer>>,
+    initializer_factories: Vec<Arc<dyn InitializerFactory>>,
     mut source_manager: SourceManager,
     store: Arc<RwLock<InMemoryDataStore>>,
     init_complete: Arc<dyn Fn(bool) + Send + Sync>,
@@ -178,7 +174,8 @@ async fn run(
     let mut initialized = false;
 
     // Initializer phase: try each in order until one yields a basis.
-    for mut initializer in initializers {
+    for factory in initializer_factories {
+        let mut initializer = factory.create();
         let name = initializer.name().to_string();
         let mut shutdown = Box::pin(shutdown_receiver.recv()).fuse();
         futures::select! {
@@ -387,6 +384,13 @@ mod tests {
         }
     }
 
+    /// A single-initializer factory scripted with the given results.
+    fn init_factory(results: Vec<FDv2SourceResult>) -> Arc<dyn InitializerFactory> {
+        Arc::new(MockInitializerFactory {
+            results: Mutex::new(results),
+        })
+    }
+
     struct MockSynchronizerFactory {
         results: Mutex<Vec<FDv2SourceResult>>,
         selectors_seen: Selectors,
@@ -463,13 +467,11 @@ mod tests {
     async fn start_applies_basis_and_exposes_it_via_store_handle() {
         // A data system whose sole initializer yields one full basis.
         let system = FDv2DataSystem::new(
-            vec![Box::new(MockInitializerFactory {
-                results: Mutex::new(vec![changeset(
-                    ChangeSetKind::Full,
-                    "f1",
-                    Some("s1".into()),
-                )]),
-            })],
+            vec![init_factory(vec![changeset(
+                ChangeSetKind::Full,
+                "f1",
+                Some("s1".into()),
+            )])],
             vec![sync_factory(vec![], no_selectors(), false)],
             FALLBACK_TIMEOUT,
             RECOVERY_TIMEOUT,
@@ -504,13 +506,12 @@ mod tests {
         let (init_complete, calls) = recording_init_complete();
 
         // Initializer delivers a full basis carrying selector "sel-1".
-        let initializers: Vec<Box<dyn Initializer>> = vec![Box::new(MockInitializer {
-            results: VecDeque::from(vec![changeset(
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> =
+            vec![init_factory(vec![changeset(
                 ChangeSetKind::Full,
                 "init-flag",
                 Some("sel-1".into()),
-            )]),
-        })];
+            )])];
 
         // Synchronizer delivers a partial change carrying selector "sel-2".
         let source_manager = SourceManager::new(vec![sync_factory(
@@ -525,7 +526,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -552,23 +553,15 @@ mod tests {
         let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
         let (init_complete, calls) = recording_init_complete();
 
-        let initializers: Vec<Box<dyn Initializer>> = vec![
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![
             // The first initializer delivers a payload with no basis.
-            Box::new(MockInitializer {
-                results: VecDeque::from(vec![changeset(
-                    ChangeSetKind::Full,
-                    "no-basis-flag",
-                    None,
-                )]),
-            }),
+            init_factory(vec![changeset(ChangeSetKind::Full, "no-basis-flag", None)]),
             // The second is a partial basis that merges without clearing the first payload.
-            Box::new(MockInitializer {
-                results: VecDeque::from(vec![changeset(
-                    ChangeSetKind::Partial,
-                    "basis-flag",
-                    Some("sel-2".into()),
-                )]),
-            }),
+            init_factory(vec![changeset(
+                ChangeSetKind::Partial,
+                "basis-flag",
+                Some("sel-2".into()),
+            )]),
         ];
 
         // The synchronizer only records the selector it is started with.
@@ -577,7 +570,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -603,7 +596,7 @@ mod tests {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
         let (init_complete, _calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A full basis carrying selector "s1", then a "no changes" (None) changeset.
         let source_manager = SourceManager::new(vec![sync_factory(
@@ -617,7 +610,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store,
             init_complete,
@@ -638,7 +631,7 @@ mod tests {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
         let (init_complete, _calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A full basis carrying selector "s1", then a partial change with no selector.
         let source_manager = SourceManager::new(vec![sync_factory(
@@ -652,7 +645,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store,
             init_complete,
@@ -674,13 +667,9 @@ mod tests {
         let (init_complete, calls) = recording_init_complete();
 
         // Both initializers fail without producing a basis.
-        let initializers: Vec<Box<dyn Initializer>> = vec![
-            Box::new(MockInitializer {
-                results: VecDeque::from(vec![interrupted()]),
-            }),
-            Box::new(MockInitializer {
-                results: VecDeque::from(vec![terminal()]),
-            }),
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![
+            init_factory(vec![interrupted()]),
+            init_factory(vec![terminal()]),
         ];
 
         // The synchronizer then delivers the basis.
@@ -696,7 +685,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -718,9 +707,8 @@ mod tests {
         let (init_complete, calls) = recording_init_complete();
 
         // The initializer fails.
-        let initializers: Vec<Box<dyn Initializer>> = vec![Box::new(MockInitializer {
-            results: VecDeque::from(vec![terminal()]),
-        })];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> =
+            vec![init_factory(vec![terminal()])];
 
         // The synchronizer reports an interruption, then fails terminally.
         let source_manager = SourceManager::new(vec![sync_factory(
@@ -731,7 +719,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store,
             init_complete,
@@ -750,7 +738,7 @@ mod tests {
         // Store and init-complete recorder; no initializers.
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // First synchronizer fails terminally; the second provides the basis.
         let source_manager = SourceManager::new(vec![
@@ -768,7 +756,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -788,7 +776,7 @@ mod tests {
         // Store and init-complete recorder; no initializers.
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A single synchronizer: an interruption, then a basis on the retry.
         let source_manager = SourceManager::new(vec![sync_factory(
@@ -802,7 +790,7 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -822,7 +810,7 @@ mod tests {
         // Store and init-complete recorder; no initializers.
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A synchronizer whose next() never resolves.
         let source_manager = SourceManager::new(vec![sync_factory(vec![], no_selectors(), true)]);
@@ -830,7 +818,7 @@ mod tests {
 
         // Drive the run on a task, then signal shutdown.
         let handle = tokio::spawn(run(
-            initializers,
+            initializer_factories,
             source_manager,
             store,
             init_complete,
@@ -914,7 +902,7 @@ mod tests {
         // No initializers; the prime interrupts then idles.
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // Prime only ever interrupts; the fallback stands by with a basis.
         let source_manager = SourceManager::new(vec![
@@ -933,7 +921,7 @@ mod tests {
 
         // Paused time auto-advances past the fallback timeout while the prime idles.
         let handle = tokio::spawn(run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -960,7 +948,7 @@ mod tests {
             sink.lock().unwrap().push(success);
             waker.notify_one();
         });
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // Prime interrupts (arming the timer), delivers a basis (clearing it), then idles.
         let source_manager = SourceManager::new(vec![
@@ -985,7 +973,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         let handle = tokio::spawn(run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
@@ -1010,7 +998,7 @@ mod tests {
         // No initializers; the prime is down, so the run falls back then recovers.
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
-        let initializers: Vec<Box<dyn Initializer>> = vec![];
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // Prime recovers on rebuild; the fallback supplies a basis then idles.
         let source_manager = SourceManager::new(vec![
@@ -1031,7 +1019,7 @@ mod tests {
 
         // Paused time auto-advances through the fallback then recovery timeouts.
         let handle = tokio::spawn(run(
-            initializers,
+            initializer_factories,
             source_manager,
             store.clone(),
             init_complete,
