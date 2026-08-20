@@ -76,9 +76,9 @@ fn parse_poll_body(body: &[u8]) -> FDv2SourceEvent {
                 }
                 return FDv2SourceEvent {
                     result: FDv2SourceResult::Goodbye,
-                    fdv1_fallback: g.protocol_fallback_ttl.map(|s| FDv1FallbackDirective {
-                        ttl: Duration::from_secs(s),
-                    }),
+                    fdv1_fallback: g
+                        .protocol_fallback_ttl
+                        .map(|s| FDv1FallbackDirective::from_ttl(Some(Duration::from_secs(s)))),
                 };
             }
             ProtocolResult::Error(ProtocolError::Server(err)) => {
