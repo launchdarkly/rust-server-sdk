@@ -1,4 +1,5 @@
 mod data_system;
+mod fdv1_adapter;
 pub mod model;
 mod polling;
 mod protocol;
