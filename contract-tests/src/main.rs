@@ -70,6 +70,27 @@ pub struct ServiceEndpointParameters {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct DataInitializerParams {
+    pub polling: Option<PollingParameters>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSynchronizerParams {
+    pub streaming: Option<StreamingParameters>,
+    pub polling: Option<PollingParameters>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSystemParams {
+    pub initializers: Option<Vec<DataInitializerParams>>,
+    pub synchronizers: Option<Vec<DataSynchronizerParams>>,
+    pub fdv1_fallback: Option<PollingParameters>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Configuration {
     pub credential: String,
 
@@ -89,6 +110,8 @@ pub struct Configuration {
     pub tags: Option<TagParams>,
 
     pub service_endpoints: Option<ServiceEndpointParameters>,
+
+    pub data_system: Option<DataSystemParams>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -123,6 +146,7 @@ async fn status() -> impl Responder {
             "event-gzip".to_string(),
             "optional-event-gzip".to_string(),
             "instance-id".to_string(),
+            "fdv1-fallback".to_string(),
         ],
     })
 }
