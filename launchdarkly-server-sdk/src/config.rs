@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::data_source_builders::{DataSourceFactory, NullDataSourceBuilder};
+use crate::data_system_builders::{DataSystemBuilder, DataSystemFactory};
 
 #[cfg(any(
     feature = "hyper-rustls-native-roots",
@@ -136,6 +137,7 @@ pub struct Config {
     service_endpoints_builder: ServiceEndpointsBuilder,
     data_store_builder: Box<dyn DataStoreFactory>,
     data_source_builder: Box<dyn DataSourceFactory>,
+    data_system_builder: Option<Box<dyn DataSystemFactory>>,
     event_processor_builder: Box<dyn EventProcessorFactory>,
     application_tag: Option<String>,
     instance_id: String,
@@ -162,6 +164,11 @@ impl Config {
     /// Returns the DataSourceFactory
     pub fn data_source_builder(&self) -> &dyn DataSourceFactory {
         self.data_source_builder.borrow()
+    }
+
+    /// Returns the DataSystemFactory, if an FDv2 data system was configured.
+    pub(crate) fn data_system_builder(&self) -> Option<&dyn DataSystemFactory> {
+        self.data_system_builder.as_deref()
     }
 
     /// Returns the EventProcessorFactory
@@ -212,6 +219,7 @@ pub struct ConfigBuilder {
     service_endpoints_builder: Option<ServiceEndpointsBuilder>,
     data_store_builder: Option<Box<dyn DataStoreFactory>>,
     data_source_builder: Option<Box<dyn DataSourceFactory>>,
+    data_system_builder: Option<Box<dyn DataSystemFactory>>,
     event_processor_builder: Option<Box<dyn EventProcessorFactory>>,
     application_info: Option<ApplicationInfo>,
     offline: bool,
@@ -226,6 +234,7 @@ impl ConfigBuilder {
             service_endpoints_builder: None,
             data_store_builder: None,
             data_source_builder: None,
+            data_system_builder: None,
             event_processor_builder: None,
             offline: false,
             daemon_mode: false,
@@ -255,6 +264,16 @@ impl ConfigBuilder {
     /// If offline mode is enabled, this data source will be ignored.
     pub fn data_source(mut self, builder: &dyn DataSourceFactory) -> Self {
         self.data_source_builder = Some(builder.to_owned());
+        self
+    }
+
+    /// Set the data system to use for this client.
+    ///
+    /// When set, the data system supersedes the [data_source](ConfigBuilder::data_source).
+    /// If offline mode is enabled, it will be ignored.
+    pub fn data_system(mut self, builder: &DataSystemBuilder) -> Self {
+        let factory: Box<dyn DataSystemFactory> = Box::new(builder.clone());
+        self.data_system_builder = Some(factory);
         self
     }
 
@@ -307,8 +326,27 @@ impl ConfigBuilder {
             Some(_data_store_builder) => self.data_store_builder.unwrap(),
         };
 
+        // The data system is optional; when set it supersedes the data source.
+        // Like the data source, it is ignored in offline or daemon mode.
+        let data_system_builder = match self.data_system_builder {
+            Some(_) if self.offline => {
+                warn!("Custom data system builders will be ignored when in offline mode");
+                None
+            }
+            Some(_) if self.daemon_mode => {
+                warn!("Custom data system builders will be ignored when in daemon mode");
+                None
+            }
+            other => other,
+        };
+
         let data_source_builder_result: Result<Box<dyn DataSourceFactory>, BuildError> =
             match self.data_source_builder {
+                None if data_system_builder.is_some() => Ok(Box::new(NullDataSourceBuilder::new())),
+                Some(_) if data_system_builder.is_some() => {
+                    warn!("Custom data source builders will be ignored when a data system is configured");
+                    Ok(Box::new(NullDataSourceBuilder::new()))
+                }
                 None if self.offline => Ok(Box::new(NullDataSourceBuilder::new())),
                 Some(_) if self.offline => {
                     warn!("Custom data source builders will be ignored when in offline mode");
@@ -401,6 +439,7 @@ impl ConfigBuilder {
             service_endpoints_builder,
             data_store_builder,
             data_source_builder,
+            data_system_builder,
             event_processor_builder,
             application_tag,
             instance_id,
