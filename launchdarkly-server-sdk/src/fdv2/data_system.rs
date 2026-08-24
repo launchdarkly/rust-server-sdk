@@ -173,7 +173,7 @@ async fn run(
     let mut selector: Selector = None;
     let mut initialized = false;
 
-    // Initializer phase: try each in order until one yields a basis.
+    // Initializer phase: try each until one yields a selector.
     for factory in initializer_factories {
         let mut initializer = factory.create();
         let name = initializer.name().to_string();
@@ -182,19 +182,18 @@ async fn run(
             _ = shutdown => return,
             event = initializer.run().fuse() => {
                 match event.result {
-                    FDv2SourceResult::ChangeSet(change_set)
-                        if !matches!(change_set.kind, ChangeSetKind::None) =>
-                    {
-                        let got_basis = change_set.selector.is_some();
-                        if got_basis {
+                    FDv2SourceResult::ChangeSet(change_set) => {
+                        let is_full = matches!(change_set.kind, ChangeSetKind::Full);
+                        let has_selector = change_set.selector.is_some();
+                        if !matches!(change_set.kind, ChangeSetKind::None) {
                             selector = change_set.selector.clone();
                         }
                         store.write().apply(change_set);
-                        if !initialized {
+                        if is_full && !initialized {
                             init_complete(true);
                             initialized = true;
                         }
-                        if got_basis {
+                        if has_selector {
                             break;
                         }
                     }
@@ -231,12 +230,11 @@ async fn run(
                 }
                 event = next => match event.result {
                     FDv2SourceResult::ChangeSet(change_set) => {
+                        let is_full = matches!(change_set.kind, ChangeSetKind::Full);
                         if !matches!(change_set.kind, ChangeSetKind::None) {
-                            if change_set.selector.is_some() {
-                                selector = change_set.selector.clone();
-                            }
+                            selector = change_set.selector.clone();
                             store.write().apply(change_set);
-                            if !initialized {
+                            if is_full && !initialized {
                                 init_complete(true);
                                 initialized = true;
                             }
@@ -271,7 +269,7 @@ async fn run(
         current = source_manager.next_synchronizer();
     }
 
-    // Every source blocked without ever obtaining a basis.
+    // Every source blocked without ever obtaining a full payload.
     if !initialized {
         init_complete(false);
     }
@@ -627,13 +625,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selectorless_change_does_not_clobber_the_selector() {
+    async fn selectorless_change_clears_the_selector() {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
         let (init_complete, _calls) = recording_init_complete();
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
-        // A full basis carrying selector "s1", then a partial change with no selector.
+        // A full payload carrying selector "s1", then a partial change with no selector.
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![
                 changeset(ChangeSetKind::Full, "flag", Some("s1".into())),
@@ -655,9 +653,109 @@ mod tests {
         )
         .await;
 
-        // The request after the selectorless change still carries "s1".
+        // The selectorless change advanced state, so the stale selector is dropped.
         let seen = selectors_seen.lock().unwrap();
-        assert_eq!(*seen, vec![None, Some("s1".into()), Some("s1".into())]);
+        assert_eq!(*seen, vec![None, Some("s1".into()), None]);
+    }
+
+    #[tokio::test]
+    async fn initializer_delta_does_not_initialize() {
+        // A spec-compliant backend never returns a delta to an initializer.
+        // Here the sole initializer returns one anyway, which is not a full payload.
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let (init_complete, calls) = recording_init_complete();
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> =
+            vec![init_factory(vec![changeset(
+                ChangeSetKind::Partial,
+                "delta-flag",
+                Some("s1".into()),
+            )])];
+
+        // The synchronizer then fails terminally, exhausting every source.
+        let source_manager =
+            SourceManager::new(vec![sync_factory(vec![terminal()], no_selectors(), false)]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializer_factories,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // The delta applied, but a delta is not a full payload, so failure is signaled.
+        assert!(store.read().flag("delta-flag").is_some());
+        assert_eq!(*calls.lock().unwrap(), vec![false]);
+    }
+
+    #[tokio::test]
+    async fn synchronizer_delta_does_not_initialize() {
+        // No initializers, so the store starts uninitialized.
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let (init_complete, calls) = recording_init_complete();
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
+
+        // A spec-compliant backend never sends a delta before a full payload.
+        // Here the synchronizer delivers one first anyway, then fails terminally.
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![
+                changeset(ChangeSetKind::Partial, "delta-flag", Some("s1".into())),
+                terminal(),
+            ],
+            no_selectors(),
+            false,
+        )]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializer_factories,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // The delta applied, but a delta is not a full payload, so failure is signaled.
+        assert!(store.read().flag("delta-flag").is_some());
+        assert_eq!(*calls.lock().unwrap(), vec![false]);
+    }
+
+    #[tokio::test]
+    async fn selectorless_full_initializes() {
+        // No initializers, so the synchronizer provides the full payload.
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let (init_complete, calls) = recording_init_complete();
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
+
+        // A full payload with no selector still initializes, as the FDv1 adapter produces.
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![changeset(ChangeSetKind::Full, "full-flag", None)],
+            no_selectors(),
+            false,
+        )]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializer_factories,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // A selectorless full still initializes.
+        assert_eq!(*calls.lock().unwrap(), vec![true]);
+        assert!(store.read().flag("full-flag").is_some());
     }
 
     #[tokio::test]
