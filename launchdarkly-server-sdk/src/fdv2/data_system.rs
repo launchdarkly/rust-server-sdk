@@ -645,6 +645,7 @@ mod tests {
     /// Reports an FDv1 fallback directive on its first build, then delivers data.
     struct FallbackThenDataFactory {
         ttl: Duration,
+        reengage_kind: ChangeSetKind,
         builds: AtomicUsize,
     }
 
@@ -659,10 +660,10 @@ mod tests {
                     fallback_directive: Some(FDv1FallbackDirective { ttl: self.ttl }),
                 })
             } else {
-                // After the FDv2 retry: deliver a delta.
+                // After the FDv2 retry: deliver the re-engagement payload.
                 Box::new(MockSynchronizer {
                     results: VecDeque::from(vec![changeset(
-                        ChangeSetKind::Partial,
+                        self.reengage_kind,
                         "fdv2-back",
                         Some("s".into()),
                     )]),
@@ -1536,6 +1537,7 @@ mod tests {
         let source_manager = SourceManager::new(vec![
             Arc::new(FallbackThenDataFactory {
                 ttl: Duration::from_secs(60),
+                reengage_kind: ChangeSetKind::Partial,
                 builds: AtomicUsize::new(0),
             }) as Arc<dyn SynchronizerFactory>,
             fdv1_factory(
@@ -1579,6 +1581,7 @@ mod tests {
         let source_manager = SourceManager::new(vec![
             Arc::new(FallbackThenDataFactory {
                 ttl: Duration::from_secs(60),
+                reengage_kind: ChangeSetKind::Full,
                 builds: AtomicUsize::new(0),
             }) as Arc<dyn SynchronizerFactory>,
             fdv1_factory(vec![terminal()], no_selectors(), false),
