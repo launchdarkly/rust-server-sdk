@@ -172,8 +172,10 @@ async fn run(
 ) {
     let mut selector: Selector = None;
     let mut initialized = false;
+    // Whether an initializer produced a full payload.
+    let mut got_full = false;
 
-    // Initializer phase: try each until one yields a selector.
+    // Initializer phase: try each until one yields a basis.
     for factory in initializer_factories {
         let mut initializer = factory.create();
         let name = initializer.name().to_string();
@@ -184,23 +186,27 @@ async fn run(
                 match event.result {
                     FDv2SourceResult::ChangeSet(change_set) => {
                         let is_full = matches!(change_set.kind, ChangeSetKind::Full);
-                        let has_selector = change_set.selector.is_some();
+                        let has_basis = is_full && change_set.selector.is_some();
                         if !matches!(change_set.kind, ChangeSetKind::None) {
                             selector = change_set.selector.clone();
                         }
                         store.write().apply(change_set);
-                        if is_full && !initialized {
-                            init_complete(true);
-                            initialized = true;
+                        if is_full {
+                            got_full = true;
                         }
-                        if has_selector {
-                            break;
+                        if has_basis {
+                            break; // transition to synchronizer phase
                         }
                     }
                     _ => debug!("{name} did not provide a basis"),
                 }
             }
         }
+    }
+
+    if got_full && !initialized {
+        init_complete(true);
+        initialized = true;
     }
 
     // Synchronizer phase: rotate through synchronizers as the timers fire.
@@ -546,18 +552,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initializer_payload_without_basis_continues_to_next_initializer() {
+    async fn selectorless_full_continues_to_next_initializer() {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
         let (init_complete, calls) = recording_init_complete();
 
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![
-            // The first initializer delivers a payload with no basis.
+            // The first initializer delivers a full payload with no selector.
             init_factory(vec![changeset(ChangeSetKind::Full, "no-basis-flag", None)]),
-            // The second is a partial basis that merges without clearing the first payload.
+            // The second delivers a delta carrying a selector, so it merges over the first.
             init_factory(vec![changeset(
                 ChangeSetKind::Partial,
-                "basis-flag",
+                "merged-flag",
                 Some("sel-2".into()),
             )]),
         ];
@@ -578,15 +584,97 @@ mod tests {
         )
         .await;
 
-        // The no-basis payload survives and the second initializer's basis was applied.
+        // The selector-less payload survives and the delta merged over it.
         assert!(store.read().flag("no-basis-flag").is_some());
-        assert!(store.read().flag("basis-flag").is_some());
+        assert!(store.read().flag("merged-flag").is_some());
 
-        // The synchronizer is started from the second initializer's basis selector.
+        // The selector-less payload did not stop the initializers, so the synchronizer
+        // starts from the second initializer's selector.
         assert_eq!(selectors_seen.lock().unwrap()[0], Some("sel-2".into()));
 
         // init_complete fired exactly once.
         assert_eq!(*calls.lock().unwrap(), vec![true]);
+    }
+
+    #[tokio::test]
+    async fn initializer_selectorless_full_defers_signal() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+
+        // Capture whether the second initializer's flag is present when the signal fires.
+        let flag_at_signal = Arc::new(Mutex::new(None));
+        let probe = store.clone();
+        let sink = flag_at_signal.clone();
+        let init_complete: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_| {
+            *sink.lock().unwrap() = Some(probe.read().flag("from-second").is_some());
+        });
+
+        // Neither initializer produces a basis.
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![
+            init_factory(vec![changeset(ChangeSetKind::Full, "from-first", None)]),
+            init_factory(vec![changeset(ChangeSetKind::Full, "from-second", None)]),
+        ];
+
+        let source_manager = SourceManager::new(vec![sync_factory(vec![], no_selectors(), false)]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializer_factories,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // The signal waited until the initializers were exhausted, so the second
+        // initializer's payload was already applied when it fired.
+        assert_eq!(*flag_at_signal.lock().unwrap(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn basis_stops_later_initializers() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let selectors_seen: Selectors = Arc::new(Mutex::new(Vec::new()));
+        let (init_complete, calls) = recording_init_complete();
+
+        // The first initializer yields a basis; the second would apply another flag.
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![
+            init_factory(vec![changeset(
+                ChangeSetKind::Full,
+                "from-first",
+                Some("s1".into()),
+            )]),
+            init_factory(vec![changeset(
+                ChangeSetKind::Full,
+                "from-second",
+                Some("s2".into()),
+            )]),
+        ];
+
+        let source_manager =
+            SourceManager::new(vec![sync_factory(vec![], selectors_seen.clone(), false)]);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        run(
+            initializer_factories,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        // The basis ended the initializer phase, so the second initializer never ran.
+        assert!(store.read().flag("from-first").is_some());
+        assert!(store.read().flag("from-second").is_none());
+        assert_eq!(*calls.lock().unwrap(), vec![true]);
+
+        // The synchronizer starts from the basis selector.
+        assert_eq!(selectors_seen.lock().unwrap()[0], Some("s1".into()));
     }
 
     #[tokio::test]
@@ -728,7 +816,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selectorless_full_initializes() {
+    async fn synchronizer_selectorless_full_initializes() {
         // No initializers, so the synchronizer provides the full payload.
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
         let (init_complete, calls) = recording_init_complete();
