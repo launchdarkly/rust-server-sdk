@@ -238,12 +238,12 @@ async fn run(
         } = event;
         let mut has_basis = false;
         match result {
-            FDv2SourceResult::ChangeSet(change_set)
-                if !matches!(change_set.kind, ChangeSetKind::None) =>
-            {
+            FDv2SourceResult::ChangeSet(change_set) => {
                 let is_full = matches!(change_set.kind, ChangeSetKind::Full);
                 has_basis = is_full && change_set.selector.is_some();
-                selector = change_set.selector.clone();
+                if !matches!(change_set.kind, ChangeSetKind::None) {
+                    selector = change_set.selector.clone();
+                }
                 store.write().apply(change_set);
                 if is_full {
                     got_full = true;
