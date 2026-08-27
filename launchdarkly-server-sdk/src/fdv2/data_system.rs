@@ -221,8 +221,7 @@ async fn run(
     let mut got_full = false;
     let mut fdv2_retry_at: Option<Instant> = None;
 
-    // Initializer phase: try each until one yields a basis or an FDv1 fallback
-    // directive.
+    // Initializer phase: try each until one yields a basis or an FDv1 fallback directive.
     for factory in initializer_factories {
         let mut initializer = factory.create();
         let name = initializer.name().to_string();
@@ -251,8 +250,7 @@ async fn run(
             }
             _ => debug!("{name} did not provide a basis"),
         }
-        // An FDv1 fallback directive ends the initializer phase and switches
-        // to the fallback.
+        // An FDv1 fallback directive ends the initializer phase and activates the fallback.
         if let Some(fallback_directive) = fdv1_fallback {
             info!("FDv2 falling back to the FDv1 protocol");
             source_manager.switch_to_fdv1_fallback();
@@ -276,8 +274,8 @@ async fn run(
             Some(active) => active,
             None => {
                 // No synchronizer is available. While an FDv1 fallback directive's
-                // retry is pending, wait it out and return to FDv2 rather than exiting
-                // -- a blocked or terminal fallback must not strand the data system.
+                // retry is pending, wait it out and return to FDv2 rather than exiting.
+                // A blocked or terminal fallback must not strand the data system.
                 // With no retry pending, every source hit an unrecoverable error, so stop.
                 if fdv2_retry_at.is_none() {
                     break;
@@ -923,7 +921,7 @@ mod tests {
         .await;
 
         // Exactly three requests, and the one issued after the None changeset still
-        // carries "s1" -- the None must not reset the selector to None.
+        // carries "s1". The None must not reset the selector to None.
         let seen = selectors_seen.lock().unwrap();
         assert_eq!(*seen, vec![None, Some("s1".into()), Some("s1".into())]);
     }
