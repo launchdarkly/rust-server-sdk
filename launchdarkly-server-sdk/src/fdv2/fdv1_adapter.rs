@@ -99,11 +99,12 @@ struct FDv1AdapterSynchronizer {
 impl Synchronizer for FDv1AdapterSynchronizer {
     fn next(&mut self, _selector: Selector) -> BoxFuture<'_, FDv2SourceEvent> {
         Box::pin(async move {
-            let result = self
-                .results
-                .recv()
-                .await
-                .unwrap_or(FDv2SourceResult::Shutdown);
+            let result = self.results.recv().await.unwrap_or_else(|| {
+                FDv2SourceResult::TerminalError(ErrorInfo {
+                    kind: ErrorKind::Unknown,
+                    message: "FDv1 fallback source stopped".to_string(),
+                })
+            });
             FDv2SourceEvent {
                 result,
                 fdv1_fallback: None,
@@ -229,6 +230,33 @@ mod tests {
         let factory =
             FDv1AdapterFactory::new(Box::new(|| Arc::new(FailingSource) as Arc<dyn DataSource>));
         let mut synchronizer = factory.create();
+        assert!(matches!(
+            synchronizer.next(None).await.result,
+            FDv2SourceResult::TerminalError(_)
+        ));
+    }
+
+    /// An FDv1 source whose task ends at once, dropping the store and init_complete.
+    struct DyingSource;
+
+    impl DataSource for DyingSource {
+        fn subscribe(
+            &self,
+            _data_store: Arc<RwLock<dyn DataStore>>,
+            _init_complete: Arc<dyn Fn(bool) + Send + Sync>,
+            _shutdown: broadcast::Receiver<()>,
+        ) {
+            // Returning drops the store and init_complete, which closes the channel.
+        }
+    }
+
+    #[tokio::test]
+    async fn source_death_becomes_a_terminal_error() {
+        let factory =
+            FDv1AdapterFactory::new(Box::new(|| Arc::new(DyingSource) as Arc<dyn DataSource>));
+        let mut synchronizer = factory.create();
+
+        // A dead source closes the channel, which is a terminal error, not a shutdown.
         assert!(matches!(
             synchronizer.next(None).await.result,
             FDv2SourceResult::TerminalError(_)
