@@ -357,7 +357,6 @@ async fn run(
                             warn!("{name} terminal error: {}", error.message);
                             terminal = true;
                         }
-                        FDv2SourceResult::Shutdown => return,
                     }
                     // An FDv1 fallback directive takes precedence over a terminal error.
                     if let Some(fallback_directive) = fdv1_fallback {
@@ -446,10 +445,7 @@ mod tests {
 
     impl Initializer for MockInitializer {
         fn run(&mut self) -> BoxFuture<'_, FDv2SourceEvent> {
-            let result = self
-                .results
-                .pop_front()
-                .unwrap_or(FDv2SourceResult::Shutdown);
+            let result = self.results.pop_front().unwrap_or_else(interrupted);
             Box::pin(async move { event(result) })
         }
 
@@ -492,7 +488,9 @@ mod tests {
     struct MockSynchronizer {
         results: VecDeque<FDv2SourceResult>,
         selectors_seen: Selectors,
-        hang: bool,
+        // When set, the run ends through this once the script is exhausted. When None,
+        // the synchronizer idles so the test's timers can fire.
+        shutdown: Option<broadcast::Sender<()>>,
         fallback_directive: Option<FDv1FallbackDirective>,
     }
 
@@ -509,9 +507,14 @@ mod tests {
                         }
                     })
                 }
-                // Out of scripted results: idle if hang, otherwise end the run.
-                None if self.hang => Box::pin(std::future::pending()),
-                None => Box::pin(async move { event(FDv2SourceResult::Shutdown) }),
+                // Out of scripted results: end the run through the shutdown channel,
+                // or idle when there is no sender.
+                None => {
+                    if let Some(shutdown) = &self.shutdown {
+                        let _ = shutdown.send(());
+                    }
+                    Box::pin(std::future::pending())
+                }
             }
         }
 
@@ -543,7 +546,7 @@ mod tests {
     struct MockSynchronizerFactory {
         results: Mutex<Vec<FDv2SourceResult>>,
         selectors_seen: Selectors,
-        hang: bool,
+        shutdown: Option<broadcast::Sender<()>>,
         is_fdv1_fallback: bool,
         fallback_directive: Option<FDv1FallbackDirective>,
     }
@@ -554,7 +557,7 @@ mod tests {
             Box::new(MockSynchronizer {
                 results: results.into(),
                 selectors_seen: self.selectors_seen.clone(),
-                hang: self.hang,
+                shutdown: self.shutdown.clone(),
                 fallback_directive: self.fallback_directive.clone(),
             })
         }
@@ -573,28 +576,14 @@ mod tests {
     fn sync_factory(
         results: Vec<FDv2SourceResult>,
         selectors_seen: Selectors,
-        hang: bool,
+        shutdown: Option<broadcast::Sender<()>>,
+        is_fdv1_fallback: bool,
     ) -> Arc<dyn SynchronizerFactory> {
         Arc::new(MockSynchronizerFactory {
             results: Mutex::new(results),
             selectors_seen,
-            hang,
-            is_fdv1_fallback: false,
-            fallback_directive: None,
-        })
-    }
-
-    /// Like `sync_factory`, but flagged as the FDv1 fallback.
-    fn fdv1_factory(
-        results: Vec<FDv2SourceResult>,
-        selectors_seen: Selectors,
-        hang: bool,
-    ) -> Arc<dyn SynchronizerFactory> {
-        Arc::new(MockSynchronizerFactory {
-            results: Mutex::new(results),
-            selectors_seen,
-            hang,
-            is_fdv1_fallback: true,
+            shutdown,
+            is_fdv1_fallback,
             fallback_directive: None,
         })
     }
@@ -604,7 +593,7 @@ mod tests {
         Arc::new(MockSynchronizerFactory {
             results: Mutex::new(vec![interrupted()]),
             selectors_seen: no_selectors(),
-            hang: true,
+            shutdown: None,
             is_fdv1_fallback: false,
             fallback_directive: Some(FDv1FallbackDirective { ttl }),
         })
@@ -613,28 +602,29 @@ mod tests {
     /// A factory that is down on its first build and delivers data on rebuild.
     struct DownThenDataFactory {
         builds: AtomicUsize,
+        shutdown: broadcast::Sender<()>,
     }
 
     impl SynchronizerFactory for DownThenDataFactory {
         fn create(&self) -> Box<dyn Synchronizer> {
-            let (results, hang) = if self.builds.fetch_add(1, Ordering::SeqCst) == 0 {
+            let (results, shutdown) = if self.builds.fetch_add(1, Ordering::SeqCst) == 0 {
                 // Down: interrupt, then idle so the fallback timer fires.
-                (vec![interrupted()], true)
+                (vec![interrupted()], None)
             } else {
-                // Rebuilt: deliver a delta.
+                // Rebuilt: deliver a delta, then end the run.
                 (
                     vec![changeset(
                         ChangeSetKind::Partial,
                         "prime-recovered",
                         Some("s".into()),
                     )],
-                    false,
+                    Some(self.shutdown.clone()),
                 )
             };
             Box::new(MockSynchronizer {
                 results: results.into(),
                 selectors_seen: no_selectors(),
-                hang,
+                shutdown,
                 fallback_directive: None,
             })
         }
@@ -645,6 +635,7 @@ mod tests {
         ttl: Duration,
         reengage_kind: ChangeSetKind,
         builds: AtomicUsize,
+        shutdown: broadcast::Sender<()>,
     }
 
     impl SynchronizerFactory for FallbackThenDataFactory {
@@ -654,11 +645,11 @@ mod tests {
                 Box::new(MockSynchronizer {
                     results: VecDeque::from(vec![interrupted()]),
                     selectors_seen: no_selectors(),
-                    hang: true,
+                    shutdown: None,
                     fallback_directive: Some(FDv1FallbackDirective { ttl: self.ttl }),
                 })
             } else {
-                // After the FDv2 retry: deliver the re-engagement payload.
+                // After the FDv2 retry: deliver the re-engagement payload, then end the run.
                 Box::new(MockSynchronizer {
                     results: VecDeque::from(vec![changeset(
                         self.reengage_kind,
@@ -666,7 +657,7 @@ mod tests {
                         Some("s".into()),
                     )]),
                     selectors_seen: no_selectors(),
-                    hang: false,
+                    shutdown: Some(self.shutdown.clone()),
                     fallback_directive: None,
                 })
             }
@@ -690,7 +681,12 @@ mod tests {
                 "f1",
                 Some("s1".into()),
             )])],
-            vec![sync_factory(vec![], no_selectors(), false)],
+            vec![sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            )],
             FALLBACK_TIMEOUT,
             RECOVERY_TIMEOUT,
         );
@@ -732,6 +728,7 @@ mod tests {
             )])];
 
         // Synchronizer delivers a partial change carrying selector "sel-2".
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![changeset(
                 ChangeSetKind::Partial,
@@ -739,9 +736,9 @@ mod tests {
                 Some("sel-2".into()),
             )],
             selectors_seen.clone(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -783,9 +780,13 @@ mod tests {
         ];
 
         // The synchronizer only records the selector it is started with.
-        let source_manager =
-            SourceManager::new(vec![sync_factory(vec![], selectors_seen.clone(), false)]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![],
+            selectors_seen.clone(),
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
+        )]);
 
         run(
             initializer_factories,
@@ -828,8 +829,13 @@ mod tests {
             init_factory(vec![changeset(ChangeSetKind::Full, "from-second", None)]),
         ];
 
-        let source_manager = SourceManager::new(vec![sync_factory(vec![], no_selectors(), false)]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![],
+            no_selectors(),
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
+        )]);
 
         run(
             initializer_factories,
@@ -867,9 +873,13 @@ mod tests {
             )]),
         ];
 
-        let source_manager =
-            SourceManager::new(vec![sync_factory(vec![], selectors_seen.clone(), false)]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![],
+            selectors_seen.clone(),
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
+        )]);
 
         run(
             initializer_factories,
@@ -899,15 +909,16 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A full basis carrying selector "s1", then a "no changes" (None) changeset.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![
                 changeset(ChangeSetKind::Full, "flag", Some("s1".into())),
                 changeset(ChangeSetKind::None, "flag", None),
             ],
             selectors_seen.clone(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -934,15 +945,16 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A full payload carrying selector "s1", then a partial change with no selector.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![
                 changeset(ChangeSetKind::Full, "flag", Some("s1".into())),
                 changeset(ChangeSetKind::Partial, "flag", None),
             ],
             selectors_seen.clone(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -974,9 +986,13 @@ mod tests {
             )])];
 
         // The synchronizer then fails terminally, exhausting every source.
-        let source_manager =
-            SourceManager::new(vec![sync_factory(vec![terminal()], no_selectors(), false)]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![terminal()],
+            no_selectors(),
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
+        )]);
 
         run(
             initializer_factories,
@@ -1003,15 +1019,16 @@ mod tests {
 
         // A spec-compliant backend never sends a delta before a full payload.
         // Here the synchronizer delivers one first anyway, then fails terminally.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![
                 changeset(ChangeSetKind::Partial, "delta-flag", Some("s1".into())),
                 terminal(),
             ],
             no_selectors(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -1037,12 +1054,13 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A full payload with no selector still initializes, as the FDv1 adapter produces.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![changeset(ChangeSetKind::Full, "full-flag", None)],
             no_selectors(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -1073,6 +1091,7 @@ mod tests {
         ];
 
         // The synchronizer then delivers the basis.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![changeset(
                 ChangeSetKind::Full,
@@ -1080,9 +1099,9 @@ mod tests {
                 Some("s".into()),
             )],
             no_selectors(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -1111,12 +1130,13 @@ mod tests {
             vec![init_factory(vec![terminal()])];
 
         // The synchronizer reports an interruption, then fails terminally.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![interrupted(), terminal()],
             no_selectors(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -1141,8 +1161,14 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // First synchronizer fails terminally; the second provides the basis.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
-            sync_factory(vec![terminal()], no_selectors(), false),
+            sync_factory(
+                vec![terminal()],
+                no_selectors(),
+                Some(shutdown_tx.clone()),
+                /* is_fdv1_fallback = */ false,
+            ),
             sync_factory(
                 vec![changeset(
                     ChangeSetKind::Full,
@@ -1150,10 +1176,10 @@ mod tests {
                     Some("s".into()),
                 )],
                 no_selectors(),
-                false,
+                Some(shutdown_tx),
+                /* is_fdv1_fallback = */ false,
             ),
         ]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -1179,15 +1205,16 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A single synchronizer: an interruption, then a basis on the retry.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![sync_factory(
             vec![
                 interrupted(),
                 changeset(ChangeSetKind::Full, "after-retry", Some("s".into())),
             ],
             no_selectors(),
-            false,
+            Some(shutdown_tx),
+            /* is_fdv1_fallback = */ false,
         )]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -1213,7 +1240,12 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // A synchronizer whose next() never resolves.
-        let source_manager = SourceManager::new(vec![sync_factory(vec![], no_selectors(), true)]);
+        let source_manager = SourceManager::new(vec![sync_factory(
+            vec![],
+            no_selectors(),
+            /* idle */ None,
+            /* is_fdv1_fallback = */ false,
+        )]);
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         // Drive the run on a task, then signal shutdown.
@@ -1236,9 +1268,24 @@ mod tests {
     #[test]
     fn rotates_cyclically_skips_blocked_and_exhausts() {
         let mut sources = SourceManager::new(vec![
-            sync_factory(vec![], no_selectors(), false),
-            sync_factory(vec![], no_selectors(), false),
-            sync_factory(vec![], no_selectors(), false),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
         ]);
 
         // Advances cyclically from the prime.
@@ -1266,8 +1313,18 @@ mod tests {
     #[test]
     fn reset_source_index_returns_to_prime() {
         let mut sources = SourceManager::new(vec![
-            sync_factory(vec![], no_selectors(), false),
-            sync_factory(vec![], no_selectors(), false),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
         ]);
 
         sources.next_synchronizer();
@@ -1283,8 +1340,18 @@ mod tests {
     #[test]
     fn is_prime_and_available_count_track_state() {
         let mut sources = SourceManager::new(vec![
-            sync_factory(vec![], no_selectors(), false),
-            sync_factory(vec![], no_selectors(), false),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
         ]);
         assert_eq!(sources.available_count(), 2);
 
@@ -1300,8 +1367,18 @@ mod tests {
     #[test]
     fn fdv1_fallback_factory_starts_blocked() {
         let mut sources = SourceManager::new(vec![
-            sync_factory(vec![], no_selectors(), false),
-            fdv1_factory(vec![], no_selectors(), false),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ true,
+            ),
         ]);
 
         // Only the FDv2 synchronizer is available; the FDv1 fallback is dormant.
@@ -1313,8 +1390,18 @@ mod tests {
     #[test]
     fn switch_to_and_back_from_fdv1_fallback() {
         let mut sources = SourceManager::new(vec![
-            sync_factory(vec![], no_selectors(), false),
-            fdv1_factory(vec![], no_selectors(), false),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ true,
+            ),
         ]);
 
         // The directive activates only the FDv1 fallback.
@@ -1333,8 +1420,18 @@ mod tests {
     #[test]
     fn switch_back_unblocks_terminally_blocked_fdv2() {
         let mut sources = SourceManager::new(vec![
-            sync_factory(vec![], no_selectors(), false),
-            fdv1_factory(vec![], no_selectors(), false),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
+                vec![],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ true,
+            ),
         ]);
 
         // A terminal error blocks the only FDv2 synchronizer.
@@ -1356,8 +1453,14 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // Prime only ever interrupts; the fallback stands by with a basis.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
-            sync_factory(vec![interrupted()], no_selectors(), true),
+            sync_factory(
+                vec![interrupted()],
+                no_selectors(),
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
+            ),
             sync_factory(
                 vec![changeset(
                     ChangeSetKind::Full,
@@ -1365,10 +1468,10 @@ mod tests {
                     Some("s".into()),
                 )],
                 no_selectors(),
-                false,
+                Some(shutdown_tx),
+                /* is_fdv1_fallback = */ false,
             ),
         ]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         // Paused time auto-advances past the fallback timeout while the prime idles.
         let handle = tokio::spawn(run(
@@ -1402,6 +1505,7 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // Prime interrupts (arming the timer), delivers a basis (clearing it), then idles.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
             sync_factory(
                 vec![
@@ -1409,7 +1513,8 @@ mod tests {
                     changeset(ChangeSetKind::Full, "from-prime", Some("s".into())),
                 ],
                 no_selectors(),
-                true,
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
             ),
             sync_factory(
                 vec![changeset(
@@ -1418,10 +1523,10 @@ mod tests {
                     Some("s".into()),
                 )],
                 no_selectors(),
-                false,
+                Some(shutdown_tx.clone()),
+                /* is_fdv1_fallback = */ false,
             ),
         ]);
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         let handle = tokio::spawn(run(
             initializer_factories,
@@ -1452,9 +1557,11 @@ mod tests {
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
 
         // Prime recovers on rebuild; the fallback supplies a basis then idles.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
             Arc::new(DownThenDataFactory {
                 builds: AtomicUsize::new(0),
+                shutdown: shutdown_tx,
             }) as Arc<dyn SynchronizerFactory>,
             sync_factory(
                 vec![changeset(
@@ -1463,10 +1570,10 @@ mod tests {
                     Some("s".into()),
                 )],
                 no_selectors(),
-                true,
+                /* idle */ None,
+                /* is_fdv1_fallback = */ false,
             ),
         ]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         // Paused time auto-advances through the fallback then recovery timeouts.
         let handle = tokio::spawn(run(
@@ -1494,19 +1601,20 @@ mod tests {
 
         // The FDv2 source reports a fallback directive; the FDv1 fallback then
         // supplies the basis and ends the run.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
             fallback_directive_factory(Duration::from_secs(60)),
-            fdv1_factory(
+            sync_factory(
                 vec![changeset(
                     ChangeSetKind::Full,
                     "from-fdv1",
                     Some("s".into()),
                 )],
                 no_selectors(),
-                false,
+                Some(shutdown_tx),
+                /* is_fdv1_fallback = */ true,
             ),
         ]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,
@@ -1532,23 +1640,25 @@ mod tests {
 
         // The FDv2 source reports a directive with a 60s TTL; the FDv1 fallback
         // supplies a basis and then idles until FDv2 is retried.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
             Arc::new(FallbackThenDataFactory {
                 ttl: Duration::from_secs(60),
                 reengage_kind: ChangeSetKind::Partial,
                 builds: AtomicUsize::new(0),
+                shutdown: shutdown_tx,
             }) as Arc<dyn SynchronizerFactory>,
-            fdv1_factory(
+            sync_factory(
                 vec![changeset(
                     ChangeSetKind::Full,
                     "from-fdv1",
                     Some("s".into()),
                 )],
                 no_selectors(),
-                true,
+                /* idle */ None,
+                /* is_fdv1_fallback = */ true,
             ),
         ]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         // Paused time auto-advances past the TTL, re-engaging FDv2.
         let handle = tokio::spawn(run(
@@ -1576,15 +1686,21 @@ mod tests {
 
         // The FDv2 source reports a 60s directive; the FDv1 fallback then fails
         // terminally, blocking every source before the TTL expires.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
             Arc::new(FallbackThenDataFactory {
                 ttl: Duration::from_secs(60),
                 reengage_kind: ChangeSetKind::Full,
                 builds: AtomicUsize::new(0),
+                shutdown: shutdown_tx.clone(),
             }) as Arc<dyn SynchronizerFactory>,
-            fdv1_factory(vec![terminal()], no_selectors(), false),
+            sync_factory(
+                vec![terminal()],
+                no_selectors(),
+                Some(shutdown_tx),
+                /* is_fdv1_fallback = */ true,
+            ),
         ]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         // Paused time advances past the TTL while no source is available.
         let handle = tokio::spawn(run(
@@ -1614,19 +1730,25 @@ mod tests {
 
         // The initializer's directive switches to the FDv1 fallback, which supplies
         // the basis and ends the run.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let source_manager = SourceManager::new(vec![
-            sync_factory(vec![], no_selectors(), false),
-            fdv1_factory(
+            sync_factory(
+                vec![],
+                no_selectors(),
+                Some(shutdown_tx.clone()),
+                /* is_fdv1_fallback = */ false,
+            ),
+            sync_factory(
                 vec![changeset(
                     ChangeSetKind::Full,
                     "from-fdv1",
                     Some("s".into()),
                 )],
                 no_selectors(),
-                false,
+                Some(shutdown_tx),
+                /* is_fdv1_fallback = */ true,
             ),
         ]);
-        let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         run(
             initializer_factories,

@@ -71,7 +71,6 @@ pub(crate) enum FDv2SourceResult {
     ChangeSet(ChangeSet),
     Interrupted(ErrorInfo),
     TerminalError(ErrorInfo),
-    Shutdown,
     Goodbye,
 }
 
