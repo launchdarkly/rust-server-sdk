@@ -264,8 +264,6 @@ pub struct DataSystemBuilder {
     initializers: Vec<Box<dyn FDv2InitializerConfig>>,
     synchronizers: Vec<Box<dyn FDv2SynchronizerConfig>>,
     fdv1_fallback: Option<Box<dyn DataSourceFactory>>,
-    fallback_timeout: Duration,
-    recovery_timeout: Duration,
 }
 
 impl Clone for DataSystemBuilder {
@@ -278,8 +276,6 @@ impl Clone for DataSystemBuilder {
                 .map(|c| (**c).to_owned())
                 .collect(),
             fdv1_fallback: self.fdv1_fallback.as_ref().map(|f| (**f).to_owned()),
-            fallback_timeout: self.fallback_timeout,
-            recovery_timeout: self.recovery_timeout,
         }
     }
 }
@@ -291,8 +287,6 @@ impl DataSystemBuilder {
             initializers: Vec::new(),
             synchronizers: Vec::new(),
             fdv1_fallback: None,
-            fallback_timeout: DEFAULT_FALLBACK_TIMEOUT,
-            recovery_timeout: DEFAULT_RECOVERY_TIMEOUT,
         }
     }
 
@@ -332,18 +326,6 @@ impl DataSystemBuilder {
     /// Disables the FDv1 fallback.
     pub fn disable_fdv1_fallback(&mut self) -> &mut Self {
         self.fdv1_fallback = None;
-        self
-    }
-
-    /// Sets how long the active synchronizer may stay interrupted before failing over.
-    pub fn fallback_timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.fallback_timeout = timeout;
-        self
-    }
-
-    /// Sets how long a fallback synchronizer must run before recovering to the primary.
-    pub fn recovery_timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.recovery_timeout = timeout;
         self
     }
 }
@@ -410,8 +392,8 @@ impl DataSystemFactory for DataSystemBuilder {
         let system: Arc<dyn DataSystem> = Arc::new(FDv2DataSystem::new(
             initializer_factories,
             synchronizer_factories,
-            self.fallback_timeout,
-            self.recovery_timeout,
+            DEFAULT_FALLBACK_TIMEOUT,
+            DEFAULT_RECOVERY_TIMEOUT,
         ));
         Ok(system)
     }
@@ -431,8 +413,6 @@ mod tests {
         assert!(builder.initializers.is_empty());
         assert!(builder.synchronizers.is_empty());
         assert!(builder.fdv1_fallback.is_none());
-        assert_eq!(builder.fallback_timeout, DEFAULT_FALLBACK_TIMEOUT);
-        assert_eq!(builder.recovery_timeout, DEFAULT_RECOVERY_TIMEOUT);
     }
 
     #[test]
@@ -452,17 +432,6 @@ mod tests {
         builder.disable_fdv1_fallback();
 
         assert!(builder.fdv1_fallback.is_none());
-    }
-
-    #[test]
-    fn timeouts_are_configurable() {
-        let mut builder = DataSystemBuilder::custom();
-
-        builder.fallback_timeout(Duration::from_secs(7));
-        builder.recovery_timeout(Duration::from_secs(11));
-
-        assert_eq!(builder.fallback_timeout, Duration::from_secs(7));
-        assert_eq!(builder.recovery_timeout, Duration::from_secs(11));
     }
 
     #[derive(Debug, Clone)]
