@@ -29,7 +29,7 @@ use crate::{
         CommandParams, CommandResponse, EvaluateAllFlagsParams, EvaluateAllFlagsResponse,
         EvaluateFlagParams, EvaluateFlagResponse,
     },
-    CreateInstanceParams, DataSynchronizerParams, DataSystemParams,
+    CreateInstanceParams, DataSystemParams,
 };
 
 /// Builds an FDv2 data system from the contract test's data system params. The
@@ -85,32 +85,12 @@ where
         }
     }
 
-    // Use the configured FDv1 fallback if present, otherwise derive one from the
-    // synchronizers. The fallback is always polling.
-    let fallback = match params.fdv1_fallback {
-        Some(fallback) => Some((
-            fallback
-                .base_uri
-                .or_else(|| derive_fallback_base_url(&synchronizers)),
-            fallback.poll_interval_ms,
-        )),
-        None => select_fallback_synchronizer(&synchronizers).map(|sync| {
-            if let Some(polling) = &sync.polling {
-                (polling.base_uri.clone(), polling.poll_interval_ms)
-            } else if let Some(streaming) = &sync.streaming {
-                (streaming.base_uri.clone(), None)
-            } else {
-                (None, None)
-            }
-        }),
-    };
-
-    if let Some((base_url, poll_interval)) = fallback {
-        if let Some(base_url) = base_url {
+    if let Some(fallback) = params.fdv1_fallback {
+        if let Some(base_url) = fallback.base_uri {
             service_endpoints.polling_base_url(&base_url);
         }
         let mut fallback_builder = PollingDataSourceBuilder::<T>::new();
-        if let Some(interval) = poll_interval {
+        if let Some(interval) = fallback.poll_interval_ms {
             fallback_builder.poll_interval(Duration::from_millis(interval));
         }
         fallback_builder.transport(make_transport()?);
@@ -118,29 +98,6 @@ where
     }
 
     Ok(builder)
-}
-
-/// Selects the synchronizer to derive an FDv1 fallback from: the first polling
-/// synchronizer, otherwise the first synchronizer.
-fn select_fallback_synchronizer(
-    synchronizers: &[DataSynchronizerParams],
-) -> Option<&DataSynchronizerParams> {
-    synchronizers
-        .iter()
-        .find(|sync| sync.polling.is_some())
-        .or_else(|| synchronizers.first())
-}
-
-/// Derives an FDv1 fallback base URL from the synchronizers.
-fn derive_fallback_base_url(synchronizers: &[DataSynchronizerParams]) -> Option<String> {
-    let sync = select_fallback_synchronizer(synchronizers)?;
-    if let Some(polling) = &sync.polling {
-        polling.base_uri.clone()
-    } else if let Some(streaming) = &sync.streaming {
-        streaming.base_uri.clone()
-    } else {
-        None
-    }
 }
 
 pub struct ClientEntity {
