@@ -4,7 +4,7 @@ use std::time::Duration;
 use launchdarkly_sdk_transport::{HttpTransport, HyperTransport};
 use thiserror::Error;
 
-use crate::data_source_builders::{DataSourceFactory, StreamingDataSourceBuilder};
+use crate::data_source_builders::{DataSourceFactory, PollingDataSourceBuilder};
 use crate::data_system::DataSystem;
 use crate::fdv2::data_system::{FDv2DataSystem, InitializerFactory, SynchronizerFactory};
 use crate::fdv2::fdv1_adapter::FDv1AdapterFactory;
@@ -330,7 +330,7 @@ impl Default for DataSystemBuilder {
         builder.initializer(FDv2PollingBuilder::<HyperTransport>::new());
         builder.synchronizer(FDv2StreamingBuilder::<HyperTransport>::new());
         builder.synchronizer(FDv2PollingBuilder::<HyperTransport>::new());
-        builder.fdv1_fallback(&StreamingDataSourceBuilder::<HyperTransport>::new());
+        builder.fdv1_fallback(&PollingDataSourceBuilder::<HyperTransport>::new());
         builder
     }
 }
