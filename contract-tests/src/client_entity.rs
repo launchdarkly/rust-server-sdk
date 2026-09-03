@@ -57,7 +57,7 @@ where
                 source.initial_reconnect_delay(Duration::from_millis(delay));
             }
             source.transport(make_transport()?);
-            builder.streaming_synchronizer(source);
+            builder.synchronizer(source);
         } else if let Some(polling) = &sync.polling {
             let mut source = FDv2PollingBuilder::<T>::new();
             if let Some(base_uri) = &polling.base_uri {
@@ -67,7 +67,7 @@ where
                 source.poll_interval(Duration::from_millis(interval));
             }
             source.transport(make_transport()?);
-            builder.polling_synchronizer(source);
+            builder.synchronizer(source);
         }
     }
 
