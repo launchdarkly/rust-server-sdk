@@ -5,12 +5,17 @@ use crate::stores::store_types::StorageItem;
 
 use super::wire::{DeleteObject, PutObject};
 
-pub(crate) type Selector = Option<String>;
+/// Identifies a point in the flag-data stream, echoed back to request the next changes.
+pub type Selector = Option<String>;
 
+/// Whether a change set is a full payload, an incremental update, or carries no changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChangeSetKind {
+pub enum ChangeSetKind {
+    /// The change set carries no changes.
     None,
+    /// The change set is a complete payload that replaces all data.
     Full,
+    /// The change set is an incremental update to existing data.
     Partial,
 }
 

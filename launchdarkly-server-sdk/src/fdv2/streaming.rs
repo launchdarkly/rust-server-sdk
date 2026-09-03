@@ -10,6 +10,7 @@ use http::Uri;
 use launchdarkly_sdk_transport::HttpTransport;
 use tokio::sync::watch;
 
+use super::data_system::SynchronizerFactory;
 use super::model::Selector;
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
 use super::request_headers::RequestHeaders;
@@ -290,6 +291,43 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> Synchronizer for Streamin
 
     fn name(&self) -> &str {
         "FDv2 streaming synchronizer"
+    }
+}
+
+/// Builds a fresh `StreamingSynchronizer` each time the synchronizer activates.
+pub(crate) struct StreamingSynchronizerFactory<T: HttpTransport + Clone + Send + Sync + 'static> {
+    transport: T,
+    base_url: String,
+    headers: RequestHeaders,
+    initial_reconnect_delay: Duration,
+}
+
+impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizerFactory<T> {
+    pub(crate) fn new(
+        transport: T,
+        base_url: String,
+        headers: RequestHeaders,
+        initial_reconnect_delay: Duration,
+    ) -> Self {
+        Self {
+            transport,
+            base_url,
+            headers,
+            initial_reconnect_delay,
+        }
+    }
+}
+
+impl<T: HttpTransport + Clone + Send + Sync + 'static> SynchronizerFactory
+    for StreamingSynchronizerFactory<T>
+{
+    fn create(&self) -> Box<dyn Synchronizer> {
+        Box::new(StreamingSynchronizer::new(
+            self.transport.clone(),
+            self.base_url.clone(),
+            self.headers.clone(),
+            self.initial_reconnect_delay,
+        ))
     }
 }
 

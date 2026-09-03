@@ -32,6 +32,9 @@ pub use config::{ApplicationInfo, BuildError as ConfigBuildError, Config, Config
 pub use data_source_builders::{
     BuildError as DataSourceBuildError, PollingDataSourceBuilder, StreamingDataSourceBuilder,
 };
+pub use data_system_builders::{
+    BuildError as DataSystemBuildError, DataSystemBuilder, FDv2PollingBuilder, FDv2StreamingBuilder,
+};
 pub use evaluation::{FlagDetail, FlagDetailConfig, FlagFilter};
 pub use events::event::MigrationOpEvent;
 pub use events::processor::EventProcessor;
@@ -58,10 +61,11 @@ mod client;
 mod config;
 mod data_source;
 mod data_source_builders;
+pub mod data_sources;
 mod data_system;
+mod data_system_builders;
 mod evaluation;
 mod events;
-#[allow(dead_code)] // Tested but not yet reachable from production code.
 mod fdv2;
 mod feature_requester;
 mod feature_requester_builders;

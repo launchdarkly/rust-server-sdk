@@ -18,14 +18,19 @@ pub(super) struct ServerIntent {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ServerIntentPayload {
+    // Parsed from the wire but not used; only intent_code is read.
+    #[allow(dead_code)]
     pub(super) id: String,
+    #[allow(dead_code)]
     pub(super) target: u64,
     pub(super) intent_code: IntentCode,
+    #[allow(dead_code)]
     pub(super) reason: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct PutObject {
+    #[allow(dead_code)] // Parsed from the wire but not used.
     pub(super) version: u64,
     pub(super) kind: String,
     pub(super) key: String,

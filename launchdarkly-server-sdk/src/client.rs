@@ -14,6 +14,7 @@ use tokio::sync::{broadcast, Semaphore};
 use super::config::Config;
 use super::data_source_builders::BuildError as DataSourceError;
 use super::data_system::{DataSystem, FDv1DataSystem};
+use super::data_system_builders::BuildError as DataSystemError;
 use super::evaluation::{FlagDetail, FlagDetailConfig};
 use super::stores::store::DataStore;
 use super::stores::store_builders::BuildError as DataStoreError;
@@ -61,6 +62,12 @@ pub enum BuildError {
 
 impl From<DataSourceError> for BuildError {
     fn from(error: DataSourceError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
+}
+
+impl From<DataSystemError> for BuildError {
+    fn from(error: DataSystemError) -> Self {
         Self::InvalidConfig(error.to_string())
     }
 }
@@ -184,13 +191,24 @@ impl Client {
         let event_processor =
             event_processor_builder.build(&endpoints, config.sdk_key(), tags.clone())?;
 
-        let mut data_source_builder = config.data_source_builder().to_owned();
-        data_source_builder.set_instance_id(instance_id);
-        let data_source = data_source_builder.build(&endpoints, config.sdk_key(), tags.clone())?;
-        let data_system: Arc<dyn DataSystem> = Arc::new(FDv1DataSystem::new(
-            data_source,
-            config.data_store_builder(),
-        )?);
+        let data_system: Arc<dyn DataSystem> = match config.data_system_builder() {
+            Some(data_system_builder) => data_system_builder.build(
+                &endpoints,
+                config.sdk_key(),
+                tags.as_deref(),
+                &instance_id,
+            )?,
+            None => {
+                let mut data_source_builder = config.data_source_builder().to_owned();
+                data_source_builder.set_instance_id(instance_id);
+                let data_source =
+                    data_source_builder.build(&endpoints, config.sdk_key(), tags.clone())?;
+                Arc::new(FDv1DataSystem::new(
+                    data_source,
+                    config.data_store_builder(),
+                )?)
+            }
+        };
         let data_store = data_system.store();
 
         let events_default = EventsScope {

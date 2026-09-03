@@ -1,6 +1,6 @@
 /// The HTTP headers attached to every FDv2 request.
 #[derive(Clone)]
-pub(crate) struct RequestHeaders {
+pub struct RequestHeaders {
     headers: Vec<(&'static str, String)>,
 }
 
@@ -20,7 +20,8 @@ impl RequestHeaders {
         Self { headers }
     }
 
-    pub(super) fn iter(&self) -> impl Iterator<Item = (&'static str, &str)> + '_ {
+    /// Iterates the header name/value pairs to attach to a request.
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &str)> + '_ {
         self.headers
             .iter()
             .map(|(name, value)| (*name, value.as_str()))
