@@ -4,7 +4,7 @@ pub mod model;
 pub mod polling;
 mod protocol;
 pub mod request_headers;
-mod source;
+pub mod source;
 pub mod streaming;
 mod url;
 mod wire;

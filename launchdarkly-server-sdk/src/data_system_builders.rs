@@ -27,25 +27,36 @@ pub enum BuildError {
     InvalidConfig(String),
 }
 
+/// The inputs a data source needs to build itself.
+#[non_exhaustive]
+pub struct DataSourceBuildContext<'a> {
+    /// The configured service endpoints.
+    pub endpoints: &'a ServiceEndpoints,
+    /// The HTTP headers to attach to every request.
+    pub headers: &'a RequestHeaders,
+}
+
 /// A configured FDv2 source usable as a synchronizer.
-pub(crate) trait FDv2SynchronizerConfig {
+pub trait FDv2SynchronizerConfig {
+    /// Builds a synchronizer factory from this configuration.
     fn build_synchronizer(
         &self,
-        endpoints: &ServiceEndpoints,
-        headers: &RequestHeaders,
+        context: &DataSourceBuildContext,
     ) -> Result<Box<dyn SynchronizerFactory>, BuildError>;
 
+    /// Clones this configuration into a new box.
     fn to_owned(&self) -> Box<dyn FDv2SynchronizerConfig>;
 }
 
 /// A configured FDv2 source usable as an initializer.
-pub(crate) trait FDv2InitializerConfig {
+pub trait FDv2InitializerConfig {
+    /// Builds an initializer factory from this configuration.
     fn build_initializer(
         &self,
-        endpoints: &ServiceEndpoints,
-        headers: &RequestHeaders,
+        context: &DataSourceBuildContext,
     ) -> Result<Box<dyn InitializerFactory>, BuildError>;
 
+    /// Clones this configuration into a new box.
     fn to_owned(&self) -> Box<dyn FDv2InitializerConfig>;
 }
 
@@ -115,24 +126,23 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> FDv2SynchronizerConfig
 {
     fn build_synchronizer(
         &self,
-        endpoints: &ServiceEndpoints,
-        headers: &RequestHeaders,
+        context: &DataSourceBuildContext,
     ) -> Result<Box<dyn SynchronizerFactory>, BuildError> {
         let base_url = self
             .base_url
             .clone()
-            .unwrap_or_else(|| endpoints.streaming_base_url().to_string());
+            .unwrap_or_else(|| context.endpoints.streaming_base_url().to_string());
         let factory: Box<dyn SynchronizerFactory> = match &self.transport {
             Some(transport) => Box::new(StreamingSynchronizerFactory::new(
                 transport.clone(),
                 base_url,
-                headers.clone(),
+                context.headers.clone(),
                 self.initial_reconnect_delay,
             )),
             None => Box::new(StreamingSynchronizerFactory::new(
                 default_https_transport()?,
                 base_url,
-                headers.clone(),
+                context.headers.clone(),
                 self.initial_reconnect_delay,
             )),
         };
@@ -192,24 +202,23 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> FDv2SynchronizerConfig
 {
     fn build_synchronizer(
         &self,
-        endpoints: &ServiceEndpoints,
-        headers: &RequestHeaders,
+        context: &DataSourceBuildContext,
     ) -> Result<Box<dyn SynchronizerFactory>, BuildError> {
         let base_url = self
             .base_url
             .clone()
-            .unwrap_or_else(|| endpoints.polling_base_url().to_string());
+            .unwrap_or_else(|| context.endpoints.polling_base_url().to_string());
         let factory: Box<dyn SynchronizerFactory> = match &self.transport {
             Some(transport) => Box::new(PollingSynchronizerFactory::new(
                 transport.clone(),
                 base_url,
-                headers.clone(),
+                context.headers.clone(),
                 self.poll_interval,
             )),
             None => Box::new(PollingSynchronizerFactory::new(
                 default_https_transport()?,
                 base_url,
-                headers.clone(),
+                context.headers.clone(),
                 self.poll_interval,
             )),
         };
@@ -226,23 +235,22 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> FDv2InitializerConfig
 {
     fn build_initializer(
         &self,
-        endpoints: &ServiceEndpoints,
-        headers: &RequestHeaders,
+        context: &DataSourceBuildContext,
     ) -> Result<Box<dyn InitializerFactory>, BuildError> {
         let base_url = self
             .base_url
             .clone()
-            .unwrap_or_else(|| endpoints.polling_base_url().to_string());
+            .unwrap_or_else(|| context.endpoints.polling_base_url().to_string());
         let factory: Box<dyn InitializerFactory> = match &self.transport {
             Some(transport) => Box::new(PollingInitializerFactory::new(
                 transport.clone(),
                 base_url,
-                headers.clone(),
+                context.headers.clone(),
             )),
             None => Box::new(PollingInitializerFactory::new(
                 default_https_transport()?,
                 base_url,
-                headers.clone(),
+                context.headers.clone(),
             )),
         };
         Ok(factory)
@@ -290,29 +298,14 @@ impl DataSystemBuilder {
         }
     }
 
-    /// Appends a polling initializer.
-    pub fn initializer<T: HttpTransport + Clone + Send + Sync + 'static>(
-        &mut self,
-        source: FDv2PollingBuilder<T>,
-    ) -> &mut Self {
+    /// Appends an initializer, called before the synchronizers in configuration order.
+    pub fn initializer(&mut self, source: impl FDv2InitializerConfig + 'static) -> &mut Self {
         self.initializers.push(Box::new(source));
         self
     }
 
-    /// Appends a streaming synchronizer, ordered after any already added.
-    pub fn streaming_synchronizer<T: HttpTransport + Clone + Send + Sync + 'static>(
-        &mut self,
-        source: FDv2StreamingBuilder<T>,
-    ) -> &mut Self {
-        self.synchronizers.push(Box::new(source));
-        self
-    }
-
-    /// Appends a polling synchronizer, ordered after any already added.
-    pub fn polling_synchronizer<T: HttpTransport + Clone + Send + Sync + 'static>(
-        &mut self,
-        source: FDv2PollingBuilder<T>,
-    ) -> &mut Self {
+    /// Appends a synchronizer, ordered after any already added.
+    pub fn synchronizer(&mut self, source: impl FDv2SynchronizerConfig + 'static) -> &mut Self {
         self.synchronizers.push(Box::new(source));
         self
     }
@@ -335,8 +328,8 @@ impl Default for DataSystemBuilder {
     fn default() -> Self {
         let mut builder = Self::custom();
         builder.initializer(FDv2PollingBuilder::<HyperTransport>::new());
-        builder.streaming_synchronizer(FDv2StreamingBuilder::<HyperTransport>::new());
-        builder.polling_synchronizer(FDv2PollingBuilder::<HyperTransport>::new());
+        builder.synchronizer(FDv2StreamingBuilder::<HyperTransport>::new());
+        builder.synchronizer(FDv2PollingBuilder::<HyperTransport>::new());
         builder.fdv1_fallback(&StreamingDataSourceBuilder::<HyperTransport>::new());
         builder
     }
@@ -362,17 +355,21 @@ impl DataSystemFactory for DataSystemBuilder {
         instance_id: &str,
     ) -> Result<Arc<dyn DataSystem>, BuildError> {
         let headers = RequestHeaders::new(sdk_key, tags, instance_id);
+        let context = DataSourceBuildContext {
+            endpoints,
+            headers: &headers,
+        };
 
         let initializer_factories: Vec<Arc<dyn InitializerFactory>> = self
             .initializers
             .iter()
-            .map(|c| c.build_initializer(endpoints, &headers).map(Arc::from))
+            .map(|c| c.build_initializer(&context).map(Arc::from))
             .collect::<Result<_, _>>()?;
 
         let mut synchronizer_factories: Vec<Arc<dyn SynchronizerFactory>> = self
             .synchronizers
             .iter()
-            .map(|c| c.build_synchronizer(endpoints, &headers).map(Arc::from))
+            .map(|c| c.build_synchronizer(&context).map(Arc::from))
             .collect::<Result<_, _>>()?;
 
         // Build the FDv1 fallback source once and wrap it as a synchronizer; the
@@ -447,19 +444,23 @@ mod tests {
     fn builders_build_factories_with_injected_transport() {
         let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
         let headers = RequestHeaders::new("sdk-key", None, "test-instance");
+        let context = DataSourceBuildContext {
+            endpoints: &endpoints,
+            headers: &headers,
+        };
 
         // Each source builds a factory from a configured transport.
         assert!(FDv2StreamingBuilder::<TestTransport>::new()
             .transport(TestTransport)
-            .build_synchronizer(&endpoints, &headers)
+            .build_synchronizer(&context)
             .is_ok());
         assert!(FDv2PollingBuilder::<TestTransport>::new()
             .transport(TestTransport)
-            .build_synchronizer(&endpoints, &headers)
+            .build_synchronizer(&context)
             .is_ok());
         assert!(FDv2PollingBuilder::<TestTransport>::new()
             .transport(TestTransport)
-            .build_initializer(&endpoints, &headers)
+            .build_initializer(&context)
             .is_ok());
     }
 
@@ -474,16 +475,20 @@ mod tests {
     fn builders_build_factories_with_default_transport() {
         let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
         let headers = RequestHeaders::new("sdk-key", None, "test-instance");
+        let context = DataSourceBuildContext {
+            endpoints: &endpoints,
+            headers: &headers,
+        };
 
         // Each source builds a factory off the default HTTPS transport.
         assert!(FDv2StreamingBuilder::<HyperTransport>::new()
-            .build_synchronizer(&endpoints, &headers)
+            .build_synchronizer(&context)
             .is_ok());
         assert!(FDv2PollingBuilder::<HyperTransport>::new()
-            .build_synchronizer(&endpoints, &headers)
+            .build_synchronizer(&context)
             .is_ok());
         assert!(FDv2PollingBuilder::<HyperTransport>::new()
-            .build_initializer(&endpoints, &headers)
+            .build_initializer(&context)
             .is_ok());
     }
 }

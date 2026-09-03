@@ -61,6 +61,7 @@ mod client;
 mod config;
 mod data_source;
 mod data_source_builders;
+pub mod data_sources;
 mod data_system;
 mod data_system_builders;
 mod evaluation;

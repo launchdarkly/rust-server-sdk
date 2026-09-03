@@ -13,24 +13,36 @@ const DEFAULT_FALLBACK_TTL: Duration = Duration::from_secs(60 * 60);
 /// The longest server-supplied fallback TTL that is honored; longer values fall back to the default.
 const MAX_FALLBACK_TTL: Duration = Duration::from_secs(60 * 60);
 
+/// Classifies why a data source is interrupted or has failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ErrorKind {
+pub enum ErrorKind {
+    /// The cause is not one of the more specific kinds.
     Unknown,
+    /// The request failed at the network layer.
     NetworkError,
-    ErrorResponse { status_code: u16 },
+    /// The server returned an error status code.
+    ErrorResponse {
+        /// The HTTP status code.
+        status_code: u16,
+    },
+    /// The response could not be parsed.
     InvalidData,
 }
 
+/// Describes an error surfaced by a data source.
 #[derive(Debug, Clone)]
-pub(crate) struct ErrorInfo {
-    #[allow(dead_code)] // Will be read by data source status provider, once implemented.
-    pub(crate) kind: ErrorKind,
-    pub(crate) message: String,
+pub struct ErrorInfo {
+    /// The kind of error.
+    pub kind: ErrorKind,
+    /// A human-readable description.
+    pub message: String,
 }
 
+/// An instruction from LaunchDarkly to fall back to the FDv1 protocol.
 #[derive(Debug, Clone)]
-pub(crate) struct FDv1FallbackDirective {
-    pub(crate) ttl: Duration,
+pub struct FDv1FallbackDirective {
+    /// How long to stay on FDv1 before retrying FDv2.
+    pub ttl: Duration,
 }
 
 impl FDv1FallbackDirective {
@@ -66,27 +78,41 @@ pub(super) fn read_fallback_directive<'a>(
     Some(FDv1FallbackDirective::from_ttl(ttl))
 }
 
+/// The outcome of a single data source poll or stream read.
 #[derive(Debug)]
-pub(crate) enum FDv2SourceResult {
+pub enum FDv2SourceResult {
+    /// A set of flag and segment changes.
     ChangeSet(ChangeSet),
+    /// A transient failure; the source may recover.
     Interrupted(ErrorInfo),
+    /// An unrecoverable failure; the source is done.
     TerminalError(ErrorInfo),
+    /// The server asked the source to disconnect.
     Goodbye,
 }
 
+/// A source result paired with any FDv1 fallback directive seen on the same response.
 #[derive(Debug)]
-pub(crate) struct FDv2SourceEvent {
-    pub(crate) result: FDv2SourceResult,
-    pub(crate) fdv1_fallback: Option<FDv1FallbackDirective>,
+pub struct FDv2SourceEvent {
+    /// The source result.
+    pub result: FDv2SourceResult,
+    /// Present when the response carried an FDv1 fallback directive.
+    pub fdv1_fallback: Option<FDv1FallbackDirective>,
 }
 
-pub(crate) trait Initializer: Send {
+/// A data source that can obtain an initial payload.
+pub trait Initializer: Send {
+    /// Runs once to obtain an initial payload.
     fn run(&mut self) -> BoxFuture<'_, FDv2SourceEvent>;
+    /// The name used in logs.
     fn name(&self) -> &str;
 }
 
-pub(crate) trait Synchronizer: Send {
+/// A data source that keeps flag data up to date.
+pub trait Synchronizer: Send {
+    /// Fetches the next batch of changes after the given selector.
     fn next(&mut self, selector: Selector) -> BoxFuture<'_, FDv2SourceEvent>;
+    /// The name used in logs.
     fn name(&self) -> &str;
 }
 

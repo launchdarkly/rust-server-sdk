@@ -13,12 +13,14 @@ use super::model::{ChangeSetKind, Selector};
 use super::source::{FDv2SourceEvent, FDv2SourceResult, Initializer, Synchronizer};
 
 /// Produces a fresh initializer each time the orchestrator starts a run.
-pub(crate) trait InitializerFactory: Send + Sync {
+pub trait InitializerFactory: Send + Sync {
+    /// Builds a new initializer instance.
     fn create(&self) -> Box<dyn Initializer>;
 }
 
 /// Produces a fresh synchronizer each time the orchestrator starts a run.
-pub(crate) trait SynchronizerFactory: Send + Sync {
+pub trait SynchronizerFactory: Send + Sync {
+    /// Builds a new synchronizer instance.
     fn create(&self) -> Box<dyn Synchronizer>;
 
     /// Whether this factory builds the FDv1 fallback synchronizer.
