@@ -2,6 +2,26 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.3.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.2.0...3.3.0) (2026-09-04)
+
+
+### Features
+
+* Add FDv2 source traits and result types ([#187](https://github.com/launchdarkly/rust-server-sdk/issues/187)) ([9e84674](https://github.com/launchdarkly/rust-server-sdk/commit/9e846744926c1c2bcb700bbdf8fa6fc30982451b))
+* Add the FDv1 adapter synchronizer ([#192](https://github.com/launchdarkly/rust-server-sdk/issues/192)) ([7bc352f](https://github.com/launchdarkly/rust-server-sdk/commit/7bc352fed2122602ed0cf4dbead4d3c4e3bb9cc1))
+* Add the FDv2 data system configuration API ([#193](https://github.com/launchdarkly/rust-server-sdk/issues/193)) ([729538e](https://github.com/launchdarkly/rust-server-sdk/commit/729538eeffe127a241ff02996010195a07954d04))
+* Add the FDv2 data system orchestrator ([#190](https://github.com/launchdarkly/rust-server-sdk/issues/190)) ([983c33d](https://github.com/launchdarkly/rust-server-sdk/commit/983c33da32608a52279b795aef0d7044fd16bf83))
+* Add the FDv2 polling data source ([#188](https://github.com/launchdarkly/rust-server-sdk/issues/188)) ([fec25e8](https://github.com/launchdarkly/rust-server-sdk/commit/fec25e81584902d1cf5a9f6a92a553f750c83c06))
+* Add the FDv2 streaming synchronizer ([#189](https://github.com/launchdarkly/rust-server-sdk/issues/189)) ([e26d224](https://github.com/launchdarkly/rust-server-sdk/commit/e26d22474e5ecb47b302c307aeea5a6eaf72f24c))
+* Add the FDv2 transactional store and change-set translation ([#186](https://github.com/launchdarkly/rust-server-sdk/issues/186)) ([e623336](https://github.com/launchdarkly/rust-server-sdk/commit/e623336ce4a3faf0af2d0b0cc5dd9fc85a750bd7))
+* Honor the FDv1 fallback directive in the orchestrator ([#191](https://github.com/launchdarkly/rust-server-sdk/issues/191)) ([14bffc3](https://github.com/launchdarkly/rust-server-sdk/commit/14bffc3de77bbe2c2cdeb8ff3b777fbd5be91381))
+
+
+### Bug Fixes
+
+* Add doctests for the FDv2 config and custom-source APIs ([#199](https://github.com/launchdarkly/rust-server-sdk/issues/199)) ([b4dc72f](https://github.com/launchdarkly/rust-server-sdk/commit/b4dc72f67e4f1edbf974ee369c2de880b134ab89))
+* Bump MSRV from 1.95 to 1.96 ([#197](https://github.com/launchdarkly/rust-server-sdk/issues/197)) ([d1c3f17](https://github.com/launchdarkly/rust-server-sdk/commit/d1c3f179df7c5ed508490101fe0aa040da53d6c1))
+
 ## [3.2.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.1.2...3.2.0) (2026-08-10)
 
 
