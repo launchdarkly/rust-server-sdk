@@ -10,7 +10,3 @@ streaming/validation/drop and reconnect if stream event has malformed JSON/put e
 streaming/validation/drop and reconnect if stream event has well-formed JSON not matching schema/delete event
 streaming/validation/drop and reconnect if stream event has well-formed JSON not matching schema/patch event
 streaming/validation/drop and reconnect if stream event has well-formed JSON not matching schema/put event
-
-# Rust honors the TTL-based FDv1 fallback directive (SDK-2527).
-# This scenario tests the terminal semantics instead.
-streaming/fdv2/FDv1 fallback directive/directive without FDv1 fallback configured halts the data system
