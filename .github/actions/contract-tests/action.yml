@@ -19,8 +19,20 @@ runs:
       shell: bash
       run: CARGO_FLAGS="${{ inputs.cargo-flags }}" make start-contract-test-service-bg
 
-    - uses: launchdarkly/gh-actions/actions/contract-tests@contract-tests-v1.0.2
+    - name: Run FDv1 contract tests
+      uses: launchdarkly/gh-actions/actions/contract-tests@contract-tests-v1.3.0
       with:
         test_service_port: 8000
         token: ${{ inputs.token }}
         extra_params: "-skip-from ./contract-tests/testharness-suppressions.txt"
+        enable_persistence_tests: false
+        stop_service: false
+
+    - name: Run FDv2 contract tests
+      uses: launchdarkly/gh-actions/actions/contract-tests@contract-tests-v1.3.0
+      with:
+        test_service_port: 8000
+        token: ${{ inputs.token }}
+        version: v3
+        extra_params: "-skip-from ./contract-tests/testharness-suppressions-fdv2.txt"
+        enable_persistence_tests: false

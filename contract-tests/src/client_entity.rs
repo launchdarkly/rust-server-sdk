@@ -9,10 +9,12 @@ const DEFAULT_POLLING_BASE_URL: &str = "https://sdk.launchdarkly.com";
 const DEFAULT_STREAM_BASE_URL: &str = "https://stream.launchdarkly.com";
 const DEFAULT_EVENTS_BASE_URL: &str = "https://events.launchdarkly.com";
 
+use launchdarkly_sdk_transport::HttpTransport;
 use launchdarkly_server_sdk::{
-    ApplicationInfo, BuildError, Client, ConfigBuilder, Detail, EventProcessorBuilder,
-    FlagDetailConfig, FlagFilter, FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder,
-    ServiceEndpointsBuilder, StreamingDataSourceBuilder,
+    ApplicationInfo, BuildError, Client, ConfigBuilder, DataSystemBuilder, Detail,
+    EventProcessorBuilder, FDv2PollingBuilder, FDv2StreamingBuilder, FlagDetailConfig, FlagFilter,
+    FlagValue, NullEventProcessorBuilder, PollingDataSourceBuilder, ServiceEndpointsBuilder,
+    StreamingDataSourceBuilder,
 };
 
 #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
@@ -27,8 +29,76 @@ use crate::{
         CommandParams, CommandResponse, EvaluateAllFlagsParams, EvaluateAllFlagsResponse,
         EvaluateFlagParams, EvaluateFlagResponse,
     },
-    CreateInstanceParams,
+    CreateInstanceParams, DataSystemParams,
 };
+
+/// Builds an FDv2 data system from the contract test's data system params. The
+/// FDv1 fallback is always polling and reads its base URL from the polling
+/// service endpoint, so it is set here alongside the fallback source.
+fn build_fdv2_data_system<T, F>(
+    params: DataSystemParams,
+    make_transport: F,
+    service_endpoints: &mut ServiceEndpointsBuilder,
+) -> Result<DataSystemBuilder, BuildError>
+where
+    T: HttpTransport + Clone + Send + Sync + 'static,
+    F: Fn() -> Result<T, BuildError>,
+{
+    let mut builder = DataSystemBuilder::custom();
+
+    let synchronizers = params.synchronizers.unwrap_or_default();
+    for sync in &synchronizers {
+        if let Some(streaming) = &sync.streaming {
+            let mut source = FDv2StreamingBuilder::<T>::new();
+            if let Some(base_uri) = &streaming.base_uri {
+                source.base_url(base_uri);
+            }
+            if let Some(delay) = streaming.initial_retry_delay_ms {
+                source.initial_reconnect_delay(Duration::from_millis(delay));
+            }
+            source.transport(make_transport()?);
+            builder.synchronizer(source);
+        } else if let Some(polling) = &sync.polling {
+            let mut source = FDv2PollingBuilder::<T>::new();
+            if let Some(base_uri) = &polling.base_uri {
+                source.base_url(base_uri);
+            }
+            if let Some(interval) = polling.poll_interval_ms {
+                source.poll_interval(Duration::from_millis(interval));
+            }
+            source.transport(make_transport()?);
+            builder.synchronizer(source);
+        }
+    }
+
+    for init in params.initializers.unwrap_or_default() {
+        if let Some(polling) = &init.polling {
+            let mut source = FDv2PollingBuilder::<T>::new();
+            if let Some(base_uri) = &polling.base_uri {
+                source.base_url(base_uri);
+            }
+            if let Some(interval) = polling.poll_interval_ms {
+                source.poll_interval(Duration::from_millis(interval));
+            }
+            source.transport(make_transport()?);
+            builder.initializer(source);
+        }
+    }
+
+    if let Some(fallback) = params.fdv1_fallback {
+        if let Some(base_url) = fallback.base_uri {
+            service_endpoints.polling_base_url(&base_url);
+        }
+        let mut fallback_builder = PollingDataSourceBuilder::<T>::new();
+        if let Some(interval) = fallback.poll_interval_ms {
+            fallback_builder.poll_interval(Duration::from_millis(interval));
+        }
+        fallback_builder.transport(make_transport()?);
+        builder.fdv1_fallback(&fallback_builder);
+    }
+
+    Ok(builder)
+}
 
 pub struct ClientEntity {
     client: Arc<Client>,
@@ -45,15 +115,17 @@ impl ClientEntity {
             .unwrap_or_default()
             .http_proxy
             .unwrap_or_default();
-        let mut transport_builder = launchdarkly_sdk_transport::HyperTransport::builder();
-        if !proxy.is_empty() {
-            transport_builder = transport_builder.proxy_url(proxy.clone());
-        }
-
-        // Create fresh transports for this client to avoid shared connection pool issues
-        let transport = transport_builder
-            .build_with_connector(connector.clone())
-            .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
+        // Build a fresh transport per component, as the SDK normally does. Only the
+        // connector under test is shared across them.
+        let make_transport = || {
+            let mut builder = launchdarkly_sdk_transport::HyperTransport::builder();
+            if !proxy.is_empty() {
+                builder = builder.proxy_url(proxy.clone());
+            }
+            builder
+                .build_with_connector(connector.clone())
+                .map_err(|e| BuildError::InvalidConfig(e.to_string()))
+        };
         let mut config_builder =
             ConfigBuilder::new(&create_instance_params.configuration.credential);
 
@@ -87,7 +159,14 @@ impl ClientEntity {
             }
         }
 
-        if let Some(streaming) = create_instance_params.configuration.streaming {
+        if let Some(data_system) = create_instance_params.configuration.data_system {
+            let data_system_builder = build_fdv2_data_system(
+                data_system,
+                make_transport,
+                &mut service_endpoints_builder,
+            )?;
+            config_builder = config_builder.data_system(&data_system_builder);
+        } else if let Some(streaming) = create_instance_params.configuration.streaming {
             if let Some(base_uri) = streaming.base_uri {
                 service_endpoints_builder.streaming_base_url(&base_uri);
             }
@@ -96,7 +175,7 @@ impl ClientEntity {
             if let Some(delay) = streaming.initial_retry_delay_ms {
                 streaming_builder.initial_reconnect_delay(Duration::from_millis(delay));
             }
-            streaming_builder.transport(transport.clone());
+            streaming_builder.transport(make_transport()?);
 
             config_builder = config_builder.data_source(&streaming_builder);
         } else if let Some(polling) = create_instance_params.configuration.polling {
@@ -108,7 +187,7 @@ impl ClientEntity {
             if let Some(delay) = polling.poll_interval_ms {
                 polling_builder.poll_interval(Duration::from_millis(delay));
             }
-            polling_builder.transport(transport.clone());
+            polling_builder.transport(make_transport()?);
 
             config_builder = config_builder.data_source(&polling_builder);
         } else {
@@ -116,7 +195,7 @@ impl ClientEntity {
             // customization we provide is the transport to support testing multiple
             // transport implementations.
             let mut streaming_builder = StreamingDataSourceBuilder::new();
-            streaming_builder.transport(transport.clone());
+            streaming_builder.transport(make_transport()?);
             config_builder = config_builder.data_source(&streaming_builder);
         }
 
@@ -142,7 +221,7 @@ impl ClientEntity {
             if let Some(attributes) = events.global_private_attributes {
                 processor_builder.private_attributes(attributes);
             }
-            processor_builder.transport(transport);
+            processor_builder.transport(make_transport()?);
             processor_builder.omit_anonymous_contexts(events.omit_anonymous_contexts);
 
             config_builder.event_processor(&processor_builder)

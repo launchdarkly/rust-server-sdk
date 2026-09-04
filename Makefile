@@ -17,4 +17,10 @@ run-contract-tests:
 
 contract-tests: build-contract-tests start-contract-test-service-bg run-contract-tests
 
-.PHONY: build-contract-tests start-contract-test-service run-contract-tests contract-tests
+run-contract-tests-fdv2:
+	@curl -s https://raw.githubusercontent.com/launchdarkly/sdk-test-harness/main/downloader/run.sh \
+      | VERSION=v3 PARAMS="-url http://localhost:8000 -debug -stop-service-at-end -skip-from ./contract-tests/testharness-suppressions-fdv2.txt $(TEST_HARNESS_PARAMS)" sh
+
+contract-tests-fdv2: build-contract-tests start-contract-test-service-bg run-contract-tests-fdv2
+
+.PHONY: build-contract-tests start-contract-test-service run-contract-tests contract-tests run-contract-tests-fdv2 contract-tests-fdv2

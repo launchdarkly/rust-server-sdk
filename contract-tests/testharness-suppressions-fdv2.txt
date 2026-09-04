@@ -1,0 +1,12 @@
+# Suppressions for the FDv2 (v3) harness run. The v3 harness runs both the FDv1
+# and FDv2 suites, so this file carries the FDv1 suppressions as well.
+
+# FDv1 suppressions (also run under the v3 harness).
+evaluation/all flags state/client not ready
+evaluation/client not ready
+streaming/validation/drop and reconnect if stream event has malformed JSON/delete event
+streaming/validation/drop and reconnect if stream event has malformed JSON/patch event
+streaming/validation/drop and reconnect if stream event has malformed JSON/put event
+streaming/validation/drop and reconnect if stream event has well-formed JSON not matching schema/delete event
+streaming/validation/drop and reconnect if stream event has well-formed JSON not matching schema/patch event
+streaming/validation/drop and reconnect if stream event has well-formed JSON not matching schema/put event
