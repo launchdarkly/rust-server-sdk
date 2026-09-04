@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use futures::future::BoxFuture;
 use rand::Rng;
 
 use crate::stores::change_set::ChangeSet;
@@ -100,10 +99,14 @@ pub struct FDv2SourceEvent {
     pub fdv1_fallback: Option<FDv1FallbackDirective>,
 }
 
+/// The future returned by an initializer or synchronizer as it produces an event.
+pub type FDv2SourceEventFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = FDv2SourceEvent> + Send + 'a>>;
+
 /// A data source that can obtain an initial payload.
 pub trait Initializer: Send {
     /// Runs once to obtain an initial payload.
-    fn run(&mut self) -> BoxFuture<'_, FDv2SourceEvent>;
+    fn run(&mut self) -> FDv2SourceEventFuture<'_>;
     /// The name used in logs.
     fn name(&self) -> &str;
 }
@@ -111,7 +114,7 @@ pub trait Initializer: Send {
 /// A data source that keeps flag data up to date.
 pub trait Synchronizer: Send {
     /// Fetches the next batch of changes after the given selector.
-    fn next(&mut self, selector: Selector) -> BoxFuture<'_, FDv2SourceEvent>;
+    fn next(&mut self, selector: Selector) -> FDv2SourceEventFuture<'_>;
     /// The name used in logs.
     fn name(&self) -> &str;
 }

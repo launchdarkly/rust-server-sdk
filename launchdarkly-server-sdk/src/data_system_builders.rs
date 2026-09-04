@@ -103,12 +103,33 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> FDv2StreamingBuilder<T> {
     }
 
     /// Sets the initial reconnect delay for the streaming connection.
+    ///
+    /// # Examples
+    /// ```
+    /// # use launchdarkly_server_sdk::FDv2StreamingBuilder;
+    /// # use launchdarkly_sdk_transport::HyperTransport;
+    /// # use std::time::Duration;
+    /// # fn main() {
+    ///     let mut source = FDv2StreamingBuilder::<HyperTransport>::new();
+    ///     source.initial_reconnect_delay(Duration::from_secs(10));
+    /// # }
+    /// ```
     pub fn initial_reconnect_delay(&mut self, duration: Duration) -> &mut Self {
         self.initial_reconnect_delay = duration;
         self
     }
 
     /// Sets the streaming base URL, overriding the configured service endpoints.
+    ///
+    /// # Examples
+    /// ```
+    /// # use launchdarkly_server_sdk::FDv2StreamingBuilder;
+    /// # use launchdarkly_sdk_transport::HyperTransport;
+    /// # fn main() {
+    ///     let mut source = FDv2StreamingBuilder::<HyperTransport>::new();
+    ///     source.base_url("https://stream.example.com");
+    /// # }
+    /// ```
     pub fn base_url(&mut self, url: &str) -> &mut Self {
         self.base_url = Some(url.to_string());
         self
@@ -179,12 +200,33 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> FDv2PollingBuilder<T> {
     }
 
     /// Sets the interval between polling requests, with an effective minimum of 30 seconds.
+    ///
+    /// # Examples
+    /// ```
+    /// # use launchdarkly_server_sdk::FDv2PollingBuilder;
+    /// # use launchdarkly_sdk_transport::HyperTransport;
+    /// # use std::time::Duration;
+    /// # fn main() {
+    ///     let mut source = FDv2PollingBuilder::<HyperTransport>::new();
+    ///     source.poll_interval(Duration::from_secs(60));
+    /// # }
+    /// ```
     pub fn poll_interval(&mut self, poll_interval: Duration) -> &mut Self {
         self.poll_interval = poll_interval;
         self
     }
 
     /// Sets the polling base URL, overriding the configured service endpoints.
+    ///
+    /// # Examples
+    /// ```
+    /// # use launchdarkly_server_sdk::FDv2PollingBuilder;
+    /// # use launchdarkly_sdk_transport::HyperTransport;
+    /// # fn main() {
+    ///     let mut source = FDv2PollingBuilder::<HyperTransport>::new();
+    ///     source.base_url("https://polling.example.com");
+    /// # }
+    /// ```
     pub fn base_url(&mut self, url: &str) -> &mut Self {
         self.base_url = Some(url.to_string());
         self
@@ -268,6 +310,30 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> Default for FDv2PollingBu
 }
 
 /// Configures the FDv2 data system.
+///
+/// # Examples
+///
+/// Use the recommended data system.
+/// ```
+/// # use launchdarkly_server_sdk::{ConfigBuilder, DataSystemBuilder};
+/// # fn main() {
+///     ConfigBuilder::new("sdk-key").data_system(&DataSystemBuilder::default());
+/// # }
+/// ```
+///
+/// Assemble a custom data system from individual sources.
+/// ```
+/// # use launchdarkly_server_sdk::{
+/// #     ConfigBuilder, DataSystemBuilder, FDv2PollingBuilder, FDv2StreamingBuilder,
+/// # };
+/// # use launchdarkly_sdk_transport::HyperTransport;
+/// # fn main() {
+///     let mut data_system = DataSystemBuilder::custom();
+///     data_system.initializer(FDv2PollingBuilder::<HyperTransport>::new());
+///     data_system.synchronizer(FDv2StreamingBuilder::<HyperTransport>::new());
+///     ConfigBuilder::new("sdk-key").data_system(&data_system);
+/// # }
+/// ```
 pub struct DataSystemBuilder {
     initializers: Vec<Box<dyn FDv2InitializerConfig>>,
     synchronizers: Vec<Box<dyn FDv2SynchronizerConfig>>,
