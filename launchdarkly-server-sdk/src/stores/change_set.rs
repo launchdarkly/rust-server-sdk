@@ -5,7 +5,7 @@ use crate::fdv2::model::{ChangeSetKind, Selector};
 use super::store_types::StorageItem;
 
 /// A single flag or segment change within a change set.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ItemChange {
     /// A flag was upserted or deleted.
     Flag {

@@ -1,8 +1,9 @@
 //! Test data source for use in tests.
 //!
 //! The [`TestData`] type provides a way to inject feature flag data into the SDK for testing,
-//! without needing a LaunchDarkly connection. It implements [`DataSourceFactory`] and can be
-//! passed to [`crate::ConfigBuilder::data_source`].
+//! without needing a LaunchDarkly connection. Pass it to [`crate::ConfigBuilder::data_source`]
+//! to use it with the FDv1 data source, or to [`crate::DataSystemBuilder::synchronizer`] to use
+//! it with the FDv2 data system.
 //!
 //! # Examples
 //!
@@ -18,11 +19,18 @@ use std::sync::Arc;
 
 use launchdarkly_server_sdk_evaluation::{Flag, FlagBuilder, Segment};
 use parking_lot::{Mutex, RwLock};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::data_source::DataSource;
 use crate::data_source_builders::{BuildError, DataSourceFactory};
+use crate::data_system_builders::{
+    BuildError as DataSystemBuildError, DataSourceBuildContext, FDv2SynchronizerConfig,
+};
+use crate::fdv2::data_system::SynchronizerFactory;
+use crate::fdv2::model::{ChangeSetKind, Selector};
+use crate::fdv2::source::{FDv2SourceEvent, FDv2SourceEventFuture, FDv2SourceResult, Synchronizer};
 use crate::service_endpoints;
+use crate::stores::change_set::{ChangeSet, ItemChange};
 use crate::stores::store::DataStore;
 use crate::stores::store_types::{AllData, PatchTarget, StorageItem};
 
@@ -39,14 +47,50 @@ struct TestDataInner {
     current_segments: HashMap<String, Segment>,
     segment_versions: HashMap<String, u64>,
     instances: Vec<Arc<RwLock<dyn DataStore>>>,
+    fdv2_senders: Vec<mpsc::UnboundedSender<ChangeSet>>,
+}
+
+impl TestDataInner {
+    /// Sends a partial change set for one flag to every registered FDv2 synchronizer.
+    fn broadcast_flag(&mut self, flag: &Flag) {
+        self.broadcast(ItemChange::Flag {
+            key: flag.key.clone(),
+            item: StorageItem::Item(flag.clone()),
+        });
+    }
+
+    /// Sends a partial change set for one segment to every registered FDv2 synchronizer.
+    fn broadcast_segment(&mut self, segment: &Segment) {
+        self.broadcast(ItemChange::Segment {
+            key: segment.key.clone(),
+            item: StorageItem::Item(segment.clone()),
+        });
+    }
+
+    /// Sends `change` to every registered FDv2 synchronizer, dropping any whose
+    /// receiver has closed.
+    fn broadcast(&mut self, change: ItemChange) {
+        self.fdv2_senders.retain(|sender| {
+            let change_set = ChangeSet {
+                kind: ChangeSetKind::Partial,
+                changes: vec![change.clone()],
+                selector: None,
+            };
+            sender.send(change_set).is_ok()
+        });
+    }
 }
 
 /// A mechanism for providing dynamically updatable feature flag state in a simplified form to an
 /// SDK client.
 ///
-/// `TestData` implements `DataSourceFactory`, so it can be passed to
-/// [`crate::ConfigBuilder::data_source`]. When the SDK client is started, it will receive the
-/// current flag state from `TestData` and will be notified of any subsequent changes.
+/// `TestData` can be passed to [`crate::ConfigBuilder::data_source`] to drive the FDv1 data
+/// source, or to [`crate::DataSystemBuilder::synchronizer`] to drive the FDv2 data system. When
+/// the SDK client is started, it receives the current flag state from `TestData` and is notified
+/// of subsequent changes.
+///
+/// With the FDv2 data system, updates are delivered asynchronously. A change made with
+/// [`TestData::update`] may take a moment to be reflected in flag evaluations.
 ///
 /// Flag data can be provided using [`FlagBuilder`](crate::FlagBuilder) (via [`TestData::update`])
 /// or by passing fully constructed [`Flag`] objects (via [`TestData::use_preconfigured_flag`]).
@@ -68,6 +112,7 @@ impl TestData {
                 current_segments: HashMap::new(),
                 segment_versions: HashMap::new(),
                 instances: Vec::new(),
+                fdv2_senders: Vec::new(),
             })),
         }
     }
@@ -111,6 +156,8 @@ impl TestData {
             let mut store = store.write();
             let _ = store.upsert(&key, PatchTarget::Flag(StorageItem::Item(flag.clone())));
         }
+
+        inner.broadcast_flag(&flag);
     }
 
     /// Sets a preconfigured [`Flag`] directly.
@@ -137,6 +184,8 @@ impl TestData {
             let mut store = store.write();
             let _ = store.upsert(&key, PatchTarget::Flag(StorageItem::Item(flag.clone())));
         }
+
+        inner.broadcast_flag(&flag);
     }
 
     /// Sets a preconfigured [`Segment`] directly.
@@ -159,6 +208,8 @@ impl TestData {
                 PatchTarget::Segment(StorageItem::Item(segment.clone())),
             );
         }
+
+        inner.broadcast_segment(&segment);
     }
 }
 
@@ -223,6 +274,92 @@ impl DataSource for TestDataSource {
             let mut inner = inner_ref.lock();
             inner.instances.retain(|s| !Arc::ptr_eq(s, &store_ref));
         });
+    }
+}
+
+impl FDv2SynchronizerConfig for TestData {
+    fn build_synchronizer(
+        &self,
+        _context: &DataSourceBuildContext,
+    ) -> Result<Box<dyn SynchronizerFactory>, DataSystemBuildError> {
+        Ok(Box::new(TestDataSynchronizerFactory {
+            inner: self.inner.clone(),
+        }))
+    }
+
+    fn to_owned(&self) -> Box<dyn FDv2SynchronizerConfig> {
+        Box::new(self.clone())
+    }
+}
+
+struct TestDataSynchronizerFactory {
+    inner: Arc<Mutex<TestDataInner>>,
+}
+
+impl SynchronizerFactory for TestDataSynchronizerFactory {
+    fn create(&self) -> Box<dyn Synchronizer> {
+        let mut inner = self.inner.lock();
+
+        // Snapshot the current flags and segments as the initial full payload.
+        let mut changes = Vec::new();
+        for flag in inner.current_flags.values() {
+            changes.push(ItemChange::Flag {
+                key: flag.key.clone(),
+                item: StorageItem::Item(flag.clone()),
+            });
+        }
+        for segment in inner.current_segments.values() {
+            changes.push(ItemChange::Segment {
+                key: segment.key.clone(),
+                item: StorageItem::Item(segment.clone()),
+            });
+        }
+        let initial = ChangeSet {
+            kind: ChangeSetKind::Full,
+            changes,
+            selector: None,
+        };
+
+        // Register a channel so later updates reach this synchronizer.
+        let (sender, receiver) = mpsc::unbounded_channel();
+        inner.fdv2_senders.push(sender);
+
+        Box::new(TestDataSynchronizer {
+            initial: Some(initial),
+            receiver,
+        })
+    }
+}
+
+struct TestDataSynchronizer {
+    initial: Option<ChangeSet>,
+    receiver: mpsc::UnboundedReceiver<ChangeSet>,
+}
+
+impl Synchronizer for TestDataSynchronizer {
+    fn next(&mut self, _selector: Selector) -> FDv2SourceEventFuture<'_> {
+        if let Some(change_set) = self.initial.take() {
+            return Box::pin(async move {
+                FDv2SourceEvent {
+                    result: FDv2SourceResult::ChangeSet(change_set),
+                    fdv1_fallback: None,
+                }
+            });
+        }
+        Box::pin(async move {
+            match self.receiver.recv().await {
+                Some(change_set) => FDv2SourceEvent {
+                    result: FDv2SourceResult::ChangeSet(change_set),
+                    fdv1_fallback: None,
+                },
+                // The test data was dropped, so idle instead of terminating.
+                None => std::future::pending().await,
+            }
+        })
+    }
+
+    fn name(&self) -> &str {
+        "test-data"
     }
 }
 
@@ -469,5 +606,61 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         assert_eq!(td.inner.lock().instances.len(), 0);
+    }
+
+    fn build_fdv2_synchronizer(td: &TestData) -> Box<dyn crate::fdv2::source::Synchronizer> {
+        use crate::fdv2::request_headers::RequestHeaders;
+
+        let endpoints = crate::ServiceEndpointsBuilder::new().build().unwrap();
+        let headers = RequestHeaders::new("fake-key", None, "test-instance");
+        let context = DataSourceBuildContext {
+            endpoints: &endpoints,
+            headers: &headers,
+        };
+        FDv2SynchronizerConfig::build_synchronizer(td, &context)
+            .unwrap()
+            .create()
+    }
+
+    fn flag_keys(cs: &crate::stores::change_set::ChangeSet) -> Vec<&str> {
+        cs.changes
+            .iter()
+            .filter_map(|c| match c {
+                crate::stores::change_set::ItemChange::Flag { key, .. } => Some(key.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn fdv2_synchronizer_emits_full_basis_then_partials() {
+        use crate::fdv2::model::ChangeSetKind;
+        use crate::fdv2::source::FDv2SourceResult;
+
+        let td = TestData::new();
+        td.update(FlagBuilder::new("flag-1").variation_for_all(true));
+
+        let mut sync = build_fdv2_synchronizer(&td);
+
+        // First next() delivers a full payload with the current flags.
+        let event = sync.next(None).await;
+        match event.result {
+            FDv2SourceResult::ChangeSet(cs) => {
+                assert_eq!(cs.kind, ChangeSetKind::Full);
+                assert_eq!(flag_keys(&cs), vec!["flag-1"]);
+            }
+            other => panic!("expected a change set, got {other:?}"),
+        }
+
+        // A later update delivers a partial for just that flag.
+        td.update(FlagBuilder::new("flag-2").variation_for_all(false));
+        let event = sync.next(None).await;
+        match event.result {
+            FDv2SourceResult::ChangeSet(cs) => {
+                assert_eq!(cs.kind, ChangeSetKind::Partial);
+                assert_eq!(flag_keys(&cs), vec!["flag-2"]);
+            }
+            other => panic!("expected a change set, got {other:?}"),
+        }
     }
 }
