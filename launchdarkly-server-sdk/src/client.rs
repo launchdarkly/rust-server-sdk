@@ -942,9 +942,9 @@ mod tests {
     };
     use crate::test_data::TestData;
     use crate::{
-        AllData, ConfigBuilder, MigratorBuilder, NullEventProcessorBuilder, Operation, Origin,
-        PersistentDataStore, PersistentDataStoreBuilder, PersistentDataStoreFactory,
-        SerializedItem,
+        AllData, ConfigBuilder, DataSystemBuilder, FlagBuilder, MigratorBuilder,
+        NullEventProcessorBuilder, Operation, Origin, PersistentDataStore,
+        PersistentDataStoreBuilder, PersistentDataStoreFactory, SerializedItem,
     };
     use test_case::test_case;
 
@@ -2662,6 +2662,52 @@ mod tests {
             .expect("config should build");
         let client = Client::build(config).expect("Should be built.");
         (client, event_rx)
+    }
+
+    fn make_client_with_test_data_fdv2(td: &TestData) -> Client {
+        let mut data_system = DataSystemBuilder::custom();
+        data_system.synchronizer(td.clone());
+        let config = ConfigBuilder::new("sdk-key")
+            .data_system(&data_system)
+            .event_processor(&NullEventProcessorBuilder::new())
+            .build()
+            .expect("config should build");
+        Client::build(config).expect("Should be built.")
+    }
+
+    /// Polls `condition` until it holds, failing after a bounded wait. FDv2
+    /// delivers test-data updates asynchronously, so callers wait for them.
+    async fn wait_until(mut condition: impl FnMut() -> bool) {
+        for _ in 0..100 {
+            if condition() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("condition was not met within the timeout");
+    }
+
+    #[tokio::test]
+    async fn fdv2_test_data_serves_and_updates_flags() {
+        let td = TestData::new();
+        td.update(FlagBuilder::new("my-flag").variation_for_all(true));
+
+        let client = make_client_with_test_data_fdv2(&td);
+        client.start_with_default_executor();
+        client.wait_for_initialization(Duration::from_secs(5)).await;
+
+        let context = ContextBuilder::new("user")
+            .build()
+            .expect("context should build");
+
+        // The initial full payload is served through the FDv2 data system.
+        assert!(client.bool_variation(&context, "my-flag", false));
+
+        // A later update propagates asynchronously to the running client.
+        td.update(FlagBuilder::new("my-flag").variation_for_all(false));
+        wait_until(|| !client.bool_variation(&context, "my-flag", true)).await;
+
+        client.close();
     }
 
     #[test]
