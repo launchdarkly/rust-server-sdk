@@ -24,6 +24,9 @@
         "experimentation": {
           "introduced": "1.0"
         },
+        "fdv2": {
+          "introduced": "3.3"
+        },
         "inlineContextCustomEvents": {
           "introduced": "2.6"
         },
@@ -53,6 +56,9 @@
         },
         "storingData": {
           "introduced": "1.0"
+        },
+        "testDataSource": {
+          "introduced": "3.0"
         },
         "track": {
           "introduced": "1.0"
