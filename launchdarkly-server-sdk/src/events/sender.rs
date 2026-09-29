@@ -353,7 +353,7 @@ mod tests {
     fn build_event_sender(
         url: String,
     ) -> HttpEventSender<launchdarkly_sdk_transport::HyperTransport> {
-        let url = format!("{}/bulk", &url);
+        let url = format!("{}/bulk", url);
         let url = http::Uri::from_str(&url).expect("Failed parsing the mock server url");
 
         let transport = launchdarkly_sdk_transport::HyperTransport::new()
