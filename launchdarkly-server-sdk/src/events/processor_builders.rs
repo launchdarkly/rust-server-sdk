@@ -339,11 +339,32 @@ impl Default for NullEventProcessorBuilder {
 
 #[cfg(test)]
 mod tests {
-    use launchdarkly_server_sdk_evaluation::ContextBuilder;
     use maplit::hashset;
+
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
+    use launchdarkly_server_sdk_evaluation::ContextBuilder;
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
     use mockito::Matcher;
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
     use test_case::test_case;
 
+    #[cfg(any(
+        feature = "hyper-rustls-native-roots",
+        feature = "hyper-rustls-webpki-roots",
+        feature = "native-tls"
+    ))]
     use crate::{events::event::EventFactory, ServiceEndpointsBuilder};
 
     use super::*;
