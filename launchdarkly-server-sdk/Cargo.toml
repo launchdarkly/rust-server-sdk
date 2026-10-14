@@ -105,6 +105,10 @@ float-roundtrip = [
 ]
 
 [[example]]
+name = "custom_transport"
+required-features = ["hyper-rustls-native-roots"]
+
+[[example]]
 name = "print_flags"
 required-features = ["hyper-rustls-native-roots"]
 

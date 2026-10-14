@@ -921,7 +921,9 @@ impl Client {
 mod tests {
     use assert_json_diff::assert_json_eq;
     use crossbeam_channel::Receiver;
-    use eval::{ContextBuilder, MultiContextBuilder};
+    use eval::ContextBuilder;
+    #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
+    use eval::MultiContextBuilder;
     use futures::FutureExt;
     use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
     use maplit::hashmap;
