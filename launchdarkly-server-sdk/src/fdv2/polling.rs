@@ -377,6 +377,7 @@ fn build_poll_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stores::change_set::ItemChange;
 
     fn test_headers() -> RequestHeaders {
         RequestHeaders::new("sdk-key", None, "test-instance")
@@ -414,6 +415,57 @@ mod tests {
         };
         assert_eq!(cs.changes.len(), 1);
         assert_eq!(cs.selector.as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn parse_ignores_unknown_kind_objects() {
+        testing_logger::setup();
+        let flag = crate::test_common::basic_flag("my-flag");
+        let flag_json = serde_json::to_value(&flag).unwrap();
+        let envelope = serde_json::json!({
+            "events": [
+                {"event": "server-intent", "data": {"payloads": [{
+                    "id": "p1",
+                    "target": 1,
+                    "intentCode": "xfer-full",
+                    "reason": "payload-missing",
+                }]}},
+                {"event": "put-object", "data": {
+                    "version": 1,
+                    "kind": "some-future-kind",
+                    "key": "x",
+                    "object": {"foo": 1},
+                }},
+                {"event": "put-object", "data": {
+                    "version": 1,
+                    "kind": "flag",
+                    "key": "my-flag",
+                    "object": flag_json,
+                }},
+                {"event": "delete-object", "data": {
+                    "version": 2,
+                    "kind": "some-future-kind",
+                    "key": "y",
+                }},
+                {"event": "payload-transferred", "data": {"state": "s-1"}},
+            ]
+        });
+        let body = serde_json::to_vec(&envelope).unwrap();
+
+        // Parse a payload that mixes unknown-kind objects with a flag.
+        let event = parse_poll_body(&body);
+
+        // The payload completes with only the flag, and nothing is logged at warn or above.
+        let FDv2SourceResult::ChangeSet(cs) = event.result else {
+            panic!("expected ChangeSet, got {:?}", event.result);
+        };
+        assert_eq!(cs.kind, ChangeSetKind::Full);
+        assert_eq!(cs.changes.len(), 1);
+        assert!(matches!(&cs.changes[0], ItemChange::Flag { key, .. } if key == "my-flag"));
+        assert_eq!(cs.selector.as_deref(), Some("s-1"));
+        testing_logger::validate(|logs| {
+            assert!(logs.iter().all(|l| l.level > log::Level::Warn));
+        });
     }
 
     #[test]

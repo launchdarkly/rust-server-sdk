@@ -112,6 +112,10 @@ impl FDv2ProtocolHandler {
     }
 
     fn handle_put_object(&mut self, data: serde_json::Value) -> ProtocolResult {
+        if let Some(kind) = unknown_kind(&data) {
+            debug!("FDv2: ignoring put-object with unknown kind '{kind}'");
+            return ProtocolResult::None;
+        }
         let put: PutObject = match serde_json::from_value(data) {
             Ok(v) => v,
             Err(e) => {
@@ -126,6 +130,10 @@ impl FDv2ProtocolHandler {
     }
 
     fn handle_delete_object(&mut self, data: serde_json::Value) -> ProtocolResult {
+        if let Some(kind) = unknown_kind(&data) {
+            debug!("FDv2: ignoring delete-object with unknown kind '{kind}'");
+            return ProtocolResult::None;
+        }
         let del: DeleteObject = match serde_json::from_value(data) {
             Ok(v) => v,
             Err(e) => {
@@ -191,6 +199,14 @@ impl FDv2ProtocolHandler {
         });
         ProtocolResult::Goodbye(goodbye)
     }
+}
+
+/// Returns the object's kind if it is one the SDK does not support. Such
+/// objects are dropped before parsing, leaving room for new kinds.
+fn unknown_kind(data: &serde_json::Value) -> Option<&str> {
+    data.get("kind")
+        .and_then(serde_json::Value::as_str)
+        .filter(|kind| !matches!(*kind, "flag" | "segment"))
 }
 
 #[cfg(test)]
@@ -347,6 +363,35 @@ mod tests {
             h.handle_event("heartbeat", json!({})),
             ProtocolResult::None
         ));
+    }
+
+    #[test]
+    fn unknown_kind_objects_are_ignored() {
+        let mut h = FDv2ProtocolHandler::new();
+        h.handle_event("server-intent", server_intent("xfer-full"));
+        h.handle_event("put-object", put_flag("a", 1));
+
+        // Unknown-kind puts and deletes arrive between known objects.
+        let put_result = h.handle_event(
+            "put-object",
+            json!({"version": 1, "kind": "some-future-kind", "key": "x", "object": {"foo": 1}}),
+        );
+        let delete_result = h.handle_event(
+            "delete-object",
+            json!({"version": 2, "kind": "some-future-kind", "key": "y"}),
+        );
+        h.handle_event("delete-object", delete_segment("old", 3));
+        let cs =
+            expect_changeset(h.handle_event("payload-transferred", payload_transferred("s-1")));
+
+        // They produce no error and are left out of the payload; known objects remain.
+        assert!(matches!(put_result, ProtocolResult::None));
+        assert!(matches!(delete_result, ProtocolResult::None));
+        assert_eq!(cs.kind, ChangeSetKind::Full);
+        assert_eq!(cs.changes.len(), 2);
+        assert!(matches!(&cs.changes[0], FDv2Change::Put(put) if put.key == "a"));
+        assert!(matches!(&cs.changes[1], FDv2Change::Delete(del) if del.key == "old"));
+        assert_eq!(cs.selector.as_deref(), Some("s-1"));
     }
 
     #[test]

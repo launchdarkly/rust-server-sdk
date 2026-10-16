@@ -477,6 +477,51 @@ mod tests {
     }
 
     #[test]
+    fn unknown_kind_objects_are_ignored() {
+        testing_logger::setup();
+        let mut sync = new_synchronizer();
+        let flag = crate::test_common::basic_flag("my-flag");
+        let flag_json = serde_json::to_value(&flag).unwrap();
+
+        // Stream a payload that mixes unknown-kind objects with a flag.
+        let outputs = [
+            feed(&mut sync, "server-intent", intent("xfer-full")),
+            feed(
+                &mut sync,
+                "put-object",
+                json!({"version": 1, "kind": "some-future-kind", "key": "x", "object": {"foo": 1}}),
+            ),
+            feed(
+                &mut sync,
+                "put-object",
+                json!({"version": 1, "kind": "flag", "key": "my-flag", "object": flag_json}),
+            ),
+            feed(
+                &mut sync,
+                "delete-object",
+                json!({"version": 2, "kind": "some-future-kind", "key": "y"}),
+            ),
+        ];
+        let out = feed(&mut sync, "payload-transferred", json!({"state": "s-1"}))
+            .expect("changeset produced");
+
+        // The payload completes with only the flag, and nothing is logged at warn or above.
+        assert!(outputs.iter().all(Option::is_none));
+        let FDv2SourceResult::ChangeSet(cs) = out.result else {
+            panic!("expected ChangeSet, got {:?}", out.result);
+        };
+        assert_eq!(cs.changes.len(), 1);
+        assert!(matches!(
+            &cs.changes[0],
+            crate::stores::change_set::ItemChange::Flag { key, .. } if key == "my-flag"
+        ));
+        assert_eq!(cs.selector.as_deref(), Some("s-1"));
+        testing_logger::validate(|logs| {
+            assert!(logs.iter().all(|l| l.level > log::Level::Warn));
+        });
+    }
+
+    #[test]
     fn goodbye_ttl_takes_precedence_over_latest_fallback() {
         let mut sync = new_synchronizer();
         sync.latest_fdv1_fallback = Some(FDv1FallbackDirective {
