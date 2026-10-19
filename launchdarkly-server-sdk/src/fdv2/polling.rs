@@ -11,8 +11,8 @@ use super::model::{ChangeSetKind, Selector};
 use super::protocol::{FDv2ProtocolHandler, ProtocolError, ProtocolResult};
 use super::request_headers::RequestHeaders;
 use super::source::{
-    read_fallback_directive, ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent,
-    FDv2SourceResult, Initializer, Synchronizer,
+    read_fallback_directive, ErrorInfo, ErrorKind, FDv2SourceEvent, FDv2SourceResult, Initializer,
+    Synchronizer,
 };
 use super::url::build_fdv2_url;
 use crate::reqwest::is_http_error_recoverable;
@@ -77,9 +77,7 @@ fn parse_poll_body(body: &[u8]) -> FDv2SourceEvent {
                 }
                 return FDv2SourceEvent {
                     result: FDv2SourceResult::Goodbye,
-                    fdv1_fallback: g
-                        .protocol_fallback_ttl
-                        .map(|s| FDv1FallbackDirective::from_ttl(Some(Duration::from_secs(s)))),
+                    fdv1_fallback: g.fdv1_fallback(),
                 };
             }
             ProtocolResult::Error(ProtocolError::Server(err)) => {
