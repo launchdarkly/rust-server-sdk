@@ -1721,6 +1721,40 @@ mod tests {
         assert!(store.read().flag("fdv2-back").is_some());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn fdv2_retry_reengages_after_ttl_without_fdv1_fallback() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let (init_complete, calls) = recording_init_complete();
+        let initializer_factories: Vec<Arc<dyn InitializerFactory>> = vec![];
+
+        // The only source is FDv2; it reports a 60s directive, leaving no
+        // synchronizer to run until the TTL expires.
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let source_manager = SourceManager::new(vec![Arc::new(FallbackThenDataFactory {
+            ttl: Duration::from_secs(60),
+            reengage_kind: ChangeSetKind::Full,
+            builds: AtomicUsize::new(0),
+            shutdown: shutdown_tx,
+        }) as Arc<dyn SynchronizerFactory>]);
+
+        let started = Instant::now();
+        let handle = tokio::spawn(run(
+            initializer_factories,
+            source_manager,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        ));
+        handle.await.unwrap();
+
+        // FDv2 was rebuilt once the TTL elapsed, with no FDv1 fallback configured.
+        assert!(started.elapsed() >= Duration::from_secs(60));
+        assert_eq!(*calls.lock().unwrap(), vec![true]);
+        assert!(store.read().flag("fdv2-back").is_some());
+    }
+
     #[tokio::test]
     async fn initializer_fallback_directive_switches_to_fdv1() {
         let store = Arc::new(RwLock::new(InMemoryDataStore::new()));

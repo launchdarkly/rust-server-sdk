@@ -1,4 +1,8 @@
+use std::time::Duration;
+
 use serde::Deserialize;
+
+use super::source::FDv1FallbackDirective;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -52,8 +56,19 @@ pub(super) struct PayloadTransferred {
 #[derive(Debug, Deserialize)]
 pub(super) struct Goodbye {
     pub(super) reason: Option<String>,
+    // Kept as raw JSON so a malformed value still signals fallback.
     #[serde(rename = "protocolFallbackTTL")]
-    pub(super) protocol_fallback_ttl: Option<u64>,
+    pub(super) protocol_fallback_ttl: Option<serde_json::Value>,
+}
+
+impl Goodbye {
+    /// A present `protocolFallbackTTL` signals FDv1 fallback. A value that is not
+    /// a non-negative integer number of seconds uses the default TTL.
+    pub(super) fn fdv1_fallback(&self) -> Option<FDv1FallbackDirective> {
+        self.protocol_fallback_ttl
+            .as_ref()
+            .map(|ttl| FDv1FallbackDirective::from_ttl(ttl.as_u64().map(Duration::from_secs)))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,7 +146,48 @@ mod tests {
             serde_json::from_value(json!({"reason": "rotation", "protocolFallbackTTL": 30}))
                 .unwrap();
         assert_eq!(full.reason.as_deref(), Some("rotation"));
-        assert_eq!(full.protocol_fallback_ttl, Some(30));
+        assert_eq!(full.protocol_fallback_ttl, Some(json!(30)));
+    }
+
+    fn goodbye(data: serde_json::Value) -> Goodbye {
+        serde_json::from_value(data).unwrap()
+    }
+
+    #[test]
+    fn goodbye_without_ttl_has_no_fallback() {
+        assert!(goodbye(json!({"reason": "bye"})).fdv1_fallback().is_none());
+    }
+
+    #[test]
+    fn goodbye_with_valid_ttl_uses_it_as_is() {
+        for secs in [1, 90, 3600] {
+            let directive = goodbye(json!({"protocolFallbackTTL": secs}))
+                .fdv1_fallback()
+                .expect("directive");
+            assert_eq!(directive.ttl, Duration::from_secs(secs));
+        }
+    }
+
+    #[test]
+    fn goodbye_with_invalid_ttl_uses_jittered_default() {
+        for ttl in [
+            json!(0),
+            json!(-5),
+            json!(3601),
+            json!(60.5),
+            json!("60"),
+            json!(true),
+        ] {
+            let directive = goodbye(json!({"protocolFallbackTTL": ttl}))
+                .fdv1_fallback()
+                .unwrap_or_else(|| panic!("no directive for {ttl}"));
+            assert!(
+                directive.ttl >= Duration::from_secs(30 * 60)
+                    && directive.ttl <= Duration::from_secs(60 * 60),
+                "ttl {:?} for {ttl}",
+                directive.ttl
+            );
+        }
     }
 
     #[test]

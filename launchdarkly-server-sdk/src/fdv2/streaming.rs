@@ -121,8 +121,7 @@ impl<T: HttpTransport + Clone + Send + Sync + 'static> StreamingSynchronizer<T> 
                 // An explicit directive on the goodbye takes precedence over
                 // the most recent response header.
                 let fallback = g
-                    .protocol_fallback_ttl
-                    .map(|s| FDv1FallbackDirective::from_ttl(Some(Duration::from_secs(s))))
+                    .fdv1_fallback()
                     .or_else(|| self.latest_fdv1_fallback.clone());
                 self.drop_connection();
                 Some(FDv2SourceEvent {
