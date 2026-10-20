@@ -2,6 +2,13 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.3.3](https://github.com/launchdarkly/rust-server-sdk/compare/3.3.2...3.3.3) (2026-10-20)
+
+
+### Bug Fixes
+
+* Honor a goodbye's malformed protocolFallbackTTL as a fallback signal ([#208](https://github.com/launchdarkly/rust-server-sdk/issues/208)) ([40f5832](https://github.com/launchdarkly/rust-server-sdk/commit/40f58325ff9066796c656e26d5d6c6b61d0badfd))
+
 ## [3.3.2](https://github.com/launchdarkly/rust-server-sdk/compare/3.3.1...3.3.2) (2026-10-20)
 
 
