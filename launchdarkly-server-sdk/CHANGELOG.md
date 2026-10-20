@@ -2,6 +2,14 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.3.2](https://github.com/launchdarkly/rust-server-sdk/compare/3.3.1...3.3.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* Bump launchdarkly-server-sdk-evaluation to 2.2.2 ([#209](https://github.com/launchdarkly/rust-server-sdk/issues/209)) ([e949e5e](https://github.com/launchdarkly/rust-server-sdk/commit/e949e5eda777f459921f13cd942d2eceaac08963))
+* Ignore FDv2 objects with unrecognized kinds ([#207](https://github.com/launchdarkly/rust-server-sdk/issues/207)) ([3d22f1b](https://github.com/launchdarkly/rust-server-sdk/commit/3d22f1b55f3c0b06a676f5cfef01e8e2ea022d78))
+
 ## [3.3.1](https://github.com/launchdarkly/rust-server-sdk/compare/3.3.0...3.3.1) (2026-10-14)
 
 
