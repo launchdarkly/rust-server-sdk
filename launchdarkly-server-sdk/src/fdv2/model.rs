@@ -54,7 +54,7 @@ impl TryFrom<ChangeSet> for change_set::ChangeSet {
                         key: put.key,
                         item: StorageItem::Item(serde_json::from_value::<Segment>(put.object)?),
                     }),
-                    other => warn!("FDv2: unknown kind '{other}' in put-object, skipping"),
+                    other => debug!("FDv2: unknown kind '{other}' in put-object, skipping"),
                 },
                 FDv2Change::Delete(del) => match del.kind.as_str() {
                     "flag" => translated.push(ItemChange::Flag {
@@ -65,7 +65,7 @@ impl TryFrom<ChangeSet> for change_set::ChangeSet {
                         key: del.key,
                         item: StorageItem::Tombstone(del.version),
                     }),
-                    other => warn!("FDv2: unknown kind '{other}' in delete-object, skipping"),
+                    other => debug!("FDv2: unknown kind '{other}' in delete-object, skipping"),
                 },
             }
         }
