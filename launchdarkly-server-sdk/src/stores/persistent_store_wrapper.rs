@@ -279,13 +279,16 @@ mod tests {
     use crate::stores::{
         persistent_store::tests::InMemoryPersistentDataStore,
         store::DataStore,
-        store_types::{PatchTarget, StorageItem},
+        store_types::{PatchTarget, SerializedItem, StorageItem},
     };
     use launchdarkly_server_sdk_evaluation::Store;
     use maplit::hashmap;
 
     use crate::stores::{persistent_store::tests::NullPersistentDataStore, store_types::AllData};
-    use crate::test_common::{basic_flag, basic_segment};
+    use crate::test_common::{
+        basic_flag, basic_segment, flag_tombstone_shapes, segment_tombstone_shapes,
+    };
+    use std::convert::TryFrom;
     use std::{collections::HashMap, time::Duration};
 
     use super::PersistentDataStoreWrapper;
@@ -462,5 +465,98 @@ mod tests {
             StorageItem::Item(segment) => assert_eq!(segment.version, 2),
             _ => panic!("Failed to retrieve correct segment"),
         };
+    }
+
+    /// Wraps a stored body the way a real persistent store hands it back. Redis, DynamoDB and
+    /// Consul keep only the body, so they cannot report `deleted` out of band and always pass
+    /// false.
+    fn stored(body: &str) -> SerializedItem {
+        SerializedItem {
+            version: 0,
+            deleted: false,
+            serialized_item: body.to_string(),
+        }
+    }
+
+    fn stored_flag(key: &str) -> SerializedItem {
+        SerializedItem::try_from(StorageItem::Item(basic_flag(key))).unwrap()
+    }
+
+    /// Builds a wrapper over a store holding the given records, with caching turned off so
+    /// every read goes to the store.
+    fn wrapper_over(
+        flags: HashMap<String, SerializedItem>,
+        segments: HashMap<String, SerializedItem>,
+    ) -> PersistentDataStoreWrapper {
+        let store = InMemoryPersistentDataStore {
+            data: AllData { flags, segments },
+            initialized: true,
+        };
+
+        PersistentDataStoreWrapper::new(Box::new(store), Some(Duration::from_secs(0)))
+    }
+
+    #[test]
+    fn flag_tombstone_shapes_are_not_served_as_live_flags() {
+        for shape in flag_tombstone_shapes("my-flag") {
+            let wrapper = wrapper_over(
+                hashmap!["my-flag".into() => stored(&shape.body)],
+                HashMap::new(),
+            );
+
+            assert!(
+                wrapper.flag("my-flag").is_none(),
+                "deleted flag was served for tombstone shape: {}",
+                shape.name
+            );
+        }
+    }
+
+    #[test]
+    fn segment_tombstone_shapes_are_not_served_as_live_segments() {
+        for shape in segment_tombstone_shapes("my-segment") {
+            let wrapper = wrapper_over(
+                HashMap::new(),
+                hashmap!["my-segment".into() => stored(&shape.body)],
+            );
+
+            assert!(
+                wrapper.segment("my-segment").is_none(),
+                "deleted segment was served for tombstone shape: {}",
+                shape.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_flags_omits_tombstone_shapes_and_keeps_live_flags() {
+        let mut flags = hashmap!["live-flag".into() => stored_flag("live-flag")];
+
+        for (index, shape) in flag_tombstone_shapes("deleted-flag")
+            .into_iter()
+            .enumerate()
+        {
+            flags.insert(format!("deleted-flag-{index}"), stored(&shape.body));
+        }
+
+        let wrapper = wrapper_over(flags, HashMap::new());
+        let all_flags = wrapper.all_flags();
+
+        assert_eq!(
+            vec!["live-flag"],
+            all_flags.keys().cloned().collect::<Vec<String>>()
+        );
+    }
+
+    #[test]
+    fn a_corrupt_record_fails_the_whole_all_flags_read() {
+        let flags = hashmap![
+            "live-flag".into() => stored_flag("live-flag"),
+            "corrupt-flag".into() => stored(r#"{"key": "corrupt-flag"}"#),
+        ];
+
+        let wrapper = wrapper_over(flags, HashMap::new());
+
+        assert!(wrapper.all_flags().is_empty());
     }
 }
