@@ -1,5 +1,6 @@
 mod client_entity;
 mod command_params;
+mod tls;
 
 use crate::command_params::CommandParams;
 use actix_web::error::{ErrorBadRequest, ErrorInternalServerError};
@@ -22,6 +23,15 @@ struct Status {
 #[serde(rename_all = "camelCase")]
 pub struct ProxyParameters {
     pub http_proxy: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsParameters {
+    #[serde(default = "bool::default")]
+    pub skip_verify_peer: bool,
+    #[serde(rename = "customCAFile")]
+    pub custom_ca_file: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -101,6 +111,8 @@ pub struct Configuration {
 
     pub proxy: Option<ProxyParameters>,
 
+    pub tls: Option<TlsParameters>,
+
     pub streaming: Option<StreamingParameters>,
 
     pub polling: Option<PollingParameters>,
@@ -147,6 +159,23 @@ async fn status() -> impl Responder {
             "optional-event-gzip".to_string(),
             "instance-id".to_string(),
             "fdv1-fallback".to_string(),
+            // Builds without a TLS stack cannot connect to the harness over HTTPS.
+            #[cfg(any(
+                feature = "hyper-rustls-native-roots",
+                feature = "hyper-rustls-webpki-roots",
+                feature = "native-tls"
+            ))]
+            "tls:verify-peer".to_string(),
+            #[cfg(any(
+                feature = "hyper-rustls-native-roots",
+                feature = "hyper-rustls-webpki-roots",
+                feature = "native-tls"
+            ))]
+            "tls:skip-verify-peer".to_string(),
+            // The harness certificate names its host only in the subject CN. rustls requires a
+            // subjectAltName, so it rejects the certificate even when it trusts the custom CA.
+            #[cfg(feature = "native-tls")]
+            "tls:custom-ca".to_string(),
         ],
     })
 }
@@ -163,15 +192,19 @@ async fn create_client(
     create_instance_params: web::Json<CreateInstanceParams>,
     app_state: web::Data<AppState>,
 ) -> HttpResponse {
-    let client_entity = match ClientEntity::new(
-        create_instance_params.into_inner(),
-        app_state.https_connector.clone(),
-    )
-    .await
-    {
-        Ok(ce) => ce,
-        Err(e) => return HttpResponse::InternalServerError().body(format!("{e}")),
+    let connector = match tls::connector(
+        create_instance_params.configuration.tls.as_ref(),
+        &app_state.https_connector,
+    ) {
+        Ok(connector) => connector,
+        Err(e) => return HttpResponse::InternalServerError().body(e),
     };
+
+    let client_entity =
+        match ClientEntity::new(create_instance_params.into_inner(), connector).await {
+            Ok(ce) => ce,
+            Err(e) => return HttpResponse::InternalServerError().body(format!("{e}")),
+        };
 
     let mut counter = app_state.counter.lock().await;
     let mut entities = app_state.client_entities.lock().await;
