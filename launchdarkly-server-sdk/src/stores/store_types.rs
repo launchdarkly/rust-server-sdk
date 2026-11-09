@@ -136,7 +136,8 @@ pub struct SerializedItem {
     pub serialized_item: String,
 }
 
-#[derive(Serialize, Deserialize)]
+/// The tombstone this SDK writes to mark an item deleted.
+#[derive(Serialize)]
 struct SerializedTombstone {
     version: u64,
     key: String,
@@ -153,31 +154,48 @@ impl SerializedTombstone {
     }
 }
 
+/// Supports deserializing tombstone values produced by other SDKs.
+#[derive(Deserialize)]
+struct DeserializedTombstone {
+    #[serde(default)]
+    version: Option<u64>,
+    #[serde(default)]
+    deleted: bool,
+}
+
+impl SerializedItem {
+    /// Returns the version of the tombstone this item holds, or None if it is not a tombstone.
+    ///
+    /// A tombstone is recognized by `deleted` being true, either on the item itself or in the
+    /// stored body. The body wins on version, because a store that only keeps the body cannot
+    /// report a version out of band.
+    fn tombstone_version(&self) -> Option<u64> {
+        if self.deleted {
+            return Some(self.version);
+        }
+
+        let tombstone: DeserializedTombstone = serde_json::from_str(&self.serialized_item).ok()?;
+
+        if !tombstone.deleted {
+            return None;
+        }
+
+        Some(tombstone.version.unwrap_or(self.version))
+    }
+}
+
 impl TryInto<StorageItem<Flag>> for SerializedItem {
     type Error = serde_json::Error;
 
     fn try_into(self) -> Result<StorageItem<Flag>, Self::Error> {
-        if self.deleted {
-            return Ok(StorageItem::Tombstone(self.version));
+        // Check for a tombstone first. Flag has no `deleted` field and does not reject unknown
+        // fields, so a tombstone written as a complete flag object would otherwise parse as a
+        // live flag and resurrect a deleted flag.
+        if let Some(version) = self.tombstone_version() {
+            return Ok(StorageItem::Tombstone(version));
         }
 
-        let flag_result: Result<Flag, serde_json::Error> =
-            serde_json::from_str(&self.serialized_item);
-
-        match flag_result {
-            Ok(flag) => Ok(StorageItem::Item(flag)),
-            Err(e) => {
-                let serialized_tombstone: Result<SerializedTombstone, serde_json::Error> =
-                    serde_json::from_str(&self.serialized_item);
-
-                match serialized_tombstone {
-                    Ok(tombstone) if tombstone.key == "$deleted" && tombstone.deleted => {
-                        Ok(StorageItem::Tombstone(tombstone.version))
-                    }
-                    _ => Err(e),
-                }
-            }
-        }
+        serde_json::from_str(&self.serialized_item).map(StorageItem::Item)
     }
 }
 
@@ -240,27 +258,12 @@ impl TryInto<StorageItem<Segment>> for SerializedItem {
     type Error = serde_json::Error;
 
     fn try_into(self) -> Result<StorageItem<Segment>, Self::Error> {
-        if self.deleted {
-            return Ok(StorageItem::Tombstone(self.version));
+        // Check for a tombstone first, for the same reason as the Flag conversion above.
+        if let Some(version) = self.tombstone_version() {
+            return Ok(StorageItem::Tombstone(version));
         }
 
-        let segment_result: Result<Segment, serde_json::Error> =
-            serde_json::from_str(&self.serialized_item);
-
-        match segment_result {
-            Ok(segment) => Ok(StorageItem::Item(segment)),
-            Err(e) => {
-                let serialized_tombstone: Result<SerializedTombstone, serde_json::Error> =
-                    serde_json::from_str(&self.serialized_item);
-
-                match serialized_tombstone {
-                    Ok(tombstone) if tombstone.key == "$deleted" && tombstone.deleted => {
-                        Ok(StorageItem::Tombstone(tombstone.version))
-                    }
-                    _ => Err(e),
-                }
-            }
-        }
+        serde_json::from_str(&self.serialized_item).map(StorageItem::Item)
     }
 }
 
@@ -271,7 +274,7 @@ mod tests {
     use launchdarkly_server_sdk_evaluation::{Flag, Segment};
 
     use crate::{
-        test_common::{basic_flag, basic_segment},
+        test_common::{basic_flag, basic_segment, flag_tombstone_shapes, segment_tombstone_shapes},
         SerializedItem,
     };
 
@@ -406,6 +409,149 @@ mod tests {
                 assert_eq!(v, 42);
             }
             _ => panic!("Item failed to deserialize into segment"),
+        }
+    }
+
+    /// Wraps a stored body the way a real persistent store hands it back. Redis, DynamoDB and
+    /// Consul keep only the body, so they cannot report `deleted` out of band and always pass
+    /// false.
+    fn stored(body: &str) -> SerializedItem {
+        SerializedItem {
+            version: 0,
+            deleted: false,
+            serialized_item: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn every_flag_tombstone_shape_is_read_as_a_tombstone() {
+        for shape in flag_tombstone_shapes("my-flag") {
+            let result: Result<StorageItem<Flag>, serde_json::Error> =
+                stored(&shape.body).try_into();
+
+            match result {
+                Ok(StorageItem::Tombstone(version)) => assert_eq!(
+                    shape.version, version,
+                    "wrong version for flag tombstone shape: {}",
+                    shape.name
+                ),
+                Ok(StorageItem::Item(flag)) => panic!(
+                    "flag tombstone shape read as a live flag (key {:?}): {}",
+                    flag.key, shape.name
+                ),
+                Err(e) => panic!("flag tombstone shape failed to parse: {} ({e})", shape.name),
+            }
+        }
+    }
+
+    #[test]
+    fn every_segment_tombstone_shape_is_read_as_a_tombstone() {
+        for shape in segment_tombstone_shapes("my-segment") {
+            let result: Result<StorageItem<Segment>, serde_json::Error> =
+                stored(&shape.body).try_into();
+
+            match result {
+                Ok(StorageItem::Tombstone(version)) => assert_eq!(
+                    shape.version, version,
+                    "wrong version for segment tombstone shape: {}",
+                    shape.name
+                ),
+                Ok(StorageItem::Item(segment)) => panic!(
+                    "segment tombstone shape read as a live segment (key {:?}): {}",
+                    segment.key, shape.name
+                ),
+                Err(e) => panic!(
+                    "segment tombstone shape failed to parse: {} ({e})",
+                    shape.name
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn tombstone_without_a_version_uses_the_stored_version() {
+        let serialized_item = SerializedItem {
+            version: 77,
+            deleted: false,
+            serialized_item: r#"{"deleted": true}"#.to_string(),
+        };
+
+        let result: Result<StorageItem<Flag>, serde_json::Error> = serialized_item.try_into();
+
+        match result {
+            Ok(StorageItem::Tombstone(version)) => assert_eq!(77, version),
+            _ => panic!("tombstone without a version failed to read"),
+        }
+    }
+
+    #[test]
+    fn live_flag_is_not_read_as_a_tombstone() {
+        let flag = basic_flag("my-flag");
+        let serialized_item = SerializedItem::try_from(StorageItem::Item(flag.clone())).unwrap();
+        let body = serialized_item.serialized_item.clone();
+
+        let result: Result<StorageItem<Flag>, serde_json::Error> = stored(&body).try_into();
+
+        match result {
+            Ok(StorageItem::Item(read)) => assert_eq!(flag.key, read.key),
+            _ => panic!("live flag was not read as a live flag"),
+        }
+    }
+
+    #[test]
+    fn flag_marked_not_deleted_is_read_as_a_live_flag() {
+        let body = r#"{
+            "key": "my-flag",
+            "version": 42,
+            "on": true,
+            "targets": [],
+            "rules": [],
+            "prerequisites": [],
+            "fallthrough": {"variation": 1},
+            "offVariation": 0,
+            "variations": [false, true],
+            "salt": "kosher",
+            "deleted": false
+        }"#;
+
+        let result: Result<StorageItem<Flag>, serde_json::Error> = stored(body).try_into();
+
+        match result {
+            Ok(StorageItem::Item(flag)) => assert_eq!("my-flag", flag.key),
+            _ => panic!("flag marked not deleted was not read as a live flag"),
+        }
+    }
+
+    #[test]
+    fn segment_marked_not_deleted_is_read_as_a_live_segment() {
+        let body = r#"{
+            "key": "my-segment",
+            "version": 1,
+            "included": ["alice"],
+            "excluded": [],
+            "rules": [],
+            "salt": "salty",
+            "deleted": false
+        }"#;
+
+        let result: Result<StorageItem<Segment>, serde_json::Error> = stored(body).try_into();
+
+        match result {
+            Ok(StorageItem::Item(segment)) => assert_eq!("my-segment", segment.key),
+            _ => panic!("segment marked not deleted was not read as a live segment"),
+        }
+    }
+
+    #[test]
+    fn corrupt_body_still_reports_the_item_parse_error() {
+        for body in [
+            r#"{"key": "my-flag"}"#,
+            r#"{}"#,
+            r#"[1, 2, 3]"#,
+            r#""nope""#,
+        ] {
+            let result: Result<StorageItem<Flag>, serde_json::Error> = stored(body).try_into();
+            assert!(result.is_err(), "corrupt body was accepted: {body}");
         }
     }
 }
