@@ -677,6 +677,32 @@ mod tests {
         assert!(uri.contains("basis=per-call-state"), "uri: {uri}");
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn synchronizer_omits_basis_after_selector_is_cleared() {
+        use super::super::source::Synchronizer;
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let transport = CapturingTransport {
+            captured_uri: captured.clone(),
+        };
+        let mut sync = PollingSynchronizer::new(
+            transport,
+            "http://example.com".to_string(),
+            test_headers(),
+            Duration::ZERO,
+        );
+        let _ = sync.next(Some("initial".into())).await;
+        assert_eq!(
+            captured.lock().unwrap().as_deref(),
+            Some("http://example.com/sdk/poll?basis=initial")
+        );
+        for selector in [None, Some(String::new())] {
+            let _ = sync.next(selector).await;
+            assert_eq!(
+                captured.lock().unwrap().as_deref(),
+                Some("http://example.com/sdk/poll")
+            );
+        }
+    }
     #[derive(Clone)]
     struct CountingTransport {
         count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
