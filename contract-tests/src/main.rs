@@ -159,6 +159,7 @@ async fn status() -> impl Responder {
             "optional-event-gzip".to_string(),
             "instance-id".to_string(),
             "fdv1-fallback".to_string(),
+            "polling-gzip".to_string(),
             // Builds without a TLS stack cannot connect to the harness over HTTPS.
             #[cfg(any(
                 feature = "hyper-rustls-native-roots",
