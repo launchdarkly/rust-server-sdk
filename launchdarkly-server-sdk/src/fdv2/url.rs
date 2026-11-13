@@ -14,7 +14,7 @@ pub(super) fn build_fdv2_url(base_url: &str, endpoint_path: &str, selector: &Sel
     let trimmed = base_url.trim_end_matches('/');
     let mut url = format!("{trimmed}/{endpoint_path}");
 
-    if let Some(state) = selector.as_deref() {
+    if let Some(state) = selector.as_deref().filter(|state| !state.is_empty()) {
         url.push_str("?basis=");
         url.push_str(&utf8_percent_encode(state, QUERY_VALUE).to_string());
     }
@@ -35,6 +35,14 @@ mod tests {
     fn endpoint_path_is_included_verbatim() {
         let url = build_fdv2_url("http://example.com", "sdk/stream", &None);
         assert_eq!(url, "http://example.com/sdk/stream");
+    }
+
+    #[test]
+    fn empty_selector_omits_basis_for_polling_and_streaming() {
+        for endpoint in ["sdk/poll", "sdk/stream"] {
+            let url = build_fdv2_url("http://example.com", endpoint, &Some(String::new()));
+            assert_eq!(url, format!("http://example.com/{endpoint}"));
+        }
     }
 
     #[test]
