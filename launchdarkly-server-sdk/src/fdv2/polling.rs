@@ -118,7 +118,7 @@ async fn handle_response(response: Response<ByteStream>) -> FDv2SourceEvent {
 
     if status.is_success() {
         let mut body_bytes = Vec::new();
-        let mut stream = response.into_body();
+        let (parts, mut stream) = response.into_parts();
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(b) => body_bytes.extend_from_slice(&b),
@@ -142,6 +142,18 @@ async fn handle_response(response: Response<ByteStream>) -> FDv2SourceEvent {
                 fdv1_fallback: fallback,
             };
         }
+        let body_bytes = match crate::polling_compression::decode_body(&parts.headers, body_bytes) {
+            Ok(b) => b,
+            Err(e) => {
+                return FDv2SourceEvent {
+                    result: FDv2SourceResult::Interrupted(ErrorInfo {
+                        kind: ErrorKind::InvalidData,
+                        message: format!("could not decompress polling response body: {e}"),
+                    }),
+                    fdv1_fallback: fallback,
+                };
+            }
+        };
         let mut event = parse_poll_body(&body_bytes);
         if event.fdv1_fallback.is_none() {
             event.fdv1_fallback = fallback;
@@ -368,6 +380,9 @@ fn build_poll_request(
         .header("Content-Type", "application/json");
     for (name, value) in headers.iter() {
         builder = builder.header(name, value);
+    }
+    if let Some(accept_encoding) = crate::polling_compression::ACCEPT_ENCODING {
+        builder = builder.header("Accept-Encoding", accept_encoding);
     }
     builder.body(Some(Bytes::new()))
 }
@@ -763,6 +778,53 @@ mod tests {
         assert!(event.fdv1_fallback.is_none());
     }
 
+    #[cfg(feature = "polling-compression")]
+    #[tokio::test]
+    async fn handle_200_with_gzip_body_returns_change_set() {
+        let body = crate::polling_compression::gzip(&full_payload_body("my-flag"));
+        let resp = make_response(200, &[("Content-Encoding", "gzip")], &body);
+        let event = handle_response(resp).await;
+        let FDv2SourceResult::ChangeSet(cs) = event.result else {
+            panic!("expected ChangeSet, got {:?}", event.result);
+        };
+        assert_eq!(cs.changes.len(), 1);
+    }
+
+    #[cfg(feature = "polling-compression")]
+    #[tokio::test]
+    async fn handle_200_with_corrupt_gzip_body_returns_interrupted_with_fallback() {
+        let resp = make_response(
+            200,
+            &[("Content-Encoding", "gzip"), ("X-LD-FD-Fallback", "true")],
+            b"not gzip",
+        );
+        let event = handle_response(resp).await;
+        let FDv2SourceResult::Interrupted(err) = event.result else {
+            panic!("expected Interrupted, got {:?}", event.result);
+        };
+        assert_eq!(err.kind, ErrorKind::InvalidData);
+        assert!(
+            err.message.contains("decompress"),
+            "message: {}",
+            err.message
+        );
+        assert!(event.fdv1_fallback.is_some());
+    }
+
+    #[test]
+    fn poll_request_accept_encoding_matches_polling_compression_feature() {
+        let req = build_poll_request("http://example.com", &test_headers(), &None).unwrap();
+        let accept_encoding = req
+            .headers()
+            .get("Accept-Encoding")
+            .map(|v| v.to_str().unwrap());
+        if cfg!(feature = "polling-compression") {
+            assert_eq!(accept_encoding, Some("gzip"));
+        } else {
+            assert_eq!(accept_encoding, None);
+        }
+    }
+
     #[test]
     fn parse_goodbye_event_returns_goodbye_with_fallback() {
         let envelope = serde_json::json!({
@@ -785,39 +847,56 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn end_to_end_full_payload_emits_changeset() {
         let mut server = mockito::Server::new_async().await;
-        let flag = crate::test_common::basic_flag("f");
-        let flag_json = serde_json::to_value(&flag).unwrap();
-        let envelope = serde_json::json!({
-            "events": [
-                {"event": "server-intent", "data": {"payloads": [{
-                    "id": "p", "target": 1, "intentCode": "xfer-full", "reason": "payload-missing",
-                }]}},
-                {"event": "put-object", "data": {
-                    "version": 1, "kind": "flag", "key": "f", "object": flag_json,
-                }},
-                {"event": "payload-transferred", "data": {"state": "s-1"}},
-            ]
-        });
+        let accept_encoding = match crate::polling_compression::ACCEPT_ENCODING {
+            Some(value) => mockito::Matcher::Exact(value.to_string()),
+            None => mockito::Matcher::Missing,
+        };
         let mock = server
             .mock("GET", "/sdk/poll")
             .match_header("Authorization", "sdk-key")
+            .match_header("Accept-Encoding", accept_encoding)
             .with_status(200)
-            .with_body(envelope.to_string())
+            .with_body(full_payload_body("f"))
             .expect_at_least(1)
             .create_async()
             .await;
 
-        let transport = launchdarkly_sdk_transport::HyperTransport::new().expect("hyper transport");
-        use super::super::source::Synchronizer;
-        let mut sync =
-            PollingSynchronizer::new(transport, server.url(), test_headers(), Duration::ZERO);
-
-        let out = sync.next(None).await;
+        let out = poll_once(server.url()).await;
         let FDv2SourceResult::ChangeSet(cs) = out.result else {
             panic!("expected ChangeSet, got {:?}", out.result);
         };
         assert_eq!(cs.selector.as_deref(), Some("s-1"));
         assert_eq!(cs.changes.len(), 1);
         mock.assert_async().await;
+    }
+
+    #[cfg(feature = "polling-compression")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn end_to_end_gzip_payload_emits_changeset() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/sdk/poll")
+            .match_header("Accept-Encoding", "gzip")
+            .with_status(200)
+            .with_header("Content-Encoding", "gzip")
+            .with_body(crate::polling_compression::gzip(&full_payload_body("f")))
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let out = poll_once(server.url()).await;
+        let FDv2SourceResult::ChangeSet(cs) = out.result else {
+            panic!("expected ChangeSet, got {:?}", out.result);
+        };
+        assert_eq!(cs.selector.as_deref(), Some("s-1"));
+        assert_eq!(cs.changes.len(), 1);
+        mock.assert_async().await;
+    }
+
+    async fn poll_once(url: String) -> FDv2SourceEvent {
+        use super::super::source::Synchronizer;
+        let transport = launchdarkly_sdk_transport::HyperTransport::new().expect("hyper transport");
+        let mut sync = PollingSynchronizer::new(transport, url, test_headers(), Duration::ZERO);
+        sync.next(None).await
     }
 }
