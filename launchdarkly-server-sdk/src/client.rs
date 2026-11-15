@@ -443,7 +443,17 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn bool_variation(&self, context: &Context, flag_key: &str, default: bool) -> bool {
-        let val = self.variation(context, flag_key, default);
+        let val = self
+            .variation_internal(
+                context,
+                flag_key,
+                default,
+                &self.events_default,
+                Some(|v| v.as_bool().is_some()),
+            )
+            .0
+            .value
+            .unwrap();
         if let Some(b) = val.as_bool() {
             b
         } else {
@@ -460,7 +470,17 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn str_variation(&self, context: &Context, flag_key: &str, default: String) -> String {
-        let val = self.variation(context, flag_key, default.clone());
+        let val = self
+            .variation_internal(
+                context,
+                flag_key,
+                default.clone(),
+                &self.events_default,
+                Some(|v| v.as_string().is_some()),
+            )
+            .0
+            .value
+            .unwrap();
         if let Some(s) = val.as_string() {
             s
         } else {
@@ -477,7 +497,17 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn float_variation(&self, context: &Context, flag_key: &str, default: f64) -> f64 {
-        let val = self.variation(context, flag_key, default);
+        let val = self
+            .variation_internal(
+                context,
+                flag_key,
+                default,
+                &self.events_default,
+                Some(|v| v.as_float().is_some()),
+            )
+            .0
+            .value
+            .unwrap();
         if let Some(f) = val.as_float() {
             f
         } else {
@@ -494,7 +524,17 @@ impl Client {
     /// For more information, see the Reference Guide:
     /// <https://docs.launchdarkly.com/sdk/features/evaluating#rust>.
     pub fn int_variation(&self, context: &Context, flag_key: &str, default: i64) -> i64 {
-        let val = self.variation(context, flag_key, default);
+        let val = self
+            .variation_internal(
+                context,
+                flag_key,
+                default,
+                &self.events_default,
+                Some(|v| v.as_int().is_some()),
+            )
+            .0
+            .value
+            .unwrap();
         if let Some(f) = val.as_int() {
             f
         } else {
@@ -535,11 +575,15 @@ impl Client {
         flag_key: &str,
         default: bool,
     ) -> Detail<bool> {
-        self.variation_detail(context, flag_key, default).try_map(
-            |val| val.as_bool(),
+        self.variation_internal(
+            context,
+            flag_key,
             default,
-            eval::Error::WrongType,
+            &self.events_with_reasons,
+            Some(|v| v.as_bool().is_some()),
         )
+        .0
+        .try_map(|val| val.as_bool(), default, eval::Error::WrongType)
     }
 
     /// This method is the same as [Client::str_variation], but also returns further information
@@ -554,8 +598,15 @@ impl Client {
         flag_key: &str,
         default: String,
     ) -> Detail<String> {
-        self.variation_detail(context, flag_key, default.clone())
-            .try_map(|val| val.as_string(), default, eval::Error::WrongType)
+        self.variation_internal(
+            context,
+            flag_key,
+            default.clone(),
+            &self.events_with_reasons,
+            Some(|v| v.as_string().is_some()),
+        )
+        .0
+        .try_map(|val| val.as_string(), default, eval::Error::WrongType)
     }
 
     /// This method is the same as [Client::float_variation], but also returns further information
@@ -570,11 +621,15 @@ impl Client {
         flag_key: &str,
         default: f64,
     ) -> Detail<f64> {
-        self.variation_detail(context, flag_key, default).try_map(
-            |val| val.as_float(),
+        self.variation_internal(
+            context,
+            flag_key,
             default,
-            eval::Error::WrongType,
+            &self.events_with_reasons,
+            Some(|v| v.as_float().is_some()),
         )
+        .0
+        .try_map(|val| val.as_float(), default, eval::Error::WrongType)
     }
 
     /// This method is the same as [Client::int_variation], but also returns further information
@@ -589,11 +644,15 @@ impl Client {
         flag_key: &str,
         default: i64,
     ) -> Detail<i64> {
-        self.variation_detail(context, flag_key, default).try_map(
-            |val| val.as_int(),
+        self.variation_internal(
+            context,
+            flag_key,
             default,
-            eval::Error::WrongType,
+            &self.events_with_reasons,
+            Some(|v| v.as_int().is_some()),
         )
+        .0
+        .try_map(|val| val.as_int(), default, eval::Error::WrongType)
     }
 
     /// This method is the same as [Client::json_variation], but also returns further information
@@ -694,7 +753,7 @@ impl Client {
         default: T,
     ) -> Detail<FlagValue> {
         let (detail, _) =
-            self.variation_internal(context, flag_key, default, &self.events_with_reasons);
+            self.variation_internal(context, flag_key, default, &self.events_with_reasons, None);
         detail
     }
 
@@ -714,7 +773,8 @@ impl Client {
         flag_key: &str,
         default: T,
     ) -> FlagValue {
-        let (detail, _) = self.variation_internal(context, flag_key, default, &self.events_default);
+        let (detail, _) =
+            self.variation_internal(context, flag_key, default, &self.events_default, None);
         detail.value.unwrap()
     }
 
@@ -729,7 +789,7 @@ impl Client {
         default_stage: Stage,
     ) -> (Stage, Arc<Mutex<MigrationOpTracker>>) {
         let (detail, flag) =
-            self.variation_internal(context, flag_key, default_stage, &self.events_default);
+            self.variation_internal(context, flag_key, default_stage, &self.events_default, None);
 
         let migration_detail =
             detail.try_map(|v| v.try_into().ok(), default_stage, eval::Error::WrongType);
@@ -853,6 +913,7 @@ impl Client {
         flag_key: &str,
         default: T,
         events_scope: &EventsScope,
+        valid_type: Option<fn(&FlagValue) -> bool>,
     ) -> (Detail<FlagValue>, Option<eval::Flag>) {
         if self.offline {
             return (
@@ -861,7 +922,7 @@ impl Client {
             );
         }
 
-        let (flag, result) = match self.initialized() {
+        let (flag, mut result) = match self.initialized() {
             false => (
                 None,
                 Detail::err_default(eval::Error::ClientNotReady, default.clone().into()),
@@ -888,6 +949,13 @@ impl Client {
                 }
             }
         };
+
+        if let (Some(valid_type), Some(value)) = (valid_type, result.value.as_ref()) {
+            if !valid_type(value) {
+                warn!("typed variation called for a flag with the wrong type {flag_key:?} (got {value:?})");
+                result = Detail::err_default(eval::Error::WrongType, default.clone().into());
+            }
+        }
 
         if !events_scope.disabled {
             let event = match &flag {
@@ -919,6 +987,103 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    #[test_case::test_case(0; "bool")]
+    #[test_case::test_case(1; "string")]
+    #[test_case::test_case(2; "float")]
+    #[test_case::test_case(3; "int")]
+    #[test_case::test_case(4; "bool detail")]
+    #[test_case::test_case(5; "string detail")]
+    #[test_case::test_case(6; "float detail")]
+    #[test_case::test_case(7; "int detail")]
+    #[tokio::test]
+    async fn wrong_type_event_matches_returned_default(api: usize) {
+        let td = TestData::new();
+        let mut flag = basic_flag("myFlag");
+        // A string flag is wrong for bool; the other APIs receive a bool flag.
+        if api % 4 == 0 {
+            let mut json = serde_json::to_value(&flag).unwrap();
+            json["variations"] = serde_json::json!(["first", "second"]);
+            flag = serde_json::from_value(json).unwrap();
+        }
+        flag.track_events = true;
+        td.use_preconfigured_flag(flag);
+        let (client, event_rx) = make_client_with_test_data(&td);
+        client.start_with_default_executor();
+        let context = ContextBuilder::new("bob").build().unwrap();
+        let expected = match api % 4 {
+            0 => serde_json::json!(false),
+            1 => serde_json::json!("fallback"),
+            2 => serde_json::json!(2.5),
+            _ => serde_json::json!(3),
+        };
+        let actual = match api {
+            0 => serde_json::json!(client.bool_variation(&context, "myFlag", false)),
+            1 => serde_json::json!(client.str_variation(&context, "myFlag", "fallback".into())),
+            2 => serde_json::json!(client.float_variation(&context, "myFlag", 2.5)),
+            3 => serde_json::json!(client.int_variation(&context, "myFlag", 3)),
+            _ => {
+                let detail = match api {
+                    4 => client
+                        .bool_variation_detail(&context, "myFlag", false)
+                        .map(serde_json::Value::from),
+                    5 => client
+                        .str_variation_detail(&context, "myFlag", "fallback".into())
+                        .map(serde_json::Value::from),
+                    6 => client
+                        .float_variation_detail(&context, "myFlag", 2.5)
+                        .map(serde_json::Value::from),
+                    _ => client
+                        .int_variation_detail(&context, "myFlag", 3)
+                        .map(serde_json::Value::from),
+                };
+                assert!(matches!(
+                    detail.reason,
+                    Reason::Error {
+                        error: eval::Error::WrongType
+                    }
+                ));
+                assert_eq!(detail.variation_index, None);
+                detail.value.unwrap()
+            }
+        };
+        assert_eq!(actual, expected);
+        client.flush();
+        client.close();
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        let summary = events
+            .iter()
+            .find_map(|event| match event {
+                OutputEvent::Summary(summary) => Some(summary),
+                _ => None,
+            })
+            .expect("summary event");
+        let counter = &summary.features["myFlag"].counters[&VariationKey {
+            version: Some(1),
+            variation: None,
+        }];
+        assert_eq!(counter.value, FlagValue::from(expected.clone()));
+        assert_eq!(counter.count, 1);
+        let feature = events
+            .iter()
+            .find(|e| e.kind() == "feature")
+            .expect("tracked event");
+        let json = serde_json::to_value(feature).unwrap();
+        assert_eq!(
+            json["value"],
+            serde_json::to_value(FlagValue::from(expected.clone())).unwrap()
+        );
+        assert_eq!(
+            json["default"],
+            serde_json::to_value(FlagValue::from(expected)).unwrap()
+        );
+        assert!(json["variation"].is_null());
+        if api >= 4 {
+            assert_eq!(json["reason"]["errorKind"], "WRONG_TYPE");
+        } else {
+            assert!(json["reason"].is_null());
+        }
+    }
+
     use assert_json_diff::assert_json_eq;
     use crossbeam_channel::Receiver;
     use eval::{ContextBuilder, MultiContextBuilder};
