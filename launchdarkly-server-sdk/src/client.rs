@@ -454,12 +454,7 @@ impl Client {
             .0
             .value
             .unwrap();
-        if let Some(b) = val.as_bool() {
-            b
-        } else {
-            warn!("bool_variation called for a non-bool flag {flag_key:?} (got {val:?})");
-            default
-        }
+        val.as_bool().unwrap_or(default)
     }
 
     /// Returns the value of a string feature flag for a given context.
@@ -481,12 +476,7 @@ impl Client {
             .0
             .value
             .unwrap();
-        if let Some(s) = val.as_string() {
-            s
-        } else {
-            warn!("str_variation called for a non-string flag {flag_key:?} (got {val:?})");
-            default
-        }
+        val.as_string().unwrap_or(default)
     }
 
     /// Returns the value of a float feature flag for a given context.
@@ -508,12 +498,7 @@ impl Client {
             .0
             .value
             .unwrap();
-        if let Some(f) = val.as_float() {
-            f
-        } else {
-            warn!("float_variation called for a non-float flag {flag_key:?} (got {val:?})");
-            default
-        }
+        val.as_float().unwrap_or(default)
     }
 
     /// Returns the value of a integer feature flag for a given context.
@@ -535,12 +520,7 @@ impl Client {
             .0
             .value
             .unwrap();
-        if let Some(f) = val.as_int() {
-            f
-        } else {
-            warn!("int_variation called for a non-int flag {flag_key:?} (got {val:?})");
-            default
-        }
+        val.as_int().unwrap_or(default)
     }
 
     /// Returns the value of a feature flag for the given context, allowing the value to be
@@ -987,14 +967,45 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    #[test_case::test_case(0; "bool")]
-    #[test_case::test_case(1; "string")]
-    #[test_case::test_case(2; "float")]
-    #[test_case::test_case(3; "int")]
-    #[test_case::test_case(4; "bool detail")]
-    #[test_case::test_case(5; "string detail")]
-    #[test_case::test_case(6; "float detail")]
-    #[test_case::test_case(7; "int detail")]
+    use assert_json_diff::assert_json_eq;
+    use crossbeam_channel::Receiver;
+    use eval::{ContextBuilder, MultiContextBuilder};
+    use futures::FutureExt;
+    use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
+    use maplit::hashmap;
+    use std::collections::HashMap;
+    use tokio::time::Instant;
+
+    use crate::data_source::MockDataSource;
+    use crate::data_source_builders::MockDataSourceBuilder;
+    use crate::evaluation::FlagFilter;
+    use crate::events::create_event_sender;
+    use crate::events::event::{OutputEvent, VariationKey};
+    use crate::events::processor_builders::EventProcessorBuilder;
+    use crate::stores::persistent_store::tests::InMemoryPersistentDataStore;
+    use crate::stores::store_types::{PatchTarget, StorageItem};
+    use crate::test_common::{
+        self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility,
+        basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag,
+    };
+    use crate::test_data::TestData;
+    use crate::{
+        AllData, ConfigBuilder, DataSystemBuilder, FlagBuilder, MigratorBuilder,
+        NullEventProcessorBuilder, Operation, Origin, PersistentDataStore,
+        PersistentDataStoreBuilder, PersistentDataStoreFactory, SerializedItem,
+    };
+    use test_case::test_case;
+
+    use super::*;
+
+    #[test_case(0; "bool")]
+    #[test_case(1; "string")]
+    #[test_case(2; "float")]
+    #[test_case(3; "int")]
+    #[test_case(4; "bool detail")]
+    #[test_case(5; "string detail")]
+    #[test_case(6; "float detail")]
+    #[test_case(7; "int detail")]
     #[tokio::test]
     async fn wrong_type_event_matches_returned_default(api: usize) {
         let td = TestData::new();
@@ -1083,37 +1094,6 @@ mod tests {
             assert!(json["reason"].is_null());
         }
     }
-
-    use assert_json_diff::assert_json_eq;
-    use crossbeam_channel::Receiver;
-    use eval::{ContextBuilder, MultiContextBuilder};
-    use futures::FutureExt;
-    use launchdarkly_server_sdk_evaluation::{Flag, Reason, Segment};
-    use maplit::hashmap;
-    use std::collections::HashMap;
-    use tokio::time::Instant;
-
-    use crate::data_source::MockDataSource;
-    use crate::data_source_builders::MockDataSourceBuilder;
-    use crate::evaluation::FlagFilter;
-    use crate::events::create_event_sender;
-    use crate::events::event::{OutputEvent, VariationKey};
-    use crate::events::processor_builders::EventProcessorBuilder;
-    use crate::stores::persistent_store::tests::InMemoryPersistentDataStore;
-    use crate::stores::store_types::{PatchTarget, StorageItem};
-    use crate::test_common::{
-        self, basic_flag, basic_flag_with_prereq, basic_flag_with_prereqs_and_visibility,
-        basic_flag_with_visibility, basic_int_flag, basic_migration_flag, basic_off_flag,
-    };
-    use crate::test_data::TestData;
-    use crate::{
-        AllData, ConfigBuilder, DataSystemBuilder, FlagBuilder, MigratorBuilder,
-        NullEventProcessorBuilder, Operation, Origin, PersistentDataStore,
-        PersistentDataStoreBuilder, PersistentDataStoreFactory, SerializedItem,
-    };
-    use test_case::test_case;
-
-    use super::*;
 
     fn is_send_and_sync<T: Send + Sync>() {}
 
