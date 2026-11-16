@@ -2,6 +2,19 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.4.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.3.2...3.4.0) (2026-11-16)
+
+
+### Features
+
+* Request and decode gzip-compressed polling responses ([#214](https://github.com/launchdarkly/rust-server-sdk/issues/214)) ([48222ba](https://github.com/launchdarkly/rust-server-sdk/commit/48222babcd8334e394616ae52fff5093b79d7a66))
+
+
+### Bug Fixes
+
+* Bump MSRV from 1.97 to 1.98 ([#216](https://github.com/launchdarkly/rust-server-sdk/issues/216)) ([942dd63](https://github.com/launchdarkly/rust-server-sdk/commit/942dd633778c10f980e365886b7e5b7b8d81b6f1))
+* Honor a goodbye's malformed protocolFallbackTTL as a fallback signal ([#208](https://github.com/launchdarkly/rust-server-sdk/issues/208)) ([40f5832](https://github.com/launchdarkly/rust-server-sdk/commit/40f58325ff9066796c656e26d5d6c6b61d0badfd))
+
 ## [3.3.2](https://github.com/launchdarkly/rust-server-sdk/compare/3.3.1...3.3.2) (2026-10-20)
 
 
