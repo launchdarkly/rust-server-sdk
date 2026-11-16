@@ -34,6 +34,7 @@ cargo run --example EXAMPLE_NAME
 | `crypto-aws-lc-rs` | yes | Uses `aws-lc-rs` for cryptographic operations. |
 | `crypto-openssl` | no | Uses `openssl` for cryptographic operations. |
 | `event-compression` | yes | Compresses analytics event payloads before sending them to LaunchDarkly. |
+| `polling-compression` | yes | Requests gzip-compressed polling responses from LaunchDarkly and decompresses them. |
 | `float-roundtrip` | yes | Enables `serde_json`'s `float_roundtrip` feature so that fractional JSON numbers deserialize to the same `f64` that Go's `encoding/json` produces. |
 
 ### Disabling `float-roundtrip`
@@ -47,6 +48,7 @@ launchdarkly-server-sdk = { version = "3", default-features = false, features = 
     "hyper-rustls-native-roots",
     "crypto-aws-lc-rs",
     "event-compression",
+    "polling-compression",
 ] }
 ```
 

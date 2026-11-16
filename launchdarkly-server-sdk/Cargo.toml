@@ -62,6 +62,7 @@ default = [
     "hyper-rustls-native-roots",
     "crypto-aws-lc-rs",
     "event-compression",
+    "polling-compression",
     "float-roundtrip"
 ]
 
@@ -89,6 +90,13 @@ native-tls = [
 ]
 
 event-compression = ["flate2"]
+
+# Request gzip-compressed polling responses and decompress them. Without this feature, polling
+# requests do not send an Accept-Encoding header.
+#
+# This feature uses the implicit flate2 feature, not dep:flate2. The dep: form removes the
+# public flate2 feature, and existing builds can enable that feature.
+polling-compression = ["flate2"]
 
 # Parse fractional JSON numbers with serde_json's correctly-rounded float parser, so that
 # numeric flag values and numeric context attributes deserialize to the same f64 that Go's

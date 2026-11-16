@@ -70,6 +70,7 @@ mod fdv2;
 mod feature_requester;
 mod feature_requester_builders;
 mod migrations;
+mod polling_compression;
 mod reqwest;
 mod sampler;
 mod service_endpoints;

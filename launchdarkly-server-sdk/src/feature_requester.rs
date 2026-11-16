@@ -71,6 +71,10 @@ impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
                 request_builder = request_builder.header("If-None-Match", cache.1.clone());
             }
 
+            if let Some(accept_encoding) = crate::polling_compression::ACCEPT_ENCODING {
+                request_builder = request_builder.header("Accept-Encoding", accept_encoding);
+            }
+
             // Create empty body for GET request
             let request = request_builder.body(Some(Bytes::new())).unwrap();
 
@@ -103,7 +107,8 @@ impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
             if response.status().is_success() {
                 // Collect streaming body
                 let mut body_bytes = Vec::new();
-                let mut stream = response.into_body();
+                let (parts, mut stream) = response.into_parts();
+                let headers = parts.headers;
                 while let Some(chunk) = stream.next().await {
                     let chunk = chunk.map_err(|e| {
                         error!("An error occurred while reading the polling response body: {e}");
@@ -111,6 +116,11 @@ impl<T: HttpTransport> FeatureRequester for HttpFeatureRequester<T> {
                     })?;
                     body_bytes.extend_from_slice(&chunk);
                 }
+                let body_bytes = crate::polling_compression::decode_body(&headers, body_bytes)
+                    .map_err(|e| {
+                        error!("An error occurred while decompressing the polling response: {e}");
+                        FeatureRequesterError::Temporary
+                    })?;
                 let json = serde_json::from_slice::<AllData<Flag, Segment>>(&body_bytes);
 
                 return match json {
@@ -245,6 +255,71 @@ mod tests {
         } else {
             panic!("get_all returned the wrong response");
         }
+    }
+
+    #[cfg(feature = "polling-compression")]
+    #[test_case(true)]
+    #[test_case(false)]
+    #[tokio::test]
+    async fn requests_gzip_and_reads_compressed_or_plain_body(compressed: bool) {
+        let body = br#"{"flags": {}, "segments": {}}"#;
+        let mut server = mockito::Server::new_async().await;
+        let mut mock = server
+            .mock("GET", "/")
+            .match_header("Accept-Encoding", "gzip")
+            .with_status(200);
+        mock = if compressed {
+            mock.with_header("Content-Encoding", "gzip")
+                .with_body(crate::polling_compression::gzip(body))
+        } else {
+            mock.with_body(body)
+        };
+        let mock = mock.expect(1).create_async().await;
+
+        let mut requester = build_feature_requester(server.url());
+        let result = requester.get_all().await;
+
+        assert!(result.is_ok(), "result: {:?}", result.err());
+        mock.assert_async().await;
+    }
+
+    #[cfg(feature = "polling-compression")]
+    #[tokio::test]
+    async fn corrupt_gzip_body_returns_temporary_error() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("Content-Encoding", "gzip")
+            .with_body("not gzip")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut requester = build_feature_requester(server.url());
+        let result = requester.get_all().await;
+
+        assert_eq!(result.err(), Some(FeatureRequesterError::Temporary));
+    }
+
+    #[cfg(not(feature = "polling-compression"))]
+    #[tokio::test]
+    async fn does_not_send_accept_encoding_without_polling_compression() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/")
+            .match_header("Accept-Encoding", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"flags": {}, "segments": {}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut requester = build_feature_requester(server.url());
+        let result = requester.get_all().await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
     }
 
     fn build_feature_requester(
