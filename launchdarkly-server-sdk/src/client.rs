@@ -998,69 +998,111 @@ mod tests {
 
     use super::*;
 
-    #[test_case(0; "bool")]
-    #[test_case(1; "string")]
-    #[test_case(2; "float")]
-    #[test_case(3; "int")]
-    #[test_case(4; "bool detail")]
-    #[test_case(5; "string detail")]
-    #[test_case(6; "float detail")]
-    #[test_case(7; "int detail")]
-    #[tokio::test]
-    async fn wrong_type_event_matches_returned_default(api: usize) {
-        let td = TestData::new();
-        let mut flag = basic_flag("myFlag");
-        // A string flag is wrong for bool; the other APIs receive a bool flag.
-        if api % 4 == 0 {
-            let mut json = serde_json::to_value(&flag).unwrap();
-            json["variations"] = serde_json::json!(["first", "second"]);
-            flag = serde_json::from_value(json).unwrap();
+    #[derive(Clone, Copy)]
+    enum TypedVariation {
+        Bool,
+        Str,
+        Float,
+        Int,
+    }
+
+    impl TypedVariation {
+        // A flag whose value has the wrong type for this method.
+        fn wrong_type_flag(self, key: &str) -> Flag {
+            let mut flag = basic_flag(key);
+            if let TypedVariation::Bool = self {
+                // basic_flag has bool values, so give the bool method string values.
+                let mut json = serde_json::to_value(&flag).unwrap();
+                json["variations"] = serde_json::json!(["first", "second"]);
+                flag = serde_json::from_value(json).unwrap();
+            }
+            flag.track_events = true;
+            flag
         }
-        flag.track_events = true;
-        td.use_preconfigured_flag(flag);
+
+        fn default_value(self) -> serde_json::Value {
+            match self {
+                TypedVariation::Bool => serde_json::json!(false),
+                TypedVariation::Str => serde_json::json!("fallback"),
+                TypedVariation::Float => serde_json::json!(2.5),
+                TypedVariation::Int => serde_json::json!(3),
+            }
+        }
+
+        fn call(self, client: &Client, context: &Context, key: &str) -> serde_json::Value {
+            match self {
+                TypedVariation::Bool => {
+                    serde_json::json!(client.bool_variation(context, key, false))
+                }
+                TypedVariation::Str => {
+                    serde_json::json!(client.str_variation(context, key, "fallback".into()))
+                }
+                TypedVariation::Float => {
+                    serde_json::json!(client.float_variation(context, key, 2.5))
+                }
+                TypedVariation::Int => serde_json::json!(client.int_variation(context, key, 3)),
+            }
+        }
+
+        fn call_detail(
+            self,
+            client: &Client,
+            context: &Context,
+            key: &str,
+        ) -> Detail<serde_json::Value> {
+            match self {
+                TypedVariation::Bool => client
+                    .bool_variation_detail(context, key, false)
+                    .map(serde_json::Value::from),
+                TypedVariation::Str => client
+                    .str_variation_detail(context, key, "fallback".into())
+                    .map(serde_json::Value::from),
+                TypedVariation::Float => client
+                    .float_variation_detail(context, key, 2.5)
+                    .map(serde_json::Value::from),
+                TypedVariation::Int => client
+                    .int_variation_detail(context, key, 3)
+                    .map(serde_json::Value::from),
+            }
+        }
+    }
+
+    #[test_case(TypedVariation::Bool, false; "bool")]
+    #[test_case(TypedVariation::Str, false; "string")]
+    #[test_case(TypedVariation::Float, false; "float")]
+    #[test_case(TypedVariation::Int, false; "int")]
+    #[test_case(TypedVariation::Bool, true; "bool detail")]
+    #[test_case(TypedVariation::Str, true; "string detail")]
+    #[test_case(TypedVariation::Float, true; "float detail")]
+    #[test_case(TypedVariation::Int, true; "int detail")]
+    #[tokio::test]
+    async fn wrong_type_event_matches_returned_default(variation: TypedVariation, detailed: bool) {
+        let td = TestData::new();
+        td.use_preconfigured_flag(variation.wrong_type_flag("myFlag"));
         let (client, event_rx) = make_client_with_test_data(&td);
         client.start_with_default_executor();
         let context = ContextBuilder::new("bob").build().unwrap();
-        let expected = match api % 4 {
-            0 => serde_json::json!(false),
-            1 => serde_json::json!("fallback"),
-            2 => serde_json::json!(2.5),
-            _ => serde_json::json!(3),
-        };
-        let actual = match api {
-            0 => serde_json::json!(client.bool_variation(&context, "myFlag", false)),
-            1 => serde_json::json!(client.str_variation(&context, "myFlag", "fallback".into())),
-            2 => serde_json::json!(client.float_variation(&context, "myFlag", 2.5)),
-            3 => serde_json::json!(client.int_variation(&context, "myFlag", 3)),
-            _ => {
-                let detail = match api {
-                    4 => client
-                        .bool_variation_detail(&context, "myFlag", false)
-                        .map(serde_json::Value::from),
-                    5 => client
-                        .str_variation_detail(&context, "myFlag", "fallback".into())
-                        .map(serde_json::Value::from),
-                    6 => client
-                        .float_variation_detail(&context, "myFlag", 2.5)
-                        .map(serde_json::Value::from),
-                    _ => client
-                        .int_variation_detail(&context, "myFlag", 3)
-                        .map(serde_json::Value::from),
-                };
-                assert!(matches!(
-                    detail.reason,
-                    Reason::Error {
-                        error: eval::Error::WrongType
-                    }
-                ));
-                assert_eq!(detail.variation_index, None);
-                detail.value.unwrap()
-            }
+        let expected = variation.default_value();
+
+        let actual = if detailed {
+            let detail = variation.call_detail(&client, &context, "myFlag");
+            assert!(matches!(
+                detail.reason,
+                Reason::Error {
+                    error: eval::Error::WrongType
+                }
+            ));
+            assert_eq!(detail.variation_index, None);
+            detail.value.unwrap()
+        } else {
+            variation.call(&client, &context, "myFlag")
         };
         assert_eq!(actual, expected);
+
         client.flush();
         client.close();
         let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+
         let summary = events
             .iter()
             .find_map(|event| match event {
@@ -1074,21 +1116,17 @@ mod tests {
         }];
         assert_eq!(counter.value, FlagValue::from(expected.clone()));
         assert_eq!(counter.count, 1);
+
         let feature = events
             .iter()
             .find(|e| e.kind() == "feature")
             .expect("tracked event");
         let json = serde_json::to_value(feature).unwrap();
-        assert_eq!(
-            json["value"],
-            serde_json::to_value(FlagValue::from(expected.clone())).unwrap()
-        );
-        assert_eq!(
-            json["default"],
-            serde_json::to_value(FlagValue::from(expected)).unwrap()
-        );
+        let expected_json = serde_json::to_value(FlagValue::from(expected)).unwrap();
+        assert_eq!(json["value"], expected_json);
+        assert_eq!(json["default"], expected_json);
         assert!(json["variation"].is_null());
-        if api >= 4 {
+        if detailed {
             assert_eq!(json["reason"]["errorKind"], "WRONG_TYPE");
         } else {
             assert!(json["reason"].is_null());
