@@ -171,7 +171,7 @@ impl FDv2ProtocolHandler {
         let changeset = ChangeSet {
             kind,
             changes: std::mem::take(&mut self.changes),
-            selector: Some(transferred.state),
+            selector: Some(transferred.state).filter(|state| !state.is_empty()),
         };
         // Subsequent put/delete + payload-transferred cycles continue as
         // partial transfers without a new server-intent.
@@ -239,6 +239,29 @@ mod tests {
         match result {
             ProtocolResult::ChangeSet(cs) => cs,
             _ => panic!("expected ChangeSet"),
+        }
+    }
+
+    #[test]
+    fn selectorless_full_payload_has_no_selector() {
+        for with_objects in [false, true] {
+            let mut h = FDv2ProtocolHandler::new();
+            h.handle_event(
+                "server-intent",
+                json!({"payloads": [{
+                    "id": "", "target": 0, "intentCode": "xfer-full", "reason": "cant-catchup"
+                }]}),
+            );
+            if with_objects {
+                h.handle_event("put-object", put_flag("a", 1));
+            }
+            let cs = expect_changeset(
+                h.handle_event("payload-transferred", json!({"state": "", "version": 0})),
+            );
+
+            assert_eq!(cs.kind, ChangeSetKind::Full);
+            assert!(cs.selector.is_none());
+            assert_eq!(cs.changes.len(), usize::from(with_objects));
         }
     }
 
