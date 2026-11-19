@@ -398,6 +398,7 @@ mod tests {
     use launchdarkly_server_sdk_evaluation::Store;
 
     use super::super::model::ChangeSetKind;
+    use super::super::protocol::{FDv2ProtocolHandler, ProtocolResult};
     use super::super::source::{ErrorInfo, ErrorKind, FDv1FallbackDirective, FDv2SourceEvent};
     use crate::stores::change_set::{ChangeSet, ItemChange};
     use crate::stores::store_types::StorageItem;
@@ -425,6 +426,32 @@ mod tests {
             kind: ErrorKind::Unknown,
             message: "test".into(),
         })
+    }
+
+    fn wire_full_payload(key: &str, state: &str) -> FDv2SourceResult {
+        let mut handler = FDv2ProtocolHandler::new();
+        let version = usize::from(!state.is_empty());
+        handler.handle_event(
+            "server-intent",
+            serde_json::json!({"payloads": [{
+                "id": state, "target": version, "intentCode": "xfer-full", "reason": "cant-catchup"
+            }]}),
+        );
+        handler.handle_event(
+            "put-object",
+            serde_json::json!({
+                "kind": "flag", "key": key, "version": 1, "object": basic_flag(key)
+            }),
+        );
+        match handler.handle_event(
+            "payload-transferred",
+            serde_json::json!({"state": state, "version": version}),
+        ) {
+            ProtocolResult::ChangeSet(change_set) => {
+                FDv2SourceResult::ChangeSet(change_set.try_into().unwrap())
+            }
+            _ => panic!("expected ChangeSet"),
+        }
     }
 
     fn terminal() -> FDv2SourceResult {
@@ -762,6 +789,91 @@ mod tests {
 
         // The synchronizer's first call received the basis selector.
         assert_eq!(selectors_seen.lock().unwrap()[0], Some("sel-1".into()));
+    }
+
+    #[tokio::test]
+    async fn wire_selectorless_initializers_signal_at_exhaustion() {
+        let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+        let probe = store.clone();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        let init_complete: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |success| {
+            assert!(probe.read().flag("second").is_some());
+            recorded.lock().unwrap().push(success);
+        });
+        let initializers = vec![
+            init_factory(vec![wire_full_payload("first", "")]),
+            init_factory(vec![wire_full_payload("second", "")]),
+        ];
+        let selectors_seen = no_selectors();
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let sources = SourceManager::new(vec![sync_factory(
+            vec![],
+            selectors_seen.clone(),
+            Some(shutdown_tx),
+            false,
+        )]);
+
+        run(
+            initializers,
+            sources,
+            store.clone(),
+            init_complete,
+            shutdown_rx,
+            FALLBACK_TIMEOUT,
+            RECOVERY_TIMEOUT,
+        )
+        .await;
+
+        assert_eq!(*calls.lock().unwrap(), vec![true]);
+        assert!(store.read().flag("first").is_none());
+        assert_eq!(*selectors_seen.lock().unwrap(), vec![None]);
+    }
+
+    #[tokio::test]
+    async fn wire_selectorless_full_initializes_and_clears_held_selector() {
+        for initial_state in ["", "initial"] {
+            let store = Arc::new(RwLock::new(InMemoryDataStore::new()));
+            let selectors_seen = no_selectors();
+            let probe = store.clone();
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let recorded = calls.clone();
+            let init_complete: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |success| {
+                assert!(probe.read().flag("first").is_some());
+                assert!(probe.read().flag("second").is_none());
+                recorded.lock().unwrap().push(success);
+            });
+            let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+            let sources = SourceManager::new(vec![sync_factory(
+                vec![
+                    wire_full_payload("first", initial_state),
+                    wire_full_payload("second", ""),
+                ],
+                selectors_seen.clone(),
+                Some(shutdown_tx),
+                false,
+            )]);
+
+            run(
+                vec![],
+                sources,
+                store.clone(),
+                init_complete,
+                shutdown_rx,
+                FALLBACK_TIMEOUT,
+                RECOVERY_TIMEOUT,
+            )
+            .await;
+
+            let initial_selector = Some(initial_state.to_string()).filter(|s| !s.is_empty());
+            assert_eq!(
+                *selectors_seen.lock().unwrap(),
+                vec![None, initial_selector, None]
+            );
+            assert_eq!(*calls.lock().unwrap(), vec![true]);
+            assert!(store.read().flag("second").is_some());
+            assert!(store.read().flag("first").is_none());
+        }
     }
 
     #[tokio::test]
