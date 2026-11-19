@@ -2,6 +2,15 @@
 
 All notable changes to the LaunchDarkly Rust server-side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [3.4.1](https://github.com/launchdarkly/rust-server-sdk/compare/3.4.0...3.4.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* Clear empty FDv2 selectors and omit basis parameters ([#213](https://github.com/launchdarkly/rust-server-sdk/issues/213)) ([366c8cc](https://github.com/launchdarkly/rust-server-sdk/commit/366c8cc500018186ade9ffae96a5d011276b3086))
+* Record the default stage in analytics events when a migration flag value is not a string ([#219](https://github.com/launchdarkly/rust-server-sdk/issues/219)) ([16b9434](https://github.com/launchdarkly/rust-server-sdk/commit/16b943479938d87711653f5a1f7228b1ed150d43))
+* Record the default value in analytics events when a typed evaluation has the wrong type ([#215](https://github.com/launchdarkly/rust-server-sdk/issues/215)) ([9eeefa2](https://github.com/launchdarkly/rust-server-sdk/commit/9eeefa2c5f0186e843d72a37599d0825877226da))
+
 ## [3.4.0](https://github.com/launchdarkly/rust-server-sdk/compare/3.3.2...3.4.0) (2026-11-16)
 
 
