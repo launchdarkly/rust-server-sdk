@@ -16,7 +16,7 @@ jobs:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: ${{ steps.release.outputs['launchdarkly-server-sdk--release_created'] == 'true' }}
         with:
           fetch-depth: 0 # Full history is required for proper changelog generation
@@ -34,7 +34,7 @@ jobs:
           rustup override set "$RUST_TARGET"
           rustup component add rustfmt clippy
 
-      - uses: launchdarkly/gh-actions/actions/release-secrets@release-secrets-v1.2.0
+      - uses: launchdarkly/gh-actions/actions/release-secrets@release-secrets-v1.2.1
         name: "Get crates.io token"
         if: ${{ steps.release.outputs['launchdarkly-server-sdk--release_created'] == 'true' }}
         with:
