@@ -768,8 +768,15 @@ impl Client {
         flag_key: &str,
         default_stage: Stage,
     ) -> (Stage, Arc<Mutex<MigrationOpTracker>>) {
-        let (detail, flag) =
-            self.variation_internal(context, flag_key, default_stage, &self.events_default, None);
+        // A stage is a string. A flag with a value of a different type records the default stage
+        // in the analytics event. A string that is not a known stage still records the flag value.
+        let (detail, flag) = self.variation_internal(
+            context,
+            flag_key,
+            default_stage,
+            &self.events_default,
+            Some(|v| v.as_string().is_some()),
+        );
 
         let migration_detail =
             detail.try_map(|v| v.try_into().ok(), default_stage, eval::Error::WrongType);
@@ -2113,6 +2120,45 @@ mod tests {
         let (stage, _tracker) = client.migration_variation(&context, "boolean-flag", Stage::Off);
 
         assert_eq!(stage, Stage::Off);
+    }
+
+    #[tokio::test]
+    async fn migration_wrong_type_event_records_default_stage() {
+        let td = TestData::new();
+        let mut flag = basic_flag("boolean-flag");
+        flag.track_events = true;
+        td.use_preconfigured_flag(flag);
+        let (client, event_rx) = make_client_with_test_data(&td);
+        client.start_with_default_executor();
+        let context = ContextBuilder::new("bob").build().unwrap();
+
+        let (stage, _tracker) = client.migration_variation(&context, "boolean-flag", Stage::Live);
+        assert_eq!(stage, Stage::Live);
+
+        client.flush();
+        client.close();
+        let events = event_rx.iter().collect::<Vec<OutputEvent>>();
+        let feature = events
+            .iter()
+            .find(|e| e.kind() == "feature")
+            .expect("tracked event");
+        let json = serde_json::to_value(feature).unwrap();
+        assert_eq!(json["value"], "live");
+        assert_eq!(json["default"], "live");
+        assert!(json["variation"].is_null());
+
+        let summary = events
+            .iter()
+            .find_map(|event| match event {
+                OutputEvent::Summary(summary) => Some(summary),
+                _ => None,
+            })
+            .expect("summary event");
+        let counter = &summary.features["boolean-flag"].counters[&VariationKey {
+            version: Some(1),
+            variation: None,
+        }];
+        assert_eq!(counter.value, FlagValue::from("live".to_string()));
     }
 
     #[test_case(Stage::Off)]
