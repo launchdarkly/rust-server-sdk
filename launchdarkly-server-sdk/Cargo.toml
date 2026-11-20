@@ -17,7 +17,6 @@ exclude = [
 features = []
 
 [dependencies]
-chrono = "0.4.19"
 crossbeam-channel = "0.5.1"
 data-encoding = "2.3.2"
 eventsource-client = { version = "0.18.0" }
@@ -27,10 +26,11 @@ log = "0.4.14"
 lru = { version = "0.18.2", default-features = false }
 # Pulled without default features so that the float-roundtrip feature below is what decides
 # whether the evaluation engine parses floats the way Go does.
-launchdarkly-server-sdk-evaluation = { version = "2.2.2", default-features = false }
+launchdarkly-server-sdk-evaluation = { version = "2.3.0", default-features = false }
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = { version = "1.0.73" }
 thiserror = "2.0"
+time = { version = "0.3.47", default-features = false, features = ["std", "parsing"] }
 tokio = { version = "1.17.0", features = ["rt-multi-thread", "sync"] }
 parking_lot = "0.12.0"
 tokio-stream = { version = "0.1.8", features = ["sync"] }
@@ -59,12 +59,18 @@ testing_logger = "0.1.1"
 
 [features]
 default = [
+    "chrono",
     "hyper-rustls-native-roots",
     "crypto-aws-lc-rs",
     "event-compression",
     "polling-compression",
     "float-roundtrip"
 ]
+
+# Provide AttributeValue::to_datetime, which returns a chrono::DateTime. The chrono crate is
+# unmaintained (RUSTSEC-2026-0543), and the SDK does not use it. Disable this feature to
+# remove chrono from the dependency graph.
+chrono = ["launchdarkly-server-sdk-evaluation/chrono"]
 
 crypto-aws-lc-rs = ["dep:aws-lc-rs"]
 crypto-openssl = ["dep:openssl"]

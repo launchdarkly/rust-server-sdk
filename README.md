@@ -27,6 +27,7 @@ cargo run --example EXAMPLE_NAME
 
 | Feature | Default | Description |
 | --- | --- | --- |
+| `chrono` | yes | Provides `AttributeValue::to_datetime`, which returns a `chrono::DateTime`. The `chrono` crate is unmaintained ([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)), and the SDK does not use it. Disable this feature to remove `chrono` from your build. |
 | `hyper-rustls-native-roots` | yes | Uses `hyper` for HTTP, with `rustls` for TLS and the platform's native certificate roots. |
 | `hyper-rustls-webpki-roots` | no | Uses `hyper` for HTTP, with `rustls` for TLS and the bundled `webpki` certificate roots. |
 | `native-tls` | no | Uses `hyper` for HTTP, with the platform's native TLS implementation. |
@@ -45,6 +46,7 @@ Disable it if you would rather have the faster parser and do not depend on that 
 
 ```toml
 launchdarkly-server-sdk = { version = "3", default-features = false, features = [
+    "chrono",
     "hyper-rustls-native-roots",
     "crypto-aws-lc-rs",
     "event-compression",
