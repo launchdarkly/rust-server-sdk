@@ -2,10 +2,10 @@ use crate::{
     reqwest::is_http_error_recoverable, LAUNCHDARKLY_EVENT_SCHEMA_HEADER,
     LAUNCHDARKLY_PAYLOAD_ID_HEADER,
 };
-use chrono::DateTime;
 use crossbeam_channel::Sender;
 use launchdarkly_sdk_transport::HttpTransport;
 use std::collections::HashMap;
+use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 
 #[cfg(feature = "event-compression")]
 use flate2::write::GzEncoder;
@@ -75,8 +75,8 @@ impl<T: HttpTransport> HttpEventSender<T> {
             .unwrap_or("")
             .to_owned();
 
-        match DateTime::parse_from_rfc2822(&date_value) {
-            Ok(date) => date.timestamp_millis() as u128,
+        match OffsetDateTime::parse(&date_value, &Rfc2822) {
+            Ok(date) => u128::try_from(date.unix_timestamp_nanos() / 1_000_000).unwrap_or(0),
             Err(_) => 0,
         }
     }
