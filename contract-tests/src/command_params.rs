@@ -4,6 +4,32 @@ use launchdarkly_server_sdk::{
 use serde::{self, Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Command parameter objects in which the test harness may send an old-style user.
+///
+/// When the service advertises the "user-type" capability, the harness sends a legacy user in a
+/// `user` property instead of a `context`. The legacy user JSON deserializes as a [Context], so
+/// it is moved into `context` before the command is parsed.
+const OLD_USER_COMMANDS: [&str; 5] = [
+    "evaluate",
+    "evaluateAll",
+    "customEvent",
+    "identifyEvent",
+    "secureModeHash",
+];
+
+pub fn move_old_user_to_context(command: &mut serde_json::Value) {
+    for name in OLD_USER_COMMANDS {
+        let Some(params) = command.get_mut(name).and_then(|p| p.as_object_mut()) else {
+            continue;
+        };
+        if let Some(user) = params.remove("user") {
+            if !user.is_null() {
+                params.insert("context".to_string(), user);
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum CommandResponse {
