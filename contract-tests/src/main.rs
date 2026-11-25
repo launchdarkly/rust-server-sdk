@@ -2,7 +2,7 @@ mod client_entity;
 mod command_params;
 mod tls;
 
-use crate::command_params::CommandParams;
+use crate::command_params::{move_old_user_to_context, CommandParams};
 use actix_web::error::{ErrorBadRequest, ErrorInternalServerError};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
 use async_mutex::Mutex;
@@ -146,6 +146,7 @@ async fn status() -> impl Responder {
             "tags".to_string(),
             "service-endpoints".to_string(),
             "context-type".to_string(),
+            "user-type".to_string(),
             "http-proxy".to_string(),
             #[cfg(any(feature = "crypto-aws-lc-rs", feature = "crypto-openssl"))]
             "secure-mode-hash".to_string(),
@@ -227,7 +228,7 @@ async fn create_client(
 
 async fn do_command(
     req: HttpRequest,
-    command_params: web::Json<CommandParams>,
+    command_params: web::Json<serde_json::Value>,
     app_state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let client_id = req
@@ -243,8 +244,13 @@ async fn do_command(
         .get(&client_id)
         .ok_or_else(|| ErrorBadRequest("The specified client does not exist"))?;
 
+    let mut command_params = command_params.into_inner();
+    move_old_user_to_context(&mut command_params);
+    let command_params: CommandParams =
+        serde_json::from_value(command_params).map_err(ErrorBadRequest)?;
+
     let result = entity
-        .do_command(command_params.into_inner())
+        .do_command(command_params)
         .await
         .map_err(ErrorBadRequest)?;
 
